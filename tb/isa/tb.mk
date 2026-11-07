@@ -16,7 +16,7 @@ TB_TARGETS += tb-isa-encoding tb-isa-asm lint-isa
 
 tb-isa-encoding:
 	@mkdir -p $(OBJ)
-	$(VERILATOR) --cc --exe --build --build-jobs 0 --verilate-jobs 1 -Wall --top-module isa_decode_check \
+	$(VERILATOR) --cc --exe --build --build-jobs $(VL_BUILD_JOBS) --verilate-jobs 1 -Wall --top-module isa_decode_check \
 		-Mdir $(OBJ)/isa_encoding -o Vtest_encoding \
 		$(ISA_RTL) $(CURDIR)/tb/isa/test_encoding.cpp
 	$(OBJ)/isa_encoding/Vtest_encoding
