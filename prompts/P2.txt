@@ -28,5 +28,5 @@ Touch only. rtl/core/*, rtl/soc/*, rtl/mem/*, tb/core/*.
 
 Done when.
 - Every existing CPU test still passes in Verilator.
-- t_zmmul, t_uart and t_illegal pass on the simulator and in Verilator with identical traces (make vl).
+- t_zmmul, t_uart and t_illegal pass as self-checking tests in Verilator (make vl).
 - Report the CPI of each instruction class measured with CYCLES, so the planning table on the Tai page can be replaced with real numbers.

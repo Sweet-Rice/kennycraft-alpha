@@ -19,7 +19,7 @@ Build.
 2. Per-lane state as listed. cfg_we writes cfg_field from cfg_data only in lanes set in lane_mask.
 3. On start, every lane in lane_mask walks. Four cycles per step with two world copies (D17): STEP picks the smallest tMax, moves the cell, adds tDelta with saturation at 0x7FFF_FFFF and issues world_addr, which is held for WORLD_LATENCY = 2 cycles. CHECK reads world_data and finishes the lane on a solid block (hit = 1) or on leaving 0..63 / 0..31 / 0..63 (hit = 0). The start cell is never tested.
 4. Stop when every active lane is done or max_steps is reached. A max_steps of 0 or an empty lane_mask raises done on the next cycle with no state change. Inactive lanes' results never change.
-5. result packs hit, face axis, face sign, block type and steps exactly as the VTRACE result table says. hit_cell packs x, y, z like VSET field 0. t_hit is Q16.16. Note that on a miss (hit = 0), face axis, face sign, block type, hit_cell, and t_hit are UNDEFINED (#6 lead decision); software and tests must assert hit = 0 and steps taken, with full result and VGET comparisons applying only to actual hits.
+5. result packs hit, face axis, face sign, block type and steps exactly as the VTRACE result table says. hit_cell packs x, y, z like VSET field 0. t_hit is Q16.16. On a miss (hit = 0), face axis, face sign, block type, hit_cell and t_hit are undefined (Tai, Nov 7); tests assert only hit = 0 and steps taken, and compare the full result and VGET fields only on hits.
 6. World address = {y[4:0], z[5:0], x[5:0]}. world_data is valid WORLD_LATENCY cycles after world_addr (parameter, default 2 for two world copies; the testbench also runs it at 1).
 
 Touch only. rtl/vtrace/*, tb/vtrace/*.

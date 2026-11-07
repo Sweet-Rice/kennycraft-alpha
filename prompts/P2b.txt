@@ -21,7 +21,7 @@ Build.
 4. rtl/ddr/chunk_engine.sv on the 50 MHz side. A command queue of depth 8 fed by CHUNK_CMD. LOAD reads 256 x 128-bit transfers from DDR3 address (cz*256 + cx)*4096 and writes the 8,192 blocks into slot (cx mod 4, cz mod 4) of both world copies (D17). STORE reads that slot from copy 0 and writes it back. Pause while VTRACE busy is high. CHUNK_DONE increments once per finished command.
 5. rtl/ddr/world_remap.sv between every world requester (core, VTRACE) and world_mem. Physical x = (x + WIN_ORIGIN.x) mod 64, same for z. Reads in a slot whose SLOT_VALID bit is 0 return 0. The chunk engine bypasses the remap and writes physical addresses.
 6. The registers DDR_STATUS, CHUNK_CMD, CHUNK_DONE, SLOT_VALID and WIN_ORIGIN at the offsets in the Interfaces MMIO table. A CHUNK_CMD write while the queue is full stalls the core until there is room.
-7. rtl/ddr/ddr_model.sv. A behavioral stand-in for the MIG user interface (an array plus a fixed latency) so Verilator and Bennett's simulator can run the chunk engine without the real controller.
+7. rtl/ddr/ddr_model.sv. A behavioral stand-in for the MIG user interface (an array plus a fixed latency) so Verilator can run the chunk engine without the real controller.
 8. fpga/ddr_test/. A standalone bitstream that waits for calibration, writes a pattern into 64 chunks spread across all 256 MB, reads them back, and reports pass or fail on the LEDs and over UART.
 
 Touch only. rtl/ddr/*, tb/ddr/*, fpga/ddr_test/*, and the DDR3 pin and constraint lines in fpga/arty.xdc.
