@@ -38,11 +38,11 @@ patch_bitstream() {
         fi
     done
     if [ ! -f fpga/program.tcl ]; then
-        echo 'board: fpga/program.tcl missing; make board needs the P3 fpga/ scripts (stage0/p3)' >&2
+        echo 'board: fpga/program.tcl missing from this checkout (fpga/ scripts on main)' >&2
         exit 5
     fi
     if [ -z "${BIT:-}" ] || [ -z "${MMI:-}" ]; then
-        echo 'board: set BIT= and MMI= (top.bit and kc.mmi from a P3 fpga/build.tcl build)' >&2
+        echo 'board: set BIT= and MMI= (top.bit and kc.mmi from an fpga/build.tcl build)' >&2
         exit 5
     fi
     if [ ! -f "$BIT" ]; then
@@ -50,7 +50,7 @@ patch_bitstream() {
         exit 5
     fi
     if [ ! -f "$MMI" ]; then
-        echo "board: meminfo file not found: $MMI (kc.mmi is written by the P3 fpga/build.tcl)" >&2
+        echo "board: meminfo file not found: $MMI (kc.mmi is written by fpga/build.tcl)" >&2
         exit 5
     fi
     if [ ! -f out/kc_imem.bin ] || [ ! -f out/kc_dmem.bin ]; then
@@ -65,12 +65,12 @@ patch_bitstream() {
     if [ -n "${TEX_HEX:-}" ]; then names+=("tex${TEX_PROC:+=$TEX_PROC}"); images+=("$TEX_HEX"); fi
     if [ -n "${PAL_HEX:-}" ]; then names+=("palette${PALETTE_PROC:+=$PALETTE_PROC}"); images+=("$PAL_HEX"); fi
     if [ "${#names[@]}" -gt 2 ] && [ ! -f fpga/hex2mem.py ]; then
-        echo 'board: fpga/hex2mem.py missing; TEX_HEX=/PAL_HEX= need the P3 fpga/ scripts (stage0/p3)' >&2
+        echo 'board: fpga/hex2mem.py missing from this checkout; TEX_HEX=/PAL_HEX= need it (fpga/ scripts on main)' >&2
         exit 5
     fi
     if ! procs=$("$PYTHON" scripts/mmi_paths.py "$MMI" "${names[@]}"); then
         if [ -n "${PAL_HEX:-}" ]; then
-            echo 'board: note: P3 kc.mmi leaves out the RAMB18 palette (fpga/build.tcl), so palette changes need a Vivado rebuild' >&2
+            echo 'board: note: kc.mmi leaves out the RAMB18 palette (fpga/build.tcl), so palette changes need a Vivado rebuild' >&2
         fi
         exit 5
     fi
