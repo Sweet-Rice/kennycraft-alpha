@@ -69,6 +69,7 @@ void hal_win_set(int32_t x, int32_t y, int32_t z, uint8_t t) {
         fprintf(stderr, "hal: world write out of window (%d,%d,%d)\n", x, y, z);
         abort();
     }
+    hstats.world_writes++;
     bram_world[phys(x, y, z, NULL)] = t & 15;
 }
 

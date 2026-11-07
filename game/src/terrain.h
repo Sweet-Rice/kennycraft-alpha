@@ -12,4 +12,8 @@ int32_t terrain_tree_at(int32_t ax, int32_t az);         // 1 if a tree trunk st
 // (WIN_ORIGIN). The slot must be valid (tree code reads blocks back). Lane 0 only.
 void terrain_gen_chunk(int32_t cx, int32_t cz, int32_t win_x0, int32_t win_z0);
 
+#ifdef KC_HOST
+extern uint32_t terrain_height_calls;                  // laptop profiling only
+#endif
+
 #endif

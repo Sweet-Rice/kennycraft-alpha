@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 typedef struct {
-    uint64_t world_reads, frames, chunk_loads, chunk_stores;
+    uint64_t world_reads, world_writes, frames, chunk_loads, chunk_stores;
     uint64_t stores_from_valid;              // CHUNK_CMD stores issued while the slot's SLOT_VALID bit was set
 } host_stats;
 extern host_stats hstats;

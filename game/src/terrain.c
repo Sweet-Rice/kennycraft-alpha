@@ -20,7 +20,14 @@ static q16 vnoise(int32_t ax, int32_t az, int32_t shift, uint32_t seed) {
     return a + qmul(b - a, sz);
 }
 
+#ifdef KC_HOST
+uint32_t terrain_height_calls;
+#endif
+
 int32_t terrain_height(int32_t ax, int32_t az) {
+#ifdef KC_HOST
+    terrain_height_calls++;
+#endif
     q16 n1 = vnoise(ax, az, 5, WORLD_SEED);          // 32-block hills
     q16 n2 = vnoise(ax, az, 3, WORLD_SEED ^ 0x55AAu); // 8-block bumps
     return 10 + ((n1 * 12) >> 16) + ((n2 * 4) >> 16);

@@ -3,6 +3,9 @@
 //   kc_host play    <dir>   scripted play-through with checks (physics, editing, chunk round trip)
 //   kc_host vectors <dir>   VTRACE test vectors: world.hex + rays.txt from the C reference
 //   kc_host bench           render timing and world reads per frame
+//   kc_host sweep ray|raster  arena high water over many locations x frames x edits, plus
+//                           digests of the window and the meshes (must not change with optimizations)
+//   kc_host gencost         terrain generation cost per chunk (terrain_height, window reads/writes)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +21,8 @@
 #include "mesh.h"
 #include "raster.h"
 #include "arena.h"
+#include "terrain.h"
+#define TERRAIN_GEN(cx, cz, x0, z0) terrain_gen_chunk(cx, cz, x0, z0)
 
 static const char *outdir = ".";
 static int failures;
@@ -78,7 +83,7 @@ static int pose(q16 x, q16 y, q16 z, q16 yaw, q16 pitch) {
     kc_me.pos[0] = x; kc_me.pos[1] = y; kc_me.pos[2] = z;
     kc_me.yaw = yaw; kc_me.pitch = pitch; kc_me.vel_y = 0;
     int frames = 0;
-    do { update_checked(qfloor(x), qfloor(z)); frames++; } while (!world_ready() && frames < 200);
+    do { arena_reset(); update_checked(qfloor(x), qfloor(z)); frames++; } while (!world_ready() && frames < 200);
     return frames;
 }
 
@@ -447,9 +452,118 @@ static int cmd_bench(void) {
     return 0;
 }
 
+
+// ---------------------------------------------------------------- sweep / gencost --------
+static uint32_t lcg_state = 12345;
+static uint32_t lcg(void) { lcg_state = lcg_state * 1664525u + 1013904223u; return lcg_state >> 8; }
+static uint64_t fnv(uint64_t h, uint32_t v) { for (int i = 0; i < 4; i++) { h ^= (v >> (8 * i)) & 255; h *= 1099511628211ull; } return h; }
+
+static uint64_t window_digest(uint64_t h) {
+    int32_t x0 = world_corner_x(), z0 = world_corner_z();
+    for (int32_t y = 0; y < 32; y++)
+        for (int32_t z = 0; z < 64; z++)
+            for (int32_t x = 0; x < 64; x += 4) {
+                uint32_t v = 0;
+                for (int k = 0; k < 4; k++) v |= (uint32_t)world_get(x0 + x + k, y, z0 + z) << (8 * k);
+                h = fnv(h, v);
+            }
+    return h;
+}
+
+static uint64_t mesh_digest(uint64_t h) {
+    for (int32_t s = 0; s < 16; s++) {
+        mesh_cmd *c = &mesh_cmds[s];
+        h = fnv(h, (uint32_t)c->cx); h = fnv(h, c->cx < 0 ? 0 : (uint32_t)c->cz); h = fnv(h, c->quads);
+        if (c->cx < 0) continue;
+        for (uint8_t p = c->first_page; p != MESH_NONE; p = mesh_page_next[p])
+            for (uint32_t q = 0; q < mesh_page_quads[p]; q++) {
+                h = fnv(h, mesh_pool[p].mat[q]);
+                for (int i = 0; i < 4; i++) h = fnv(h, mesh_pool[p].vtx[q * 4 + i]);
+            }
+    }
+    return h;
+}
+
+static void tap(uint8_t code) { key(code, 1); key(code, 0); }
+
+static int cmd_sweep(const char *mode) {
+    int raster = mode && !strcmp(mode, "raster");
+    kc_use_raster = raster;
+    uint64_t wd = 1469598103934665603ull, md = 1469598103934665603ull;
+    int locations = 48, frames = 0, edits = 0;
+    uint32_t worst_loc = 0, worst = 0;
+    for (int l = 0; l < locations; l++) {
+        int32_t x = 64 + (int32_t)(lcg() % 3968), z = 64 + (int32_t)(lcg() % 3968);
+        if (l == 0) { x = qfloor(kc_me.pos[0]); z = qfloor(kc_me.pos[2]); }
+        if (l % 6 == 5) { x = (x & ~15) + 15; z = (z & ~15); }   // chunk corners
+        kc_me.pos[0] = Q16_INT(x) + Q16_HALF; kc_me.pos[2] = Q16_INT(z) + Q16_HALF;
+        kc_me.pos[1] = Q16(30.0); kc_me.vel_y = 0;
+        int n = 0;
+        do { step_frames(1); n++; kc_me.pos[1] = Q16(30.0); kc_me.vel_y = 0; } while (!world_ready() && n < 100);
+        kc_me.pos[1] = Q16_INT(terrain_height(x, z) + 1);
+        for (int f = 0; f < 48; f++) {
+            kc_me.yaw = (q16)(lcg() % 1024) << 16;
+            kc_me.pitch = (q16)((int32_t)(lcg() % 400) - 250) << 16;
+            if (f % 3 == 0) tap((uint8_t)('1' + lcg() % 9));
+            if (f % 3 == 1) { tap(KEY_BREAK); edits++; }
+            if (f % 3 == 2) { tap(KEY_PLACE); edits++; }
+            if (f % 8 == 0) {                               // direct edits on chunk borders
+                for (int k = 0; k < 6; k++) {
+                    int32_t bx = world_corner_x() + (int32_t)(lcg() % 64), bz = world_corner_z() + (int32_t)(lcg() % 64);
+                    if (k & 1) bx = (bx & ~15) + (k & 2 ? 15 : 0);
+                    else       bz = (bz & ~15) + (k & 2 ? 15 : 0);
+                    world_set(bx, 1 + (int32_t)(lcg() % 31), bz, (uint8_t)(lcg() % 16));
+                    edits++;
+                }
+            }
+            if (f == 40) key(KEY_W, 1);
+            if (f == 47) key(KEY_W, 0);
+            step_frames(1);
+            n++;
+        }
+        frames += n;
+        wd = window_digest(wd);
+        if (raster) { mesh_update(); md = mesh_digest(md); }
+        if (arena_high_water() > worst) { worst = arena_high_water(); worst_loc = (uint32_t)l; }
+    }
+    printf("  sweep %s: %d locations, %d frames, %d edits, %u chunks generated\n", raster ? "raster" : "ray",
+           locations, frames, edits, (unsigned)world_stats_generated());
+    printf("  arena high water: %u of %u bytes (first reached at location %u)\n",
+           (unsigned)arena_high_water(), (unsigned)ARENA_SIZE, (unsigned)worst_loc);
+    printf("  window digest %016llx\n", (unsigned long long)wd);
+    if (raster) printf("  mesh digest   %016llx (%d quads, %d pages now)\n", (unsigned long long)md,
+                       mesh_total_quads(), mesh_pages_used());
+    return 0;
+}
+
+static int cmd_gencost(void) {
+    int n = 256;
+    uint64_t wd = 1469598103934665603ull;
+    uint32_t th0 = terrain_height_calls;
+    uint64_t r0 = hstats.world_reads, w0 = hstats.world_writes;
+    clock_t c0 = clock();
+    for (int i = 0; i < n; i++) {
+        int32_t cx = (int32_t)(lcg() % 256), cz = (int32_t)(lcg() % 256);
+        if (i < 4) { cx = i & 1 ? 255 : 0; cz = i & 2 ? 255 : 0; }   // world edges
+        TERRAIN_GEN(cx, cz, world_corner_x(), world_corner_z());
+        uint64_t r1 = hstats.world_reads;
+        int32_t x0 = (cx * 16 - world_corner_x()) & 63, z0 = (cz * 16 - world_corner_z()) & 63;
+        for (int32_t y = 0; y < 32; y++)
+            for (int32_t z = 0; z < 16; z++)
+                for (int32_t x = 0; x < 16; x++) wd = fnv(wd, hal_win_get((x0 + x) & 63, y, (z0 + z) & 63));
+        r0 += hstats.world_reads - r1;                  // don't count the digest reads
+    }
+    double ms = (double)(clock() - c0) * 1000.0 / CLOCKS_PER_SEC;
+    printf("  gencost: %d chunks | per chunk: terrain_height %.1f, hal_win_set %.1f, hal_win_get %.1f | %.1f ms total (incl. digest)\n",
+           n, (double)(terrain_height_calls - th0) / n, (double)(hstats.world_writes - w0) / n,
+           (double)(hstats.world_reads - r0) / n, ms);
+    printf("  chunk digest %016llx\n", (unsigned long long)wd);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: kc_host shots|play|vectors|compare <dir> | contract | bench\n");
+        fprintf(stderr, "usage: kc_host shots|play|vectors|compare <dir> | contract | bench | sweep ray|raster | gencost\n");
         return 2;
     }
     if (argc > 2) outdir = argv[2];
@@ -461,6 +575,8 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[1], "contract")) return cmd_contract();
     if (!strcmp(argv[1], "bench"))   return cmd_bench();
     if (!strcmp(argv[1], "compare")) return cmd_compare();
+    if (!strcmp(argv[1], "sweep"))   return cmd_sweep(argc > 2 ? argv[2] : "ray");
+    if (!strcmp(argv[1], "gencost")) return cmd_gencost();
     fprintf(stderr, "unknown command %s\n", argv[1]);
     return 2;
 }
