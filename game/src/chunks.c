@@ -42,6 +42,7 @@
 #include "terrain.h"
 #include "kc_hal.h"
 #include "fixed.h"
+#include "arena.h"
 #if KC_RASTER
 #include "mesh.h"
 #define MESH_MARK_SLOT(s) mesh_mark_slot(s)
@@ -197,6 +198,7 @@ void world_update(int px, int pz) {
 
     // 3. Start loads; generate (all at startup, then one per frame).
     int32_t gens = started ? 1 : 16;
+    void *gen_scratch = 0;                                    // arena, once per call (startup: 16 gens)
     for (int32_t s = 0; s < 16; s++) {
         if (slot_state[s] != S_NEED) continue;
         int32_t id = slot_id[s];
@@ -244,7 +246,8 @@ void world_update(int px, int pz) {
         if (slot_state[s] == S_GEN && gens > 0) {
             chunk_wait(slot_ticket[s]);                       // a store may still be reading the slot
             slot_valid(id & 255, id >> 8, 1);                 // valid first: tree code reads back
-            terrain_gen_chunk(id & 255, id >> 8, corner_cx * CHUNK_W, corner_cz * CHUNK_W);
+            if (!gen_scratch) gen_scratch = arena_alloc(TERRAIN_SCRATCH_BYTES);
+            terrain_gen_chunk(id & 255, id >> 8, corner_cx * CHUNK_W, corner_cz * CHUNK_W, gen_scratch);
 #if KC_GEN_BITMAP
             gen_set(id);
 #endif

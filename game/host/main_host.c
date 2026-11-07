@@ -22,7 +22,7 @@
 #include "raster.h"
 #include "arena.h"
 #include "terrain.h"
-#define TERRAIN_GEN(cx, cz, x0, z0) terrain_gen_chunk(cx, cz, x0, z0)
+#define TERRAIN_GEN(cx, cz, x0, z0) terrain_gen_chunk(cx, cz, x0, z0, gen_scratch)
 
 static const char *outdir = ".";
 static int failures;
@@ -538,6 +538,8 @@ static int cmd_sweep(const char *mode) {
 
 static int cmd_gencost(void) {
     int n = 256;
+    arena_reset();
+    void *gen_scratch = arena_alloc(TERRAIN_SCRATCH_BYTES);
     uint64_t wd = 1469598103934665603ull;
     uint32_t th0 = terrain_height_calls;
     uint64_t r0 = hstats.world_reads, w0 = hstats.world_writes;

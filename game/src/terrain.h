@@ -10,7 +10,9 @@ int32_t terrain_tree_at(int32_t ax, int32_t az);         // 1 if a tree trunk st
 
 // Generate chunk (cx, cz) straight into its window slot; win_x0/z0 = the committed corner
 // (WIN_ORIGIN). The slot must be valid (tree code reads blocks back). Lane 0 only.
-void terrain_gen_chunk(int32_t cx, int32_t cz, int32_t win_x0, int32_t win_z0);
+// scratch: TERRAIN_SCRATCH_BYTES, 4-byte aligned (arena); may be reused for every chunk.
+#define TERRAIN_SCRATCH_BYTES 288
+void terrain_gen_chunk(int32_t cx, int32_t cz, int32_t win_x0, int32_t win_z0, void *scratch);
 
 #ifdef KC_HOST
 extern uint32_t terrain_height_calls;                  // laptop profiling only
