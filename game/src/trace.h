@@ -32,10 +32,13 @@ typedef struct {
 // The origin must be inside the window. Branch-free: safe on 8 lanes.
 void ray_setup(kc_ray *r, const q16 o[3], const q16 d[3]);
 
-// Step the ray up to max_steps (1..255) until it hits a solid block or leaves the window.
-// Rules (must match vtrace.sv): the start cell is never tested; ties pick x, then y, then z
-// (x if tMax.x <= tMax.y && tMax.x <= tMax.z, else y if tMax.y <= tMax.z, else z);
-// a ray that leaves the window or runs out of steps returns hit = 0, type = 0.
+// Step the ray up to max_steps (0..255) until it hits a solid block or leaves the window.
+// Rules = wiki Tai page, VTRACE "One step" (vtrace.sv must match):
+//   x if tMax.x < tMax.y && tMax.x < tMax.z, else y if tMax.y < tMax.z, else z (strict <);
+//   tMax additions saturate at 0x7FFF_FFFF; a zero direction component has tDelta 0x7FFF_FFFF;
+//   the start cell is never tested; max_steps = 0 returns at once and leaves *h unchanged.
+// On a miss (left the window or hit the cap): hit = 0, type = 0, and axis, sign, t and cell
+// are those of the last step taken (cell packed from its low bits).
 void kc_trace(const kc_ray *r, int32_t max_steps, kc_hit *h);
 
 // Always the software version (used by tests to compare against VTRACE).
