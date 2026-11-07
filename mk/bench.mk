@@ -59,6 +59,7 @@ DDR ?= 1
 LANES ?= $(if $(filter 1 2,$(STAGE)),8,1)
 CHIP_TOP ?= bench_chip
 CHIP_PARAMS = $(if $(filter bench_chip,$(CHIP_TOP)),-GLANES=$(LANES))
+VL_MDIR ?= out/vl
 PAL_HEX ?=
 TEX_HEX ?=
 PALETTE_ARGS = $(if $(PAL_HEX),--palette-hex "$(abspath $(PAL_HEX))")
@@ -91,14 +92,15 @@ check-fixture: vl-fixture-build
 
 .PHONY: vl vl-build
 vl-build: sw
-	$(VERILATOR) $(VL_FLAGS) --Mdir out/vl --top-module $(CHIP_TOP) $(CHIP_PARAMS) \
+	@mkdir -p $(VL_MDIR)
+	$(VERILATOR) $(VL_FLAGS) --Mdir $(VL_MDIR) --top-module $(CHIP_TOP) $(CHIP_PARAMS) \
 		-GIMEM_HEX='"out/kc_imem.hex"' -GDMEM_HEX='"out/kc_dmem.hex"' \
 		-GPAL_HEX='"$(if $(PAL_HEX),$(abspath $(PAL_HEX)))"' -GTEX_HEX='"$(if $(TEX_HEX),$(abspath $(TEX_HEX)))"' \
 		-CFLAGS "$(HARNESS_CFLAGS) -DCHIP_TOP=$(CHIP_TOP)" $(SDL_LDFLAGS) \
 		tb/harness/public.vlt $(RTL_FILES) $(CHIP_FILE) $(VL_STUBS) $(abspath $(HARNESS_CPP))
 
 vl: vl-build
-	out/vl/kcvl $(RUN_ARGS)
+	$(VL_MDIR)/kcvl $(RUN_ARGS)
 
 TESTS_0 = t_zmmul t_uart t_illegal_div t_illegal_ecall t_illegal_csr \
 	t_illegal_misaligned t_illegal_vget2 t_illegal_vset8 t_illegal_unknown \
@@ -135,12 +137,17 @@ test-stage1-build:
 test-%: vl-build
 	$(PYTHON) scripts/run_tests.py $(TEST_ARGS) $*
 
-.PHONY: golden-check golden-update tracediff
-golden-check: vl-build
-	$(PYTHON) scripts/golden.py check --binary out/vl/kcvl
-golden-update: vl-build
-	@test -n "$(NAME)" -a -n "$(FRAMES)" -a -n "$(KEYS)" || { echo "golden-update: set NAME= FRAMES= KEYS=" >&2; exit 5; }
-	$(PYTHON) scripts/golden.py update --binary out/vl/kcvl --name "$(NAME)" --frames "$(FRAMES)" --keys "$(KEYS)"
+# Golden camera shots (Bennett.md, Shared.md Verification): Kennedy's plain C
+# reference (make -C game shots) against kcvl running the same pose, kcvl
+# built with the game's palette and textures in its own directory.
+.PHONY: golden-check tracediff
+GOLDEN_VL = out/golden/vl
+GAME_CHIP_CC ?= clang
+golden-check:
+	$(MAKE) -C game CC="$(HOST_CC)" shots
+	$(MAKE) vl-build VL_MDIR=$(GOLDEN_VL) PAL_HEX=game/gen/palette.hex TEX_HEX=game/gen/textures.hex
+	$(PYTHON) scripts/golden.py --binary $(GOLDEN_VL)/kcvl --cc "$(GAME_CHIP_CC)" --objcopy "$(OBJCOPY)" \
+		--lanes $(if $(filter bench_chip,$(CHIP_TOP)),$(LANES),1)
 tracediff: vl-build
 	@test -n "$(REF)" || { echo "tracediff: set REF=" >&2; exit 5; }
 	$(PYTHON) scripts/compare_ref.py --ref "$(REF)" --frames $(if $(FRAMES),$(FRAMES),5) $(if $(KEYS),--keys "$(KEYS)") $(PALETTE_ARGS) $(TEXTURE_ARGS)
