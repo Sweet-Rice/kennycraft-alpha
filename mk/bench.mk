@@ -124,12 +124,15 @@ TESTS += $(TESTS_2)
 endif
 TEST_ARGS = --stage $(STAGE) --cc "$(CC)" --objcopy "$(OBJCOPY)" --nm "$(CROSS)nm" --cflags "$(CFLAGS)"
 
-.PHONY: check-bench
+# Stage 2 joins once P7 puts the ray unit in the core.
+.PHONY: check-bench check-stage
 check-bench:
 	$(MAKE) check-fixture
-	$(MAKE) vl-build
-	$(PYTHON) scripts/run_tests.py $(TEST_ARGS) $(TESTS)
+	$(MAKE) check-stage STAGE=0
+	$(MAKE) check-stage STAGE=1
 	$(MAKE) golden-check
+check-stage: vl-build
+	$(PYTHON) scripts/run_tests.py $(TEST_ARGS) $(TESTS)
 
 .PHONY: test-stage0 test-images
 test-stage0: vl-build
