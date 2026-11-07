@@ -20,7 +20,8 @@
 #
 # Fast rebuild (D8): new kc_imem.hex / kc_dmem.hex / textures.hex go into the
 # last bitstream without Vivado:
-#   fpga/patch_bit.sh $out obj_dir/top_hex <dir> [program]
+#   [FPGA_STATE=<MCP state dir>] fpga/patch_bit.sh $out obj_dir/top_hex <dir> [program]
+# (FPGA_STATE is required with `program`: it names the MCP's hardware.lock)
 # which converts each image with fpga/hex2mem.py (kc_imem 32, kc_dmem 32,
 # textures 4 bits) and runs
 #   updatemem -force -meminfo $out/kc.mmi -bit $out/top.bit \

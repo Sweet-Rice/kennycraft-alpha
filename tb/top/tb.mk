@@ -3,8 +3,8 @@
 #   top-hex          memory images for rtl/top.sv in $(TOP_GEN): kc_imem.hex and
 #                    kc_dmem.hex from Kennedy's chip build (game/, `make chip`,
 #                    clang 18, Bennett's kc.ld + crt0.S), textures.hex and
-#                    palette.hex from game/gen. fpga/sources.tcl runs it too, so
-#                    the bitstream and the Verilator run use the same images.
+#                    palette.hex from game/gen. Run it before a Vivado build:
+#                    fpga/sources.tcl reads these images and does not build them.
 #   tb-top-t_top_frame
 #                    rtl/top.sv with ddr_model as the MIG runs the program to
 #                    its first FB_SWAP, captures the next frame from the VGA
