@@ -7,6 +7,10 @@
 #   tb-core-t_lanectl, tb-core-t_cpi
 #                           programs in tb/core/sw/*.S, assembled with the
 #                           RISC-V GCC, loaded as kc_imem/kc_dmem images
+#   tracediff-core-<tb>     Stage 1 rung 2: the same test at LANES = 8 with
+#                           only lane 0 able to activate (LANE0_ONLY), whose
+#                           retirement trace must equal the LANES = 1 trace
+#                           (tb/core/tracediff.py)
 #   lint-core               verilator -Wall over rtl/core, rtl/mem, rtl/soc
 #                           at LANES = 1 and LANES = 8
 #
@@ -30,7 +34,8 @@ CORE_PROG := t_zmmul t_uart t_illegal t_mmio t_lanectl t_cpi
 CORE_ALL  := $(CORE_TBS) $(CORE_PROG)
 PLUSARGS  ?=
 
-TB_TARGETS += $(addprefix tb-core-,$(CORE_ALL)) lint-core
+TB_TARGETS += $(addprefix tb-core-,$(CORE_ALL)) $(addprefix tracediff-core-,$(CORE_ALL)) \
+              lint-core
 
 # Test programs -> imem/dmem images
 $(CORE_SW_OBJ)/%.elf: tb/core/sw/%.S tb/core/sw/kc_test.h tb/core/sw/test.ld
@@ -66,6 +71,12 @@ tb-core-$(1): $(call core_hex_deps,$(1))
 	@mkdir -p $(OBJ)
 	$(call CORE_VL,$(call core_tb,$(1)))
 	$(call core_bin,$(call core_tb,$(1))) $(PLUSARGS)
+
+# Rung 2: LANES = 8, mask bits 7..1 pinned to 0, against LANES = 1
+tracediff-core-$(1): tb-core-$(1)
+	$(call CORE_VL,$(call core_tb,$(1)),_l8z,-GLANES=8 -GLANE0_ONLY=1)
+	python3 tb/core/tracediff.py --lane0 $(1)@L8z $(call core_bin,$(call core_tb,$(1))) \
+	    $(call core_bin,$(call core_tb,$(1)),_l8z)
 endef
 $(foreach t,$(CORE_ALL),$(eval $(call CORE_TB_RULES,$(t))))
 

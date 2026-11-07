@@ -7,11 +7,16 @@
 // (+trace), and memory and register peek helpers. The world port is unused
 // (EXT_WORLD = 0, internal stub).
 //
-// LANES (-GLANES=n) sizes the core. lane_x[l][n] is lane l's register n. KC_BASE_CORE (define) builds against
+// LANES (-GLANES=n) sizes the core. LANE0_ONLY = 1 pins mask bits
+// LANES-1..1 to 0, so only lane 0 can ever be active (Stage 1 rung 2:
+// LANES = 8 with the mask stuck at lane 0 must trace like LANES = 1).
+// lane_x[l][n] is lane l's register n. KC_BASE_CORE (define) builds against
 // the Stage 0 core (one register file, no per-lane retire wires) for
 // tracediff against the pre-lanes RTL.
 
-parameter int LANES = 1;
+parameter int LANES      = 1;
+parameter bit LANE0_ONLY = 1'b0;
+localparam int ALANES    = LANE0_ONLY ? 1 : LANES;   // lanes that can be active
 
 `ifdef KC_BASE_CORE
 `define KC_RF(l) dut.u_core.u_rf
@@ -140,6 +145,14 @@ end
 function automatic logic [31:0] xreg(input int n);
     return lane_x[0][n];
 endfunction
+
+// The core only updates the mask on a rising edge and only samples it on the
+// next one, so clearing bits LANES-1..1 at every falling edge pins them to 0
+// for every observable cycle. (A force on dut.u_core.mask does not take
+// effect in Verilator 5.020.)
+if (LANE0_ONLY && LANES > 1) begin : g_lane0_only
+    always @(negedge clk) dut.u_core.mask <= LANES'(dut.u_core.mask[0]);
+end
 
 task automatic do_reset();
     rst = 1'b1;
