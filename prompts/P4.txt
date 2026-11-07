@@ -25,7 +25,7 @@ Touch only. rtl/core/*, tb/core/*.
 
 Done when, in this order, each one passing before you start the next.
 - Rung 1. LANES = 1 passes every Stage 0 test with an unchanged trace.
-- Rung 2. LANES = 8 with M stuck at 0x01 gives a trace identical to LANES = 1 on every test (tracediff).
-- Rung 3. t_laneid passes on the simulator and in Verilator.
+- Rung 2. LANES = 8 with M stuck at 0x01 gives a trace identical to LANES = 1 on every test (tracediff). Raw tracediff is required, though differing CPI in MMIO polling or CYCLES reads can legitimately change retire traces without indicating a logic fault.
+- Rung 3. t_laneid passes in Verilator as a self-checking test.
 - Rung 4. t_lsu_order and t_mmio_lanes pass. Report LSU cycles for 1, 4 and 8 active lanes.
 - Report LUT usage of the 8 register files.

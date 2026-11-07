@@ -18,13 +18,13 @@ Build.
 1. LMASK, MASKGET, MASKSET, BALLOT. BALLOT result is {0, rs1_nonzero & M} written to rd in every lane.
 2. Uniform check on branch outcomes and JALR targets across active lanes. A mismatch halts with ERR.DIVERGE and ERR_PC. With M = 0 there is no check and lane 0 decides.
 3. rtl/core/divstack.sv. 8 entries of {saved, else}, LANES bits each. Implement the pseudocode in Tai_2 section 2 line for line, including the DIVSTACK halts and the jump-on-empty cases. DIF and DELSE take the standard B-type immediate.
-4. Add the six tests listed at the end of Tai_2 section 2 (also in the Verification section, Shared tab). Coordinate the file names with Bennett, who owns sw/tests and the simulator.
+4. Add the six tests listed at the end of Tai_2 section 2 (also in the Verification section, Shared tab). Coordinate the file names with Bennett, who owns sw/tests and the Verilator test harness.
 
 Touch only. rtl/core/*, tb/core/*, sw/tests/ (new test files only).
 
 Done when, in order.
-- Rung 5. t_mask, t_ballot, t_maskgetset, t_mask_zero pass.
-- Rung 6. t_branch_uniform and t_jalr_uniform pass, and ERR_PC matches the faulting instruction.
-- Rung 7. t_divstack, t_divskip, t_div_nested_lmask, t_divstack_overflow pass.
-- Rung 8. Kennedy's 8-lane software DDA kernel matches the simulator pixel for pixel in make check, then on the board.
+- Rung 5. t_mask, t_ballot, t_maskgetset, t_mask_zero pass as self-checking tests in Verilator.
+- Rung 6. t_branch_uniform and t_jalr_uniform pass in Verilator, and ERR_PC matches the faulting instruction.
+- Rung 7. t_divstack, t_divskip, t_div_nested_lmask, t_divstack_overflow pass in Verilator.
+- Rung 8. Kennedy's 8-lane software DDA kernel matches the plain C reference renderer golden frames pixel for pixel in make check (make vl), then on the board. (Do not claim goldens are already approved or all RTL passes.)
 - Fill the Stage 1 row of the Actual utilization table, and report the measured fps from CYCLES.
