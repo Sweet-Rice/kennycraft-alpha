@@ -32,7 +32,7 @@ needs `--headless`. `make golden-check` also needs clang and `zig cc`;
 
 | Target | Behavior |
 | --- | --- |
-| `make check-bench` | Fixture checks, every self-checking test for `STAGE`/`DDR`, and the golden shots (part of `make check`) |
+| `make check-bench` | Fixture checks, every self-checking test at Stage 0 (LANES = 1) and Stage 1 (LANES = 8, divergence stack), and the golden shots (part of `make check`) |
 | `make sw [PROG="sources.c"]` | Build ELF, disassembly, map and two 8192-word memory images |
 | `make arena-host` | Compile the allocator for the host with `HOST_CC` |
 | `make vl [RUN_ARGS="..."]` | Run the Verilated RTL; SDL3 window, UART and keyboard when built with SDL3 |
@@ -52,8 +52,8 @@ make vl-fixture RUN_ARGS="--headless --frames 5 --record out/keys.txt"
 ```
 
 Production uses `out/vl/kcvl`; the independent fixture uses `out/vl-fixture/kcvl`.
-`STAGE=0 DDR=1` is the default. Later stages require the corresponding merged RTL:
-the divergence and uniform-branch tests need P5, and `t_vtrace` needs P7.
+`STAGE=0 DDR=1` is the default; `STAGE=1` builds 8 lanes with the divergence
+stack. `STAGE=2` adds `t_vtrace`, which needs the ray unit in the core (P7).
 Until P3 merges, `CHIP_TOP=bench_chip` composes the core, display and chunk engine
 under `tb/harness/` with stub clocks (reset releases at once, `ui_clk` is the core
 clock); delete it once `CHIP_TOP=top` is the default. `PAL_HEX=` and `TEX_HEX=`
