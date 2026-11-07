@@ -10,13 +10,24 @@
 #   tb-core-t_laneid        Stage 1 rung 3, LANEID / MASKALL / scalar lane
 #   tb-core-t_lsu_order, tb-core-t_mmio_lanes
 #                           Stage 1 rung 4, lane-serial LSU and MMIO
+#   tb-core-t_mask, -t_ballot, -t_maskgetset, -t_mask_zero
+#                           Stage 1 rung 5, mask control and mask loops
+#   tb-core-t_branch_uniform, -t_jalr_uniform
+#                           Stage 1 rung 6, uniform checks (ERR.DIVERGE)
+#   tb-core-t_divstack, -t_divskip, -t_div_nested_lmask, -t_divstack_overflow
+#                           Stage 1 rung 7, divergence stack (built with
+#                           HAS_DIV_STACK = 1)
+#   tb-core-t_lsu_stall, tb-core-t_trap_lanes
+#                           lane-serial accesses to stalling slaves, and
+#                           illegal cases raised by lanes other than 0
 #   tb-core-<t>-l8          the Stage 1 tests (CORE_L8) at LANES = 8
 #   tracediff-core-<tb>     Stage 1 rung 2: the same test at LANES = 8 with
 #                           only lane 0 able to activate (LANE0_ONLY), whose
 #                           retirement trace must equal the LANES = 1 trace
 #                           (tb/core/tracediff.py)
 #   lint-core               verilator -Wall over rtl/core, rtl/mem, rtl/soc
-#                           at LANES = 1 and LANES = 8
+#                           at LANES = 1 and LANES = 8, with and without the
+#                           divergence stack
 #
 # Not in `make check`: `make tracediff-base-core` (Stage 1 rung 1) builds
 # every test above against the Stage 0 core of git ref CORE_BASE_REF and
@@ -37,9 +48,11 @@ CORE_TBS  := datapath_tb program_mem_tb
 CORE_RUNG5 := t_mask t_ballot t_maskgetset t_mask_zero
 CORE_RUNG6 := t_branch_uniform t_jalr_uniform
 CORE_RUNG7 := t_divstack t_divskip t_div_nested_lmask t_divstack_overflow
+CORE_GAPS  := t_lsu_stall t_trap_lanes
 CORE_PROG := t_zmmul t_uart t_illegal t_mmio t_lanectl t_cpi t_laneid t_lsu_order t_mmio_lanes \
-             $(CORE_RUNG5) $(CORE_RUNG6) $(CORE_RUNG7)
-CORE_L8   := t_laneid t_lsu_order t_mmio_lanes $(CORE_RUNG5) $(CORE_RUNG6) $(CORE_RUNG7)
+             $(CORE_RUNG5) $(CORE_RUNG6) $(CORE_RUNG7) $(CORE_GAPS)
+CORE_L8   := t_illegal t_laneid t_lsu_order t_mmio_lanes $(CORE_RUNG5) $(CORE_RUNG6) \
+             $(CORE_RUNG7) $(CORE_GAPS)
 CORE_ALL  := $(CORE_TBS) $(CORE_PROG)
 PLUSARGS  ?=
 
@@ -123,3 +136,5 @@ $(addprefix tracediff-base-core-,$(CORE_BASE_ALL)): tracediff-base-core-%: tb-co
 lint-core:
 	$(VERILATOR) $(VL_LINT) --top-module kc_soc $(CORE_RTL)
 	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=8 $(CORE_RTL)
+	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GHAS_DIV_STACK="1'b1" $(CORE_RTL)
+	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=8 -GHAS_DIV_STACK="1'b1" $(CORE_RTL)
