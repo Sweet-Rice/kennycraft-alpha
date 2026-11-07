@@ -54,13 +54,13 @@ VERILATOR ?= verilator
 RUN_ARGS ?=
 STAGE ?= 0
 DDR ?= 1
-# CHIP_TOP=top builds rtl/top.sv, which has no LANES / HAS_DIV_STACK
-# parameters and so runs Stage 0 only; bench_chip (the default) is the same
-# RTL with both. The harness reads the lane count from the built core.
+# CHIP_TOP=top builds rtl/top.sv, bench_chip (the default) the same RTL
+# without the board clocking; both take LANES and HAS_DIV_STACK. The harness
+# reads the lane count from the built core.
 LANES ?= $(if $(filter 1 2,$(STAGE)),8,1)
 HAS_DIV_STACK ?= $(if $(filter 1 2,$(STAGE)),1,0)
 CHIP_TOP ?= bench_chip
-CHIP_PARAMS = $(if $(filter bench_chip,$(CHIP_TOP)),-GLANES=$(LANES) -GHAS_DIV_STACK="1'b$(HAS_DIV_STACK)")
+CHIP_PARAMS = -GLANES=$(LANES) -GHAS_DIV_STACK="1'b$(HAS_DIV_STACK)"
 VL_MDIR ?= out/vl
 PAL_HEX ?=
 TEX_HEX ?=
@@ -132,6 +132,7 @@ check-bench:
 	$(MAKE) check-stage STAGE=0
 	$(MAKE) check-stage STAGE=1
 	$(MAKE) golden-check
+	$(MAKE) golden-check STAGE=1 CHIP_TOP=top GOLDEN_VL=out/golden/vl1
 check-stage: vl-build
 	$(PYTHON) scripts/run_tests.py $(TEST_ARGS) $(TESTS)
 
@@ -159,7 +160,7 @@ golden-check:
 	$(MAKE) -C game CC="$(HOST_CC)" shots
 	$(MAKE) vl-build VL_MDIR=$(GOLDEN_VL) PAL_HEX=game/gen/palette.hex TEX_HEX=game/gen/textures.hex
 	$(PYTHON) scripts/golden.py --binary $(GOLDEN_VL)/kcvl --cc "$(GAME_CHIP_CC)" --objcopy "$(OBJCOPY)" \
-		--lanes $(if $(filter bench_chip,$(CHIP_TOP)),$(LANES),1)
+		--lanes $(LANES)
 tracediff: vl-build
 	@test -n "$(REF)" || { echo "tracediff: set REF=" >&2; exit 5; }
 	$(PYTHON) scripts/compare_ref.py --ref "$(REF)" --frames $(if $(FRAMES),$(FRAMES),5) $(if $(KEYS),--keys "$(KEYS)") $(PALETTE_ARGS) $(TEXTURE_ARGS)
