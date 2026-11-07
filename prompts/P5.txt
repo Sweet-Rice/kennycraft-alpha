@@ -26,5 +26,5 @@ Done when, in order.
 - Rung 5. t_mask, t_ballot, t_maskgetset, t_mask_zero pass as self-checking tests in Verilator.
 - Rung 6. t_branch_uniform and t_jalr_uniform pass in Verilator, and ERR_PC matches the faulting instruction.
 - Rung 7. t_divstack, t_divskip, t_div_nested_lmask, t_divstack_overflow pass in Verilator.
-- Rung 8. Kennedy's 8-lane software DDA kernel matches the plain C reference renderer golden frames pixel for pixel in make check (make vl), then on the board. (Do not claim goldens are already approved or all RTL passes.)
+- Rung 8. Kennedy's 8-lane software DDA kernel matches the plain C reference renderer golden frames pixel for pixel in make check (make vl), then on the board.
 - Fill the Stage 1 row of the Actual utilization table, and report the measured fps from CYCLES.

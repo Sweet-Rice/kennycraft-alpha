@@ -1,0 +1,5 @@
+# UART key stimuli for t_uart (frame byte)
+0 0x6B
+0 0x63
+0 0x21
+0 0x0A

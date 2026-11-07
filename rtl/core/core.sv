@@ -1,6 +1,7 @@
 // KennyCraft core, Stage 1: multi-cycle RV32I + Zmmul + custom-0 lane
-// control on LANES SIMD lanes with one shared control path (Tai page, GPU
-// Core; Tai_2 sections 1 and 2).
+// control, plus custom-2 divergence stack when HAS_DIV_STACK = 1, on LANES
+// SIMD lanes with one shared control path (Tai page, GPU Core; Tai_2
+// sections 1 and 2).
 //
 // Grown from Tai's multicycle core (datapath.sv in RISC-V-Core-progression).
 // No pipeline registers, no forwarding, no hazard logic. One FSM walks every
