@@ -1,7 +1,7 @@
 // Full-top Verilator test (P3): rtl/top.sv with the 100 MHz board clock, the
 // clk_gen Verilator model, ddr_model standing in for the MIG (tb/ddr/
 // unisim_sim.sv) and the memory images as parameters (tb/top/tb.mk builds
-// them from Kennedy's game into $(OBJ)/top_hex).
+// them from Kennedy's game into $(OBJ)/top_hex/<build>).
 //
 // It runs the program until FRAMES frame swaps have completed. After each
 // swap it captures the next whole frame from the VGA pins (640x480 RGB444),
@@ -13,8 +13,18 @@
 //
 //   +outdir=DIR   output directory (default .)
 //   +frames=N     frames to capture (default 1)
+//   +swaps=N      also run until N FB_SWAPs (frame rates; default 0)
+//   +timeout_s=N  give up after N s of board time (default 20)
+//   +trace_lo=LO +trace_hi=HI  print the first 64 retired instructions whose
+//                 PC (hex) is in LO..HI: PC, instruction, active mask, rd,
+//                 lanes written
+//
+// LANES / HAS_DIV_STACK pick the core (tb/top/tb.mk: 1 / 0 for the one-lane
+// game builds, 8 / 1 for the 8-lane ones).
 
 module t_top_frame #(
+    parameter int    LANES         = 1,
+    parameter bit    HAS_DIV_STACK = 1'b0,
     parameter string IMEM_HEX = "kc_imem.hex",
     parameter string DMEM_HEX = "kc_dmem.hex",
     parameter string TEX_HEX  = "textures.hex",
@@ -36,7 +46,8 @@ module t_top_frame #(
     wire  [15:0] ddr3_dq;
     wire  [1:0]  ddr3_dqs_n, ddr3_dqs_p;
 
-    top #(.IMEM_HEX(IMEM_HEX), .DMEM_HEX(DMEM_HEX), .TEX_HEX(TEX_HEX), .PAL_HEX(PAL_HEX)) dut (
+    top #(.LANES(LANES), .HAS_DIV_STACK(HAS_DIV_STACK),
+          .IMEM_HEX(IMEM_HEX), .DMEM_HEX(DMEM_HEX), .TEX_HEX(TEX_HEX), .PAL_HEX(PAL_HEX)) dut (
         .clk, .ck_rst, .uart_rxd_out, .uart_txd_in(1'b1), .led,
         .vga_r, .vga_g, .vga_b, .vga_hs, .vga_vs,
         .ddr3_addr, .ddr3_ba, .ddr3_cas_n, .ddr3_ck_n, .ddr3_ck_p, .ddr3_cke,
@@ -138,14 +149,47 @@ module t_top_frame #(
     // ------------------------------------------------------------------
     // Run
     // ------------------------------------------------------------------
+    // Every FB_SWAP with its core cycle (CYCLES) and the cycles since the
+    // previous one, logged here rather than in the capture loop so fast
+    // frame rates are not missed while a frame is being captured.
+    int          swaps = 0;
+    logic [31:0] last_swap = '0;
+    always @(posedge dut.swap_req) begin
+        swaps++;
+        if (swaps == 1)
+            $display("t_top_frame: FB_SWAP %0d at core cycle %0d", swaps, dut.u_soc.u_mmio.cycles);
+        else
+            $display("t_top_frame: FB_SWAP %0d at core cycle %0d, %0d cycles after FB_SWAP %0d",
+                     swaps, dut.u_soc.u_mmio.cycles, dut.u_soc.u_mmio.cycles - last_swap, swaps - 1);
+        last_swap = dut.u_soc.u_mmio.cycles;
+    end
+
+    // Optional retire trace (+trace_lo / +trace_hi), from the core's retire wires.
+    logic [31:0] trace_lo = 32'd1, trace_hi = 32'd0;
+    int          traced = 0;
     initial begin
+        void'($value$plusargs("trace_lo=%h", trace_lo));
+        void'($value$plusargs("trace_hi=%h", trace_hi));
+    end
+    always @(posedge dut.clk_core)
+        if (dut.u_soc.u_core.retire_valid && traced < 64 &&
+            dut.u_soc.u_core.retire_pc >= trace_lo && dut.u_soc.u_core.retire_pc <= trace_hi) begin
+            traced++;
+            $display("t_top_frame: retire pc %08h inst %08h mask %02h rd x%0d lanes written %02h",
+                     dut.u_soc.u_core.retire_pc, dut.u_soc.u_core.retire_inst,
+                     8'(dut.u_soc.u_core.retire_mask), dut.u_soc.u_core.retire_rd_addr,
+                     8'(dut.u_soc.u_core.retire_lane_we));
+        end
+
+    initial begin
+        int min_swaps = 0;
         void'($value$plusargs("outdir=%s", outdir));
         void'($value$plusargs("frames=%d", frames));
+        void'($value$plusargs("swaps=%d", min_swaps));
         repeat (20) @(posedge clk);
         ck_rst = 1'b1;
         for (int n = 1; n <= frames; n++) begin
-            @(posedge dut.swap_req);
-            $display("t_top_frame: FB_SWAP %0d at core cycle %0d", n, dut.u_soc.u_mmio.cycles);
+            wait (swaps >= n);
             @(negedge dut.swap_pending);
             armed = 1; captured = 0;
             wait (captured);
@@ -153,6 +197,7 @@ module t_top_frame #(
             $display("t_top_frame: frame %0d captured from the VGA pins -> %s/frame%0d.ppm",
                      n, outdir, n);
         end
+        wait (swaps >= min_swaps);
         $display("t_top_frame: PASS");
         $finish;
     end
@@ -160,7 +205,10 @@ module t_top_frame #(
     always @(posedge led) $fatal(1, "error LED: core halted, ERR_PC %08h", dut.u_soc.err_pc);
 
     initial begin
-        #(TIMEOUT_NS);
+        longint timeout_ns = TIMEOUT_NS;
+        int     timeout_s;
+        if ($value$plusargs("timeout_s=%d", timeout_s)) timeout_ns = longint'(timeout_s) * 1_000_000_000;
+        #(timeout_ns);
         $fatal(1, "timeout");
     end
 endmodule

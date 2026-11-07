@@ -1,14 +1,26 @@
-# Sources for the main KennyCraft bitstream (KC_TARGET=top). Sourced by
-# fpga/build.tcl from the repo root with $root and $out set.
+# Sources for the main KennyCraft bitstream (KC_TARGET=top): the Stage 1 GPU,
+# rtl/top.sv with LANES = 8 and the divergence stack, running Kennedy's 8-lane
+# game (kc_chip8). Sourced by fpga/build.tcl from the repo root with $root and
+# $out set. fpga/top_s0/sources.tcl sets kc_stage 0 and sources this file for
+# the Stage 0 build (LANES = 1, no divergence stack, kc_chip):
+#   tools/fpga_mcp.py --project <checkout> --target top_s0 build-wait
 #
 # Memory images: run `make top-hex` (tb/top/tb.mk) before the build. It builds
-# Kennedy's chip program and copies his assets into obj_dir/top_hex:
+# Kennedy's chip programs and copies his assets into obj_dir/top_hex/<build>:
 # kc_imem.hex, kc_dmem.hex, textures.hex, palette.hex (not run from here: the
 # asset generator's python does not run under Vivado's environment).
 # rtl/top.sv names them in $readmemh and read_mem hands them to synthesis.
 # To change imem, dmem or textures without a rebuild, use the updatemem
 # commands in fpga/build.tcl.
-set hex_dir obj_dir/top_hex
+if {![info exists kc_stage]} { set kc_stage 1 }
+if {$kc_stage == 1} {
+    set hex_dir obj_dir/top_hex/kc_chip8
+    set generics {LANES=8 HAS_DIV_STACK=1}
+} else {
+    set hex_dir obj_dir/top_hex/kc_chip
+    set generics {LANES=1 HAS_DIV_STACK=0}
+}
+set kc_mmi 1
 foreach f {kc_imem.hex kc_dmem.hex textures.hex palette.hex} {
     if {![file exists $hex_dir/$f]} { error "$hex_dir/$f missing: run `make top-hex` first" }
     read_mem $hex_dir/$f

@@ -3,7 +3,11 @@
 #   KC_TARGET   which design to build (default "top"). "top" reads
 #               fpga/sources.tcl; any other name reads fpga/<name>/sources.tcl.
 #               A sources.tcl reads every RTL, IP and constraint file and sets
-#               the variable `top` to the top module name.
+#               the variable `top` to the top module name. It may also set
+#               `generics` (NAME=VALUE list for synth_design -generic) and
+#               `kc_mmi 1` (the KennyCraft top: write kc.mmi). Targets "top"
+#               (Stage 1, LANES = 8) and "top_s0" (Stage 0, LANES = 1) build
+#               rtl/top.sv.
 #   FPGA_BUILD_OUT  output directory (the fpga-tools MCP sets it per job;
 #               defaults to build/out/<target> for manual runs).
 #
@@ -12,7 +16,7 @@
 #
 # Outputs in $out: top.bit, timing.rpt, utilization.rpt (+ _hier), routed.dcp,
 # top.mmi (write_mem_info: XPM memories only, i.e. the ddr_bridge FIFOs) and,
-# for KC_TARGET=top, kc.mmi (fpga/kc_mmi.tcl): the imem, dmem and texture
+# for the rtl/top.sv targets, kc.mmi (fpga/kc_mmi.tcl): the imem, dmem and texture
 # BRAMs, which are inferred and so missing from top.mmi. The palette is not in
 # it: it sits in a RAMB18, and updatemem 2026.1 mis-places RAMB18 bit lanes
 # (it read RAMB18_X0Y26 as RAMB36_X0Y26, i.e. imem), so palette.hex changes
@@ -20,7 +24,7 @@
 #
 # Fast rebuild (D8): new kc_imem.hex / kc_dmem.hex / textures.hex go into the
 # last bitstream without Vivado:
-#   [FPGA_STATE=<MCP state dir>] fpga/patch_bit.sh $out obj_dir/top_hex <dir> [program]
+#   [FPGA_STATE=<MCP state dir>] fpga/patch_bit.sh $out obj_dir/top_hex/<build> <dir> [program]
 # (FPGA_STATE is required with `program`: it names the MCP's hardware.lock)
 # which converts each image with fpga/hex2mem.py (kc_imem 32, kc_dmem 32,
 # textures 4 bits) and runs
@@ -46,11 +50,13 @@ create_project -in_memory -part $part
 set sources [expr {$target eq "top" ? "fpga/sources.tcl" : "fpga/$target/sources.tcl"}]
 if {![file exists $sources]} { error "No sources script for target '$target': $sources" }
 set top ""
+set generics {}
+set kc_mmi 0
 source $sources
 if {$top eq ""} { error "$sources did not set top" }
 
-synth_design -top $top -part $part
-if {$target eq "top"} {
+synth_design -top $top -part $part {*}[concat {*}[lmap g $generics {list -generic $g}]]
+if {$kc_mmi} {
     source fpga/kc_mmi.tcl
     set kc_mems {
         {imem    u_soc/u_imem/*    32 8192}
@@ -75,7 +81,7 @@ check_timing -verbose -file $out/check_timing.rpt
 write_checkpoint -force $out/routed.dcp
 write_bitstream -force $out/top.bit
 write_mem_info -force $out/top.mmi
-if {$target eq "top"} {
+if {$kc_mmi} {
     kc_write_mmi $out/kc.mmi $kc_mems
 }
 

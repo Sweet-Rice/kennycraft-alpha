@@ -15,11 +15,17 @@
 // fpga/build.tcl writes an .mmi so updatemem can replace all four in a
 // built bitstream (see the commands there).
 //
+// LANES and HAS_DIV_STACK configure the core: LANES = 8 with the divergence
+// stack is Stage 1 (the default, and the KC_TARGET=top board build); LANES = 1
+// without it is Stage 0 (KC_TARGET=top_s0).
+//
 // led is the error LED: the core halted on an illegal instruction, a
 // misaligned access or a fetch outside instruction memory. The MIG owns the
 // XADC (temperature monitor); nothing else may instantiate one.
 /* verilator lint_off PINCONNECTEMPTY */  // unused MIG status outputs
 module top #(
+    parameter int    LANES         = 8,
+    parameter bit    HAS_DIV_STACK = 1'b1,
     parameter string IMEM_HEX = "kc_imem.hex",
     parameter string DMEM_HEX = "kc_dmem.hex",
     parameter string TEX_HEX  = "textures.hex",
@@ -94,12 +100,14 @@ module top #(
     logic [3:0]  core_world_rdata;
 
     kc_soc #(
+        .LANES    (LANES),
         .CLK_HZ   (50_000_000),
         .BAUD     (1_000_000),
         .IMEM_HEX (IMEM_HEX),
         .DMEM_HEX (DMEM_HEX),
         .TEX_HEX  (TEX_HEX),
-        .EXT_WORLD(1'b1)
+        .EXT_WORLD(1'b1),
+        .HAS_DIV_STACK(HAS_DIV_STACK)
     ) u_soc (
         .clk(clk_core), .rst(rst_core),
         .uart_tx(uart_rxd_out), .uart_rx(uart_txd_in),
