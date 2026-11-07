@@ -106,19 +106,17 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 # Read every page and refuse to interrupt another user's outstanding board lease.
-if ! gh api --paginate --slurp "repos/$REPO/issues/$ISSUE/comments" > "$scratch/thread.json"; then
-    echo 'board: GitHub authorization required; run gh auth login' >&2
+# gh 2.45 has no --slurp: --jq runs per page, giving one JSON string per comment.
+if ! gh api --paginate "repos/$REPO/issues/$ISSUE/comments" --jq '.[] | .body | tojson' > "$scratch/thread.jsonl"; then
+    echo "board: cannot read $REPO issue #$ISSUE comments; run gh auth login" >&2
     exit 5
 fi
-"$PYTHON" - "$scratch/thread.json" <<'PY'
+"$PYTHON" - "$scratch/thread.jsonl" <<'PY'
 import json, re, sys
 active = set()
-data = json.load(open(sys.argv[1]))
-pages = data if isinstance(data, list) else [data]
-for page in pages:
-    comments = page if isinstance(page, list) else [page]
-    for comment in comments:
-        body = comment.get('body', '') if isinstance(comment, dict) else ''
+with open(sys.argv[1]) as thread:
+    for line in thread:
+        body = json.loads(line) or ''
         match = re.search(r'\*\*\[([^]]+)\]\*\*\s*`?(taking-board|releasing-board)\b', body)
         if match:
             agent, status = match.groups()
