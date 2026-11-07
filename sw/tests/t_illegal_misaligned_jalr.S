@@ -1,11 +1,14 @@
 /*
  * t_illegal_misaligned_jalr.S: Illegal instruction verification for misaligned jump target.
  *
- * Tai_2 section 1 / approved decisions:
- *   - Misaligned taken instruction targets trap with ERR.ILLEGAL at the source PC.
- *   - Non-taken branch with misaligned target does not trap.
+ * Tai_2 section 1 / D16:
+ *   - A taken JALR whose target is not 4-aligned halts with ERR.ILLEGAL,
+ *     ERR_PC = the JALR's own PC.
+ *   - A not-taken branch with a misaligned target does not trap.
  *   - JALR clears bit 0 of the target address: odd address with bit 1 clear is legal.
- *   - Taken JALR with misaligned target (bit 1 set) traps before link register write.
+ *
+ * D16 also says the link register is not written. The core halts at the
+ * JALR, so nothing observes ra afterwards; this test checks ERR and ERR_PC only.
  */
 
     .include "sw/tests/test.inc"
@@ -15,9 +18,9 @@
 main:
     SCALAR
 
-    # 1. Non-taken branch with misaligned target must NOT trap
+    # 1. Non-taken branch with misaligned target (+2) must NOT trap
     li   t0, 0
-    bnez t0, .Lmisaligned_branch_target  # Condition false: branch not taken, no trap
+    bnez t0, .Lmisaligned_branch_target+2  # Condition false: branch not taken, no trap
 
     # 2. JALR with bit 0 set (addr % 4 == 1):
     # RISC-V clears bit 0: target = (t1 + 0) & ~1, which is 4-aligned. Must NOT trap.
@@ -28,11 +31,10 @@ main:
 
 .Llegal_jalr_target:
     # 3. Taken JALR with misaligned target (addr % 4 == 2):
-    # Target address has bit 1 set. Core must trap with ERR.ILLEGAL,
-    # latch ERR_PC = err_site, and must NOT update link register ra.
+    # Target address has bit 1 set. Core must halt with ERR.ILLEGAL and
+    # latch ERR_PC = err_site.
     la   a0, .Lmisaligned_jalr_target
     addi a0, a0, 2                       # target[1:0] == 2'b10 (misaligned instruction PC)
-    li   ra, 0x12345678                  # Sentinel in link register
 
     .globl err_site
 err_site:
