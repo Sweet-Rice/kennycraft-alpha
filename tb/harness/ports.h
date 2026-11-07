@@ -1,5 +1,5 @@
 #pragma once
-// Board pins shared by bench_chip and rtl/top.sv (P3): clk, ck_rst,
+// Board pins shared by bench_chip and rtl/top.sv: clk, ck_rst,
 // uart_rxd_out, uart_txd_in and led (error LED). The MMIO LEDS register is
 // read from kc_soc, since a top need not route it to pins.
 #define KC_CLK(d) ((d).clk)

@@ -54,8 +54,9 @@ VERILATOR ?= verilator
 RUN_ARGS ?=
 STAGE ?= 0
 DDR ?= 1
-# CHIP_TOP=top is rtl/top.sv (P3). LANES and HAS_DIV_STACK are bench_chip
-# parameters only; the harness reads the lane count from the built core.
+# CHIP_TOP=top builds rtl/top.sv, which has no LANES / HAS_DIV_STACK
+# parameters and so runs Stage 0 only; bench_chip (the default) is the same
+# RTL with both. The harness reads the lane count from the built core.
 LANES ?= $(if $(filter 1 2,$(STAGE)),8,1)
 HAS_DIV_STACK ?= $(if $(filter 1 2,$(STAGE)),1,0)
 CHIP_TOP ?= bench_chip

@@ -1,15 +1,12 @@
 // Chip composition for the bench harness only (make vl, check-bench).
 //
-// INTERIM: this re-implements P3's rtl/top.sv in a testbench file, including
-// a copy of the two-copy world memory and its VTRACE > core > engine
-// arbitration (from tb/ddr/ddr_harness.svh) instead of rtl/mem/world_mem.sv.
-// So make vl does not yet exercise the world memory that ships (D18). Once P3
-// merges, make CHIP_TOP=top the default and delete this file and its stubs.
-// The ports already match P3's top, so the harness binds to either.
-//
-// Instantiates clk_gen + kc_soc + display + chunk_engine + world_remap +
-// ddr_bridge + behavioral MIG (ddr_model), with two world copies (D17)
-// and the 2-cycle read latency model of tb/ddr/ddr_harness.svh.
+// rtl/top.sv has no LANES or HAS_DIV_STACK parameter, so Stage 1 (8 lanes,
+// divergence stack) cannot run on it; bench_chip is the same composition as
+// rtl/top.sv with those two parameters. It instantiates the shipped RTL:
+// clk_gen + kc_soc + display + world_remap + world_mem (two copies, D17) +
+// chunk_engine + ddr_bridge + MIG, with TEX_HEX / PAL_HEX passed to kc_soc
+// and display as top.sv does. The ports match top.sv, so the harness binds to
+// either (CHIP_TOP=top). Delete this file once top.sv takes those parameters.
 //
 // Stub limits (tb/harness/stubs, also used for CHIP_TOP=top):
 //   clk_gen  clk_core IS the harness clk (the harness counts core cycles:
@@ -21,7 +18,7 @@
 //            (tb/ddr runs ui_clk separately for that).
 //   mig_ddr3 ddr_model behind the MIG user interface, no DDR3 pins.
 //
-// Ports (Arty A7-100T pins, as in P3's top):
+// Ports (Arty A7-100T pins, as in rtl/top.sv):
 //   clk          harness clk = clk_core (50 MHz); E3 100 MHz osc on the board
 //   ck_rst       RESET button (C2, active low)
 //   uart_rxd_out FPGA TX -> USB-UART bridge (D10)
