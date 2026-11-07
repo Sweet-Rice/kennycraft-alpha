@@ -5,11 +5,14 @@ module fixture_top (
     output wire uart_tx,
     output wire [3:0] leds
 );
+    // Read only by the C++ harness through public.vlt.
+    /* verilator lint_off UNUSEDSIGNAL */
     logic fb_we, pal_we, swap_req, swap_pending;
     logic [16:0] fb_addr;
     logic [7:0] fb_wdata, pal_addr;
     logic [11:0] pal_wdata;
     wire fb_mode = 1'b0;
+    /* verilator lint_on UNUSEDSIGNAL */
     logic [7:0] palette_index;
     logic [8:0] x;
     logic [7:0] y, frame;
