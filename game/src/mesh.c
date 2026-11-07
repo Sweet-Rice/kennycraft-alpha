@@ -19,8 +19,9 @@
 GPUMEM mesh_page mesh_pool[MESH_PAGES];
 const uint16_t mesh_quad_index[6] = { 0, 1, 2, 0, 2, 3 };
 uint8_t  mesh_page_next[MESH_PAGES];
-uint16_t mesh_page_quads[MESH_PAGES];
+uint8_t  mesh_page_quads[MESH_PAGES];
 mesh_cmd mesh_cmds[16];
+_Static_assert(MESH_PAGE_QUADS <= 255, "mesh_page_quads is uint8");
 
 static uint8_t  free_head;
 static uint16_t dirty_slots;
@@ -135,7 +136,7 @@ static void mesh_slot(int32_t slot) {
     int32_t id1 = world_slot_chunk(slot);
     if (!id1) { cmd->cx = -1; return; }
     int32_t id = id1 - 1;
-    cmd->cx = id & 255; cmd->cz = id >> 8;
+    cmd->cx = (int16_t)(id & 255); cmd->cz = (int16_t)(id >> 8);
 
     emit_ctx e = { slot, MESH_NONE, cmd->cx * CHUNK_W, cmd->cz * CHUNK_W };
     for (int32_t z = -1; z <= 16; z++)

@@ -16,7 +16,7 @@
 #define KC_MESH_H
 #include <stdint.h>
 
-#define MESH_PAGE_QUADS 113
+#define MESH_PAGE_QUADS 113                 // fits the uint8 per-page quad count
 #ifndef MESH_PAGES
 #define MESH_PAGES 52                       // 52 x 1 KB; worst of 60 sampled locations: 42
 #endif
@@ -31,14 +31,14 @@ typedef struct {
 extern const uint16_t mesh_quad_index[6];   // shared index buffer: 0 1 2, 0 2 3
 
 typedef struct {
-    int32_t cx, cz;                         // chunk coordinates, -1 = empty slot
-    uint8_t first_page;                     // MESH_NONE if no quads
+    int16_t cx, cz;                         // chunk coordinates, -1 = empty slot
     uint16_t quads;
-} mesh_cmd;
+    uint8_t first_page;                     // MESH_NONE if no quads
+} mesh_cmd;                                 // 8 bytes
 
 extern mesh_page mesh_pool[MESH_PAGES];
 extern uint8_t   mesh_page_next[MESH_PAGES];
-extern uint16_t  mesh_page_quads[MESH_PAGES];
+extern uint8_t   mesh_page_quads[MESH_PAGES];   // <= MESH_PAGE_QUADS
 extern mesh_cmd  mesh_cmds[16];
 
 #define VTX_PACK(x, y, z) ((uint16_t)((x) | ((y) << 5) | ((z) << 11)))
