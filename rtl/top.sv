@@ -152,6 +152,9 @@ module top #(
         .vt_addr, .vt_paddr, .vt_rdata_phys, .vt_rdata
     );
 
+    // DONT_TOUCH keeps both copies and port B while VTRACE is not built: they
+    // only feed VTRACE lanes, so synthesis would otherwise remove copy 1.
+    (* dont_touch = "true" *)
     world_mem #(.LANES(VT_LANES)) u_world (
         .clk(clk_core),
         .vt_busy, .vt_paddr, .vt_rdata(vt_rdata_phys),
