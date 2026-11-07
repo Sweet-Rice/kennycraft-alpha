@@ -10,9 +10,13 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         import pygame
+    except ImportError:
+        print('keys: pygame is not installed (needed for the key window); pip install pygame', file=sys.stderr)
+        return 5
+    try:
         import serial
-    except ImportError as error:
-        print(f'keys: {error}; install pygame and pyserial', file=sys.stderr)
+    except ImportError:
+        print('keys: pyserial is not installed; pip install pyserial', file=sys.stderr)
         return 5
     port = args.port
     keymap = {
