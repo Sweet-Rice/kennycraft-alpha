@@ -3,14 +3,16 @@
    field 2, plus the other DIV/REM forms, EBREAK, misaligned LH/SW/SH, a
    reserved custom-0 encoding, custom-1/custom-2 instructions whose unit is
    absent in Stage 0, an all-zero word, a fetch outside instruction memory, a
-   fetch from a PC that is not 4-aligned, an undefined opcode (FLW), an
+   taken JALR, branch and JAL whose target is not 4-aligned (halt at the
+   jump itself, link not written, D16), an undefined opcode (FLW), an
    undefined OP funct7 and an undefined LOAD funct3 (LD). Anything Tai_2 does
    not define is illegal. The testbench writes the case number to TB_SELECT
    and resets the core once per case. Case k sits at 0x100 + 0x40*k with the
    faulting instruction first in its slot (case 15 faults at 0x8000, case 17
-   at 0x542). Case 21 is the legal control: FENCE/FENCE.I run, reset has
-   cleared ERR/ERR_PC, unmapped and imem-region data accesses read 0 without
-   an error. */
+   at 0x544). Case 23 is the legal control: FENCE/FENCE.I run, a not-taken
+   branch with a misaligned target falls through, reset has cleared
+   ERR/ERR_PC, unmapped and imem-region data accesses read 0 without an
+   error. */
 #include "kc_test.h"
 
     /* DIV/REM and FENCE.I are not in rv32i_zmmul; assemble them anyway. */
@@ -84,9 +86,10 @@ _start:
     .org 0x500                  /* 16: all-zero word (not an RV32I instruction) */
     .word  0
     NOT_REACHED
-    .org 0x540                  /* 17: fetch from a PC with bit 1 set */
+    .org 0x540                  /* 17: JALR to a target with bit 1 set */
     li     a3, 0x542
-    jr     a3
+    jalr   a2, 0(a3)            /* halts here, a2 not linked */
+    NOT_REACHED
     .org 0x580                  /* 18: undefined opcode 0x07 (flw a2, 0(a1)) */
     .insn i 0x07, 2, a2, 0(a1)
     NOT_REACHED
@@ -96,9 +99,16 @@ _start:
     .org 0x600                  /* 20: LOAD with undefined funct3 011 (ld) */
     .insn i 0x03, 3, a2, 0(t0)
     NOT_REACHED
-    .org 0x640                  /* 21: legal control */
+    .org 0x640                  /* 21: taken BEQ x0, x0, +6 */
+    .word  0x00000363
+    NOT_REACHED
+    .org 0x680                  /* 22: JAL a2, +6 (link not written) */
+    .word  0x0060066F
+    NOT_REACHED
+    .org 0x6c0                  /* 23: legal control */
     fence
     fence.i
+    .word  0x00001363           /* BNE x0, x0, +6: not taken, no error */
     li     s0, MMIO_BASE
     lw     a4, MMIO_ERR(s0)
     sw     a4, 0xE0(t0)         /* ERR after reset */

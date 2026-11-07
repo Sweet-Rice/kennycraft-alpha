@@ -34,11 +34,13 @@
 // custom-2 (divergence stack, P5) and custom-1 (ray unit, Stage 2) are absent
 // in this build and decode as illegal.
 //
-// Errors (Tai_2 sections 1 and 2). An illegal instruction (caught in ID), a
-// fetch outside instruction memory or from a PC that is not 4-aligned (ID), or
-// a misaligned load/store in any active lane (EX, before any bus access)
-// pulses err_set[ERR_ILLEGAL] with err_pc = the instruction's PC and parks the
-// FSM in HALT until reset: nothing is fetched or written.
+// Errors (Tai_2 sections 1 and 2). An illegal instruction or a fetch outside
+// instruction memory (caught in ID), a taken branch, JAL or JALR whose target
+// is not 4-aligned (EX, D16: the target is never fetched, the link is not
+// written), or a misaligned load/store in any active lane (EX, before any bus
+// access) pulses err_set[ERR_ILLEGAL] with err_pc = the instruction's own PC
+// and parks the FSM in HALT until reset: nothing is fetched or written. Every
+// PC the core reaches is 4-aligned, so fetch never needs an alignment check.
 //
 // Buses. imem_rdata is the instruction BRAM output for imem_addr one cycle
 // earlier. On the data bus, bus_req is held until bus_ready; the access
@@ -109,7 +111,7 @@ module core
 
     immgen u_imm (.inst(imem_rdata[31:7]), .imm_sig(d_imm_sig), .imm(d_imm));
 
-    assign id_fault = d_illegal || is_fetch_outside_imem(pc) || is_fetch_misaligned(pc);
+    assign id_fault = d_illegal || is_fetch_outside_imem(pc);
 
     // ID -> EX registers (shared decode; the operands live in the lanes)
     logic [3:0]  ex_alu_ctrl;
@@ -239,7 +241,9 @@ module core
     logic ex_mem, ex_fault, lsu_done;
 
     assign ex_mem   = (ex_is_load || ex_is_store) && (mask != '0);
-    assign ex_fault = ex_mem && ((mis & mask) != '0);
+    // A taken jump to a target with bit 1 set halts at the jump (D16). Bit 0
+    // is 0 for branch/JAL immediates and cleared for JALR.
+    assign ex_fault = (ex_mem && ((mis & mask) != '0)) || (take && target[1]);
 
     lsu #(.LANES(LANES)) u_lsu (
         .clk, .rst,
