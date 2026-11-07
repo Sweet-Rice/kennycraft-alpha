@@ -30,7 +30,9 @@
 // inactive lane's misaligned address raises no error.
 //
 // Scalar lane: the lowest active lane, lane 0 when M = 0. Branch decisions and
-// JALR targets come from it (the uniform checks across lanes are P5).
+// JALR targets come from it. Uniform checks (EX): a branch whose outcome or a
+// JALR whose target differs between active lanes halts with ERR.DIVERGE and
+// err_pc = its PC, before anything is written; with M = 0 nothing is checked.
 // custom-2 (divergence stack, P5) and custom-1 (ray unit, Stage 2) are absent
 // in this build and decode as illegal.
 //
@@ -183,11 +185,15 @@ module core
     end
 
     // ------------------------------------------------------------------
-    // EX: scalar lane, branch, mask
+    // EX: scalar lane, branch, uniform checks, mask
     // ------------------------------------------------------------------
-    logic [LW-1:0] sl;           // scalar lane: lowest active, 0 when M = 0
-    logic [31:0]   target;
-    logic          take;
+    logic [LW-1:0]    sl;           // scalar lane: lowest active, 0 when M = 0
+    logic [31:0]      target;
+    logic             take;
+    logic [LANES-1:0] l_taken;      // per-lane branch outcome
+    logic [31:0]      l_jt [LANES]; // per-lane JALR target
+    logic [LANES-1:0] jt_diff;      // lane's JALR target differs from the scalar lane's
+    logic             ex_diverge, ex_halt;
 
     always_comb begin
         sl = '0;
@@ -195,9 +201,20 @@ module core
             if (mask[i]) sl = LW'(i);
     end
 
-    // funct3[0] inverts the comparator (BNE, BGE, BGEU).
-    assign take   = ex_is_jal || ex_is_jalr || (ex_is_branch && (l_cmp[sl] ^ ex_funct3[0]));
-    assign target = ex_is_jalr ? ((l_rs1[sl] + ex_imm) & ~32'd1) : (pc + ex_imm);
+    for (genvar i = 0; i < LANES; i++) begin : g_uniform
+        // funct3[0] inverts the comparator (BNE, BGE, BGEU).
+        assign l_taken[i] = l_cmp[i] ^ ex_funct3[0];
+        assign l_jt[i]    = (l_rs1[i] + ex_imm) & ~32'd1;
+        assign jt_diff[i] = (l_jt[i] != l_jt[sl]);
+    end
+
+    // Uniform checks over the active lanes only; with M = 0 nothing is
+    // compared and lane 0 (the scalar lane) decides.
+    assign ex_diverge = (ex_is_branch && ((l_taken & mask) != '0) && ((l_taken & mask) != mask)) ||
+                        (ex_is_jalr && ((jt_diff & mask) != '0));
+
+    assign take   = ex_is_jal || ex_is_jalr || (ex_is_branch && l_taken[sl]);
+    assign target = ex_is_jalr ? l_jt[sl] : (pc + ex_imm);
 
     always_comb begin
         lane_y  = 32'd0;
@@ -225,8 +242,8 @@ module core
     end
 
     always_ff @(posedge clk) begin
-        if (rst)                               mask <= LANES'(1);
-        else if (state == S_EX && mask_we)     mask <= mask_d;
+        if (rst)                                     mask <= LANES'(1);
+        else if (state == S_EX && mask_we && !ex_halt) mask <= mask_d;
     end
 
     logic [31:0] next_pc;
@@ -238,16 +255,19 @@ module core
     // ------------------------------------------------------------------
     // MEM: lane-serial LSU
     // ------------------------------------------------------------------
-    logic ex_mem, ex_fault, lsu_done;
+    logic ex_mem, ex_illegal, lsu_done;
 
-    assign ex_mem   = (ex_is_load || ex_is_store) && (mask != '0);
+    assign ex_mem     = (ex_is_load || ex_is_store) && (mask != '0);
     // A taken jump to a target with bit 1 set halts at the jump (D16). Bit 0
-    // is 0 for branch/JAL immediates and cleared for JALR.
-    assign ex_fault = (ex_mem && ((mis & mask) != '0)) || (take && target[1]);
+    // is 0 for branch/JAL immediates and cleared for JALR. Lanes that
+    // disagree on a branch or JALR halt with ERR.DIVERGE only.
+    assign ex_illegal = !ex_diverge &&
+                        ((ex_mem && ((mis & mask) != '0)) || (take && target[1]));
+    assign ex_halt    = ex_diverge || ex_illegal;
 
     lsu #(.LANES(LANES)) u_lsu (
         .clk, .rst,
-        .start((state == S_EX) && ex_mem && !ex_fault), .active(mask),
+        .start((state == S_EX) && ex_mem && !ex_halt), .active(mask),
         .go(state == S_MEM), .is_store(ex_is_store), .funct3(ex_funct3),
         .addr(l_res), .rs2(l_rs2), .done(lsu_done),
         .ex_addr_lo(l_addr_lo), .misaligned(mis),
@@ -267,7 +287,7 @@ module core
                 S_IF:  state <= S_ID;
                 S_ID:  state <= id_fault ? S_HALT : S_EX;
                 S_EX: begin
-                    if (ex_fault)                        state <= S_HALT;
+                    if (ex_halt)                         state <= S_HALT;
                     else if (ex_is_mul)                  state <= S_MUL;
                     else if (ex_mem)                     state <= S_MEM;
                     else                                 state <= S_WB;
@@ -298,7 +318,8 @@ module core
 
     always_comb begin
         err_set = '0;
-        err_set[ERR_ILLEGAL] = ((state == S_ID) && id_fault) || ((state == S_EX) && ex_fault);
+        err_set[ERR_ILLEGAL] = ((state == S_ID) && id_fault) || ((state == S_EX) && ex_illegal);
+        err_set[ERR_DIVERGE] = (state == S_EX) && ex_diverge;
     end
 
     // ------------------------------------------------------------------
