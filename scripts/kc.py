@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Forward focused pygame keyboard events to KennyCraft's 1 Mbaud UART."""
 import argparse
-import glob
 import sys
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--port', help='default: last sorted /dev/tty.usbserial-*')
+    parser.add_argument('--port', default='/dev/ttyUSB1', help='board UART (default: %(default)s)')
     args = parser.parse_args(argv)
     try:
         import pygame
@@ -15,11 +14,7 @@ def main(argv=None):
     except ImportError as error:
         print(f'keys: {error}; install pygame and pyserial', file=sys.stderr)
         return 5
-    ports = sorted(glob.glob('/dev/tty.usbserial-*'))
-    port = args.port or (ports[-1] if ports else None)
-    if port is None:
-        print('keys: no /dev/tty.usbserial-* device; set --port', file=sys.stderr)
-        return 5
+    port = args.port
     keymap = {
         pygame.K_w: 0x77, pygame.K_a: 0x61, pygame.K_s: 0x73, pygame.K_d: 0x64,
         pygame.K_SPACE: 0x20,
