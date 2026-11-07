@@ -1,3 +1,19 @@
+/*
+ * t_divskip.S: DIF and DELSE jump over a body whose lanes are all inactive.
+ *
+ * Each body that must be skipped starts with a JAL to a FAIL. JAL's PC
+ * update is shared (Tai_2 §2), so it runs even with M = 0: a DIF or DELSE
+ * that falls through instead of jumping fails here, not only one that
+ * leaves lanes active.
+ *
+ * Failure codes:
+ *   1: case 1 then-body ran (DIF did not jump)
+ *   2: case 1 else-body did not run
+ *   3: case 2 then-body did not run
+ *   4: case 2 else-body ran (DELSE did not jump)
+ *   5: case 3 then-body ran (DIF did not jump)
+ */
+
     .include "sw/tests/test.inc"
 
     .globl main
@@ -13,18 +29,16 @@ main:
     li   a1, 0
     .insn b 0x5B, 0, a1, x0, .Lcase1_else   # DIF a1, .Lcase1_else
 
-    # Then body: should be skipped!
-    la   t0, skip_flags
-    li   t1, 1
-    sw   t1, 0(t0)
+    # Then body: must be jumped over
+    j    .Lcase1_then_ran
 
 .Lcase1_else:
     .insn b 0x5B, 1, x0, x0, .Lcase1_endif  # DELSE .Lcase1_endif
 
     # Else body: should execute!
-    la   t0, skip_flags
+    la   t0, ran_flags
     li   t1, 1
-    sw   t1, 4(t0)
+    sw   t1, 0(t0)
 
 .Lcase1_endif:
     .insn r 0x5B, 2, 0, x0, x0, x0      # DENDIF
@@ -40,17 +54,15 @@ main:
     .insn b 0x5B, 0, a1, x0, .Lcase2_else   # DIF a1, .Lcase2_else
 
     # Then body: should execute!
-    la   t0, skip_flags
+    la   t0, ran_flags
     li   t1, 1
-    sw   t1, 8(t0)
+    sw   t1, 4(t0)
 
 .Lcase2_else:
     .insn b 0x5B, 1, x0, x0, .Lcase2_endif  # DELSE .Lcase2_endif
 
-    # Else body: should be skipped!
-    la   t0, skip_flags
-    li   t1, 1
-    sw   t1, 12(t0)
+    # Else body: must be jumped over
+    j    .Lcase2_else_ran
 
 .Lcase2_endif:
     .insn r 0x5B, 2, 0, x0, x0, x0      # DENDIF
@@ -64,10 +76,8 @@ main:
     li   a1, 0
     .insn b 0x5B, 0, a1, x0, .Lcase3_endif   # DIF a1, .Lcase3_endif
 
-    # Then body: should be skipped!
-    la   t0, skip_flags
-    li   t1, 1
-    sw   t1, 16(t0)
+    # Then body: must be jumped over
+    j    .Lcase3_then_ran
 
 .Lcase3_endif:
     .insn r 0x5B, 2, 0, x0, x0, x0      # DENDIF
@@ -75,28 +85,23 @@ main:
     # Return to scalar mask
     SCALAR
 
-    # Validate execution flags
-    la   t0, skip_flags
-
-    # Case 1: then-body skipped (0), else-body executed (1)
+    # Validate that the bodies which must run did run
+    la   t0, ran_flags
     lw   a0, 0(t0)
-    EXPECT_EQ a0, 0, 1
-    lw   a0, 4(t0)
     EXPECT_EQ a0, 1, 2
-
-    # Case 2: then-body executed (1), else-body skipped (0)
-    lw   a0, 8(t0)
+    lw   a0, 4(t0)
     EXPECT_EQ a0, 1, 3
-    lw   a0, 12(t0)
-    EXPECT_EQ a0, 0, 4
-
-    # Case 3: then-body skipped (0)
-    lw   a0, 16(t0)
-    EXPECT_EQ a0, 0, 5
 
     PASS
 
+.Lcase1_then_ran:
+    FAIL 1
+.Lcase2_else_ran:
+    FAIL 4
+.Lcase3_then_ran:
+    FAIL 5
+
     .section .bss
     .balign 4
-skip_flags:
-    .space 20
+ran_flags:
+    .space 8
