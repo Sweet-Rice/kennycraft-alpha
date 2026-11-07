@@ -99,12 +99,16 @@ TESTS_1 = t_laneid t_mask t_ballot t_maskgetset t_lsu_order t_branch_uniform \
 	t_divstack t_divskip t_mask_zero t_mmio_lanes t_jalr_uniform t_div_nested_lmask \
 	t_divstack_overflow
 TESTS_DDR = t_chunk_roundtrip t_slot_valid t_ring
+TESTS_2 = t_vtrace
 TESTS = $(TESTS_0)
 ifeq ($(DDR),1)
 TESTS += $(TESTS_DDR)
 endif
 ifneq ($(filter 1 2,$(STAGE)),)
 TESTS += $(TESTS_1)
+endif
+ifeq ($(STAGE),2)
+TESTS += $(TESTS_2)
 endif
 TEST_ARGS = --stage $(STAGE) --cc "$(CC)" --objcopy "$(OBJCOPY)" --nm "$(CROSS)nm" --cflags "$(CFLAGS)"
 
