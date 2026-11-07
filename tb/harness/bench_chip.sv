@@ -205,105 +205,54 @@ module bench_chip #(
     );
 
     // ------------------------------------------------------------------
-    // World Remap & Window State (P2b / D17)
+    // World window: world_remap -> world_mem (two copies, D17), as rtl/top.sv
     // ------------------------------------------------------------------
-    localparam int REMAP_LANES = (LANES > 8) ? LANES : 8;
-    localparam int COPIES      = 2;
+    localparam int VT_LANES = 8;   // world_mem / world_remap serve 8 VTRACE lanes
 
     logic [15:0] slot_valid;
     logic [5:0]  win_x, win_z;
     logic [16:0] core_paddr;
-    logic [3:0]  remap_core_rdata;
-
-    logic [16:0] vt_addr       [REMAP_LANES];
-    logic [16:0] vt_paddr      [REMAP_LANES];
-    logic [3:0]  vt_rdata_phys [REMAP_LANES];
-    logic [3:0]  vt_rdata      [REMAP_LANES];
-
-    // VTRACE (Stage 2) is not built: lane addresses stay 0.
-    always_comb for (int l = 0; l < REMAP_LANES; l++) vt_addr[l] = '0;
-
-    world_remap #(.LANES(REMAP_LANES)) u_remap (
-        .clk             (clk_core),
-        .win_x           (win_x),
-        .win_z           (win_z),
-        .slot_valid      (slot_valid),
-        .core_en         (world_req),
-        .core_addr       (world_addr),
-        .core_paddr      (core_paddr),
-        .core_rdata_phys (wa_rdata[0]),
-        .core_rdata      (remap_core_rdata),
-        .vt_addr         (vt_addr),
-        .vt_paddr        (vt_paddr),
-        .vt_rdata_phys   (vt_rdata_phys),
-        .vt_rdata        (vt_rdata)
-    );
-
-    // ------------------------------------------------------------------
-    // 2-copy World BRAM (D17, 2-cycle read model from tb/ddr/ddr_harness.svh)
-    // Priority: VTRACE > core > engine.
-    // Writes update both copies identically to keep them coherent.
-    // ------------------------------------------------------------------
-    logic        vtrace_busy = 1'b0;
-    logic        vt_phase;
-
+    logic [3:0]  a_rdata;
+    logic [3:0]  core_world_rdata;
     logic        eng_we, eng_re;
     logic [16:0] eng_addr;
     logic [3:0]  eng_wdata;
 
-    logic        core_world_req;
-    logic        core_we;
-    logic [3:0]  core_wdata;
+    // VTRACE (Stage 2) is not built yet: busy low, addresses 0.
+    logic        vt_busy;
+    logic [16:0] vt_addr       [VT_LANES];
+    logic [16:0] vt_paddr      [VT_LANES];
+    logic [3:0]  vt_rdata_phys [VT_LANES];
+    logic [3:0]  vt_rdata      [VT_LANES];
 
-    assign core_world_req = world_req;
-    assign core_we        = world_req & world_we;
-    assign core_wdata     = world_wdata[3:0];
+    assign vt_busy = 1'b0;
+    always_comb for (int l = 0; l < VT_LANES; l++) vt_addr[l] = '0;
 
-    (* ram_style = "block" *) logic [3:0] wmem [COPIES][131072];
-    logic [3:0] wa_rdata [COPIES];
+    world_remap #(.LANES(VT_LANES)) u_remap (
+        .clk(clk_core), .win_x, .win_z, .slot_valid,
+        .core_en(world_req), .core_addr(world_addr), .core_paddr,
+        .core_rdata_phys(a_rdata), .core_rdata(core_world_rdata),
+        .vt_addr, .vt_paddr, .vt_rdata_phys, .vt_rdata
+    );
 
-    initial begin
-        for (int c = 0; c < COPIES; c++) begin
-            for (int i = 0; i < 131072; i++) begin
-                wmem[c][i] = 4'd0;
-            end
-        end
-    end
+    world_mem #(.LANES(VT_LANES)) u_world (
+        .clk(clk_core),
+        .vt_busy, .vt_paddr, .vt_rdata(vt_rdata_phys),
+        .core_req(world_req), .core_we(world_we), .core_paddr,
+        .core_wdata(world_wdata[3:0]),
+        .eng_we, .eng_addr, .eng_wdata,
+        .a_rdata
+    );
 
-    // world_mem model: 2 copies, port A (VTRACE / core / engine), port B (VTRACE)
-    // A VTRACE access holds vt_addr for WORLD_LATENCY = 2 cycles. In the first
-    // cycle ports A and B of copy n read lanes 4n and 4n+1, in the second lanes
-    // 4n+2 and 4n+3; every lane's data is valid after the second edge.
-    always_ff @(posedge clk_core) begin
-        for (int c = 0; c < COPIES; c++) begin
-            int          la;
-            logic [16:0] a;
-            logic        we;
-            logic [3:0]  d;
-            la = 4 * c + (vt_phase ? 2 : 0);
-            if (vtrace_busy)         begin a = vt_paddr[la]; we = 1'b0;    d = 4'd0;       end
-            else if (core_world_req) begin a = core_paddr;   we = core_we; d = core_wdata; end
-            else                     begin a = eng_addr;     we = eng_we;  d = eng_wdata;  end
-            wa_rdata[c] <= wmem[c][a];
-            if (vtrace_busy) begin
-                vt_rdata_phys[la]     <= wmem[c][vt_paddr[la]];
-                vt_rdata_phys[la + 1] <= wmem[c][vt_paddr[la + 1]];
-            end
-            if (we) wmem[c][a] <= d;
-        end
-        if (rst_core) vt_phase <= 1'b0;
-        else          vt_phase <= vtrace_busy && !vt_phase;
-    end
-
-    // Core handshake: 1-cycle access; read data filtered by u_remap slot_valid
-    assign world_ready = 1'b1;
-    assign world_rdata = {4'b0, remap_core_rdata};
+    // The core's world access completes in one cycle (rtl/top.sv).
+    assign world_ready = world_req;
+    assign world_rdata = {4'b0, core_world_rdata};
 
 `ifdef VERILATOR
     always_ff @(posedge clk_core) begin
-        if (!rst_core && (eng_we || eng_re) && (vtrace_busy || core_world_req)) begin
-            $fatal(1, "engine accessed the world while vtrace_busy=%0d core_world_req=%0d",
-                   vtrace_busy, core_world_req);
+        if (!rst_core && (eng_we || eng_re) && (vt_busy || world_req)) begin
+            $fatal(1, "engine accessed the world while vt_busy=%0d world_req=%0d",
+                   vt_busy, world_req);
         end
     end
 `endif
@@ -331,13 +280,13 @@ module bench_chip #(
         .slot_valid     (slot_valid),
         .win_x          (win_x),
         .win_z          (win_z),
-        .vtrace_busy    (vtrace_busy),
-        .core_world_req (core_world_req),
+        .vtrace_busy    (vt_busy),
+        .core_world_req (world_req),
         .eng_we         (eng_we),
         .eng_re         (eng_re),
         .eng_addr       (eng_addr),
         .eng_wdata      (eng_wdata),
-        .eng_rdata      (wa_rdata[0]),
+        .eng_rdata      (a_rdata),
         .calib          (calib),
         .cmd_valid      (cmd_valid),
         .cmd_ready      (cmd_ready),
@@ -469,7 +418,6 @@ module bench_chip #(
         eng_re,
         app_rd_data_end,
         leds,
-        wa_rdata[1],
         vt_rdata[0],
         world_wdata[7:4]
     };
