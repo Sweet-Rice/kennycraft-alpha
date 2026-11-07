@@ -23,52 +23,56 @@ vivado -mode batch -source fpga/build.tcl      # KC_TARGET=<name> picks fpga/<na
 
 ## Bench
 
-Requires RISC-V GCC 12+ (`riscv-none-elf-` or `riscv64-unknown-elf-` on `PATH`),
-Verilator, SDL3, `pkg-config`, and Python with Pillow, pyserial and pygame.
-The RTL team's baseline is Verilator 5.020; 5.054 currently reports additional
-warnings in upstream simulation models. Override `CROSS=`, `VERILATOR=` or
-`PYTHON=` as needed. All bench outputs go under the ignored `out/` directory.
+Requires the pinned RISC-V GCC (`RISCV_PREFIX`, default the AMD 2026.1
+`riscv64-unknown-elf-`; Zmmul, D5), Verilator 5.020 and Python with Pillow.
+SDL3 with `pkg-config` is optional: without it the harness builds headless and
+needs `--headless`. `make golden-check` also needs clang and `zig cc`;
+`make keys` needs pyserial and pygame. All bench outputs go under the ignored
+`out/` directory, and `make clean` removes it.
 
 | Target | Behavior |
 | --- | --- |
+| `make check-bench` | Fixture checks, every self-checking test for `STAGE`/`DDR`, and the golden shots (part of `make check`) |
 | `make sw [PROG="sources.c"]` | Build ELF, disassembly, map and two 8192-word memory images |
-| `make arena-host` | Compile the allocator without chip MMIO |
-| `make vl [RUN_ARGS="..."]` | Run the real Verilated RTL with SDL3 display, UART and keyboard |
+| `make arena-host` | Compile the allocator for the host with `HOST_CC` |
+| `make vl [RUN_ARGS="..."]` | Run the Verilated RTL; SDL3 window, UART and keyboard when built with SDL3 |
 | `make check-fixture` | Check RGB pixels, replay, UART, run control and VCD windows without a CPU |
-| `make test-stage0 test-ddr` | Run self-checking assembly through the real chip model |
+| `make test-stage0 test-ddr` | Run self-checking assembly through the chip model |
 | `make test-t_uart` | Run one named software test |
 | `make test-stage1-build` | Assemble the eight-lane tests without requiring Stage 1 RTL |
 | `make tracediff REF=<ref> [KEYS=file] [FRAMES=5]` | Build a reference worktree and compare retire traces using identical images |
-| `make golden-check` | Compare approved replay PNGs in `sw/golden/`, if present |
-| `make golden-update NAME=name FRAMES=3 KEYS=file` | Capture a candidate golden and replay; review before committing |
-| `make board BIT=file.bit MMI=file.mmi` | Run checks, patch memories and program on the Vivado host |
-| `make keys [PORT=/dev/tty.usbserial-...]` | Forward focused-window key events at 1 Mbaud |
+| `make golden-check` | Render Kennedy's plain C shots and compare them pixel for pixel with kcvl frames |
+| `make board BIT=file.bit MMI=file.mmi [TEX_HEX=] [PAL_HEX=]` | Run `make check`, patch memories with updatemem and program through `fpga/program.tcl` |
+| `make keys [PORT=/dev/ttyUSB1]` | Forward focused-window key events at 1 Mbaud |
 
 ```sh
-make vl RUN_ARGS="--frames 3 --keys tb/harness/fixture/keys.txt --trace out/pattern.trace"
+make vl RUN_ARGS="--headless --frames 3 --keys tb/harness/fixture/keys.txt --trace out/pattern.trace"
 make vl RUN_ARGS="--headless --frames 3 --png-dir out/pattern"
-make vl-fixture RUN_ARGS="--frames 5 --record out/keys.txt"
+make vl-fixture RUN_ARGS="--headless --frames 5 --record out/keys.txt"
 ```
 
 Production uses `out/vl/kcvl`; the independent fixture uses `out/vl-fixture/kcvl`.
-`STAGE=0 DDR=1` is the default. Later stages require the corresponding merged RTL.
-The misaligned-JALR source-PC test runs with the merged P4 alignment behavior.
+`STAGE=0 DDR=1` is the default. Later stages require the corresponding merged RTL:
+the divergence and uniform-branch tests need P5, and `t_vtrace` needs P7.
 Until P3 merges, `CHIP_TOP=bench_chip` composes the core, display and chunk engine
-under `tb/harness/`; board RTL is not replaced. P3 binding uses `CHIP_TOP=top`.
-`PAL_HEX=` and `TEX_HEX=` select build-time assets; the runtime palette option is
-`--palette-hex`.
+under `tb/harness/` with stub clocks (reset releases at once, `ui_clk` is the core
+clock); delete it once `CHIP_TOP=top` is the default. `PAL_HEX=` and `TEX_HEX=`
+load build-time assets, and frames are read from the RTL framebuffer and palette.
+Keys, live or replayed, reach the UART only when the RTL accepts an FB_SWAP.
 
 Traces compare exact retired instructions and register writes, not cycles.
 Different-CPI MMIO polling and `CYCLES` reads can legitimately change those
 instructions or values; frame replay does not make peripheral timing identical.
-Self-checking tests and C-reference frames remain necessary. Candidate captures
-are regression images, not an independent instruction oracle. An empty golden
-directory is reported explicitly; it is not pixel-match evidence.
+Golden shots come from the plain C renderer, never from kcvl itself; only
+`g0_spawn` is wired so far, and `golden-check` fails when it compares nothing.
 
-Hardware programming requires Vivado's `updatemem`, openFPGALoader, `flock` and an
-available board. Programming takes `.fpga-state/hardware.lock` (override with
-`HARDWARE_LOCK=`) to exclude the hardware MCP. Board claims go to alpha issue #1
-under the authenticated user's name; bench coordination lives in issue #7.
+`make board` needs P3's `fpga/program.tcl`, `fpga/hex2mem.py` and `kc.mmi`, and
+Vivado from `VIVADO_BIN` (default `/home/tai/AMD/2026.1/Vivado/bin`). It holds the
+workspace `.fpga-state/hardware.lock` (the fpga-mcp lock; override with
+`HARDWARE_LOCK=`) while programming, and `make keys` holds it while the UART is
+open. Both post `taking-board` and `releasing-board` on issue #1 as `BOARD_AGENT`
+(default `kc-bench`). P3's `kc.mmi` has no palette BRAM, so a `PAL_HEX` change
+needs a Vivado rebuild.
 
 ## Credits
 
