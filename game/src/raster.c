@@ -40,8 +40,15 @@ static uint16_t tile_start[MAX_TILES + 1];
 static uint16_t tile_fill[MAX_TILES];
 
 // ---- tile memory: 16 x 16 x (2-byte color + 2-byte depth) = 1 KB, +1 scratch slot ----------
-static uint16_t tile_col[TILE * TILE + 1];
-static uint16_t tile_dep[TILE * TILE + 1];
+// One 32-bit word per pixel (Josh's layout): color 11:0 (the 8-bit palette index, 4 spare
+// bits), depth 23:12 (12-bit linear, 1/64 block), stencil 31:24 (unused for now, kept 0).
+// One load and one masked store per pixel instead of three halfword operations.
+#define PX_COLOR(w)   ((w) & 0xFFFu)
+#define PX_DEPTH(w)   (((w) >> 12) & 0xFFFu)
+#define PX_STENCIL(w) ((w) >> 24)
+#define PX_PACK(c, d, s) ((uint32_t)(c) | ((uint32_t)(d) << 12) | ((uint32_t)(s) << 24))
+#define DEPTH_MAX 0xFFFu
+static uint32_t tile_px[TILE * TILE + 1];          // 1 KB + 1 scratch word
 
 // One polygon vertex, two stages in the same five words: view space + texture coords (blocks)
 // while clipping, then the screen vertex project() writes over it in place. Sharing the buffer
@@ -294,10 +301,11 @@ __attribute__((noinline)) static void shade_px(const tri_t *t, int32_t px, int32
     q16 z = qrcp(iz);                                  // perspective-correct
     q16 u = qmul(uz, z), v = qmul(vz, z);
 
-    int32_t dep = z >> 6;                              // linear depth, 1/1024 block, 16 bits
-    dep = sel(dep > 65534, 65534, dep);
+    int32_t dep = z >> 10;                             // 12-bit linear depth, 1/64 block
+    dep = sel(dep > (int32_t)DEPTH_MAX - 1, (int32_t)DEPTH_MAX - 1, dep);
     int32_t idx = sel(inside, (py - ty0) * TILE + (px - tx0), TILE * TILE);
-    int32_t pass = inside & (dep < tile_dep[idx]);
+    uint32_t old = tile_px[idx];
+    int32_t pass = inside & (dep < (int32_t)PX_DEPTH(old));
 
     int32_t face = mat & 7, a = face >> 1, type = mat >> 3;
     int32_t tu = (qfrac(u) >> 12) & 15, tv = (qfrac(v) >> 12) & 15;
@@ -312,11 +320,10 @@ __attribute__((noinline)) static void shade_px(const tri_t *t, int32_t px, int32
 #if KC_LANES == 8
     uint32_t m = mask_get();
     lmask((uint32_t)pass);                             // masked stores: only winning lanes write
-    tile_dep[idx] = (uint16_t)dep;
-    tile_col[idx] = (uint16_t)col;
+    tile_px[idx] = PX_PACK(col, dep, PX_STENCIL(old));
     mask_set(m);
 #else
-    if (pass) { tile_dep[idx] = (uint16_t)dep; tile_col[idx] = (uint16_t)col; }
+    if (pass) tile_px[idx] = PX_PACK(col, dep, PX_STENCIL(old));
 #endif
 }
 
@@ -364,8 +371,7 @@ static void tile_clear(int32_t ty0, int32_t lane0) {
 #endif
             int32_t k = i + lane;
             int32_t sky_i = ((ty0 + (k >> 4)) * p->sky_k) >> 16;
-            tile_col[k] = (uint16_t)((COLOR_SKY << 4) | sel(sky_i > 15, 15, sky_i));
-            tile_dep[k] = 0xFFFF;
+            tile_px[k] = PX_PACK((COLOR_SKY << 4) | sel(sky_i > 15, 15, sky_i), DEPTH_MAX, 0);
 #if KC_LANES == 1
         }
 #endif
@@ -383,7 +389,7 @@ static void tile_flush(int32_t tx0, int32_t ty0, int32_t H, int32_t lane0) {
             int32_t py = ty0 + (k >> 4);
             int32_t px = tx0 + (k & 15);
             int32_t addr = sel(py < H, py * FB_STRIDE + px, 0);   // partial bottom tile row at 120
-            uint8_t c = (uint8_t)tile_col[k];
+            uint8_t c = (uint8_t)PX_COLOR(tile_px[k]);
 #if KC_LANES == 8
             uint32_t m = mask_get();
             lmask((uint32_t)(py < H));
