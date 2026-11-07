@@ -31,7 +31,7 @@ Every chip target also runs `tools/stack_check.sh`: the worst-case stack depth o
 | `src/chunks.[ch]` | Issue #2 memory API: world_update/get/set, chunk_load/store tickets, slot_valid, window_origin, 8 KB generated bitmap |
 | `src/arena.[ch]` | Bennett's 8 KB per-frame arena (bench/kc-bench), unchanged |
 | `chip/bench/` | Bennett's kc.ld, crt0.S, gpu.h, arena (copied from bench/kc-bench) |
-| `src/game.[ch]` | Keys, physics, picking, place/break, camera, crosshair + hotbar |
+| `src/game.[ch]` | Keys, physics, picking, place/break, camera, crosshair, selection box + hotbar |
 | `src/kc_main.c` | Frame loop; `main()` for the chip |
 | `tools/gen_assets.py` | textures.hex, palette.hex, kc_tables.h, atlas.png |
 | `host/` | Memory-map emulation, PNG writer, headless front-end |
