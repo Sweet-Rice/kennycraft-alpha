@@ -44,6 +44,10 @@ int32_t terrain_tree_at(int32_t ax, int32_t az) {
 // octave 2: 4 + 9 corner hashes per chunk instead of 8 per column, and the lerps along x are
 // done once per chunk. A column then costs 2 qmul. Same operations in the same order as
 // terrain_height, so heights are bit-identical.
+static q16 corner(int32_t ix, int32_t iz, uint32_t seed) { return (q16)(hash2(ix, iz, seed) & 0xFFFF); }
+// Per-chunk setup runs once per chunk: keep clang from unrolling it into ~2 KB of IMEM.
+#define NO_UNROLL _Pragma("GCC unroll 1")
+
 typedef struct {
     q16 a1[16], d1[16];       // octave 1 along x: a = lerp at iz, d = (lerp at iz + 1) - a
     q16 a2[16], d2[16];       // octave 2, for the current 8-block z cell
@@ -51,21 +55,21 @@ typedef struct {
 } gen_scratch;                // 288 bytes
 _Static_assert(sizeof(gen_scratch) <= TERRAIN_SCRATCH_BYTES, "TERRAIN_SCRATCH_BYTES");
 
-static void lerp_x(q16 *a, q16 *d, int32_t n, const q16 *s, q16 c00, q16 c10, q16 c01, q16 c11) {
-    for (int32_t i = 0; i < n; i++) {
+__attribute__((noinline)) static void lerp_x(q16 *a, q16 *d, int32_t n, const q16 *s, q16 c00, q16 c10, q16 c01, q16 c11) {
+    NO_UNROLL for (int32_t i = 0; i < n; i++) {
         q16 ta = c00 + qmul(c10 - c00, s[i]);
         q16 tb = c01 + qmul(c11 - c01, s[i]);
         a[i] = ta; d[i] = tb - ta;
     }
 }
 
-static void octave2_row(gen_scratch *g, int32_t ax0, int32_t iz) {
+__attribute__((noinline)) static void octave2_row(gen_scratch *g, int32_t ax0, int32_t iz) {
     uint32_t seed = WORLD_SEED ^ 0x55AAu;
     int32_t ix = ax0 >> 3;
     q16 h0[3], h1[3];
-    for (int32_t i = 0; i < 3; i++) {
-        h0[i] = (q16)(hash2(ix + i, iz, seed) & 0xFFFF);
-        h1[i] = (q16)(hash2(ix + i, iz + 1, seed) & 0xFFFF);
+    NO_UNROLL for (int32_t i = 0; i < 3; i++) {
+        h0[i] = corner(ix + i, iz, seed);
+        h1[i] = corner(ix + i, iz + 1, seed);
     }
     lerp_x(g->a2, g->d2, 8, g->s3, h0[0], h0[1], h1[0], h1[1]);
     lerp_x(g->a2 + 8, g->d2 + 8, 8, g->s3, h0[1], h0[2], h1[1], h1[2]);
@@ -80,15 +84,13 @@ void terrain_gen_chunk(int32_t cx, int32_t cz, int32_t win_x0, int32_t win_z0, v
 #define WX(x) (((x) + rx0) & 63)
 #define WZ(z) (((z) + rz0) & 63)
 
-    for (int32_t i = 0; i < 8; i++) g->s3[i] = smooth(i << 13);
+    NO_UNROLL for (int32_t i = 0; i < 8; i++) g->s3[i] = smooth(i << 13);
     {   // octave 1: one cell for the whole chunk; x fractions start at 0 or 16
         int32_t ix = ax0 >> 5, iz = az0 >> 5, fx = (ax0 & 31) << 11;
-        q16 c00 = (q16)(hash2(ix, iz, WORLD_SEED) & 0xFFFF);
-        q16 c10 = (q16)(hash2(ix + 1, iz, WORLD_SEED) & 0xFFFF);
-        q16 c01 = (q16)(hash2(ix, iz + 1, WORLD_SEED) & 0xFFFF);
-        q16 c11 = (q16)(hash2(ix + 1, iz + 1, WORLD_SEED) & 0xFFFF);
+        q16 c00 = corner(ix, iz, WORLD_SEED), c10 = corner(ix + 1, iz, WORLD_SEED);
+        q16 c01 = corner(ix, iz + 1, WORLD_SEED), c11 = corner(ix + 1, iz + 1, WORLD_SEED);
         q16 sx[16];
-        for (int32_t lx = 0; lx < 16; lx++) sx[lx] = smooth(fx + (lx << 11));
+        NO_UNROLL for (int32_t lx = 0; lx < 16; lx++) sx[lx] = smooth(fx + (lx << 11));
         lerp_x(g->a1, g->d1, 16, sx, c00, c10, c01, c11);
     }
 
