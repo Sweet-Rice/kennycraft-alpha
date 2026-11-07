@@ -1,14 +1,16 @@
 # Sources for the main KennyCraft bitstream (KC_TARGET=top). Sourced by
 # fpga/build.tcl from the repo root with $root and $out set.
 #
-# Memory images: `make top-hex` (tb/top/tb.mk) builds Kennedy's chip program
-# and copies his assets into obj_dir/top_hex: kc_imem.hex, kc_dmem.hex,
-# textures.hex, palette.hex. rtl/top.sv names them in $readmemh and read_mem
-# hands them to synthesis. To change them without a rebuild, use the
-# updatemem commands in fpga/build.tcl.
+# Memory images: run `make top-hex` (tb/top/tb.mk) before the build. It builds
+# Kennedy's chip program and copies his assets into obj_dir/top_hex:
+# kc_imem.hex, kc_dmem.hex, textures.hex, palette.hex (not run from here: the
+# asset generator's python does not run under Vivado's environment).
+# rtl/top.sv names them in $readmemh and read_mem hands them to synthesis.
+# To change imem, dmem or textures without a rebuild, use the updatemem
+# commands in fpga/build.tcl.
 set hex_dir obj_dir/top_hex
-puts [exec make -C $root top-hex 2>@1]
 foreach f {kc_imem.hex kc_dmem.hex textures.hex palette.hex} {
+    if {![file exists $hex_dir/$f]} { error "$hex_dir/$f missing: run `make top-hex` first" }
     read_mem $hex_dir/$f
     # snapshot next to the bitstream (fpga/patch_bit.sh checks the palette)
     file copy -force $hex_dir/$f $out/$f
