@@ -34,8 +34,10 @@ CORE_RTL_CORE := $(wildcard rtl/core/*.sv)
 CORE_RTL_REST := $(wildcard rtl/mem/*.sv) $(wildcard rtl/soc/*.sv)
 CORE_RTL      := rtl/kc_isa_pkg.sv $(CORE_RTL_CORE) $(CORE_RTL_REST)
 CORE_TBS  := datapath_tb program_mem_tb
-CORE_PROG := t_zmmul t_uart t_illegal t_mmio t_lanectl t_cpi t_laneid t_lsu_order t_mmio_lanes
-CORE_L8   := t_laneid t_lsu_order t_mmio_lanes
+CORE_RUNG5 := t_mask t_ballot t_maskgetset t_mask_zero
+CORE_PROG := t_zmmul t_uart t_illegal t_mmio t_lanectl t_cpi t_laneid t_lsu_order t_mmio_lanes \
+             $(CORE_RUNG5)
+CORE_L8   := t_laneid t_lsu_order t_mmio_lanes $(CORE_RUNG5)
 CORE_ALL  := $(CORE_TBS) $(CORE_PROG)
 PLUSARGS  ?=
 
@@ -43,7 +45,7 @@ TB_TARGETS += $(addprefix tb-core-,$(CORE_ALL)) $(addprefix tracediff-core-,$(CO
               $(addsuffix -l8,$(addprefix tb-core-,$(CORE_L8))) lint-core
 
 # Test programs -> imem/dmem images
-$(CORE_SW_OBJ)/%.elf: tb/core/sw/%.S tb/core/sw/kc_test.h tb/core/sw/test.ld
+$(CORE_SW_OBJ)/%.elf: tb/core/sw/%.S tb/core/sw/kc_test.h tb/core/sw/kc_lanes.h tb/core/sw/test.ld
 	@mkdir -p $(CORE_SW_OBJ)
 	$(RISCV_PREFIX)gcc $(CORE_SW_FLAGS) -Itb/core/sw $< -o $@
 
