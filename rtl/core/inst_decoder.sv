@@ -1,10 +1,10 @@
-// Instruction decoder for the Stage 0 core: RV32I + Zmmul + custom-0 lane
-// control (Tai_2 section 1).
+// Instruction decoder for the core: RV32I + Zmmul + custom-0 lane control +
+// custom-2 divergence stack (Tai_2 section 1).
 //
 // illegal is exactly kc_isa_pkg::is_illegal: every encoding Tai_2 section 1
 // does not define is illegal, plus custom-1/custom-2 when the build lacks the
-// ray unit / divergence stack (the "unit absent" rule; both are absent in
-// Stage 0). FENCE and FENCE.I decode as no-ops.
+// ray unit / divergence stack (the "unit absent" rule). is_div is only ever
+// set when HAS_DIV_STACK = 1. FENCE and FENCE.I decode as no-ops.
 //
 // alu_ctrl = {sub/sra, funct3} for OP and OP-IMM, and the compare the branch
 // needs for BRANCH (XOR for BEQ/BNE, SLT for BLT/BGE, SLTU for BLTU/BGEU).
@@ -28,6 +28,7 @@ module inst_decoder
     output logic        is_jal,
     output logic        is_jalr,
     output logic        is_lane,     // custom-0 lane control, op in funct3
+    output logic        is_div,      // custom-2 DIF / DELSE / DENDIF, op in funct3
     output logic        uniform_wr,  // writes rd in every lane (BALLOT, MASKGET)
     output logic        illegal
 );
@@ -53,6 +54,7 @@ module inst_decoder
         is_jal    = 1'b0;
         is_jalr    = 1'b0;
         is_lane    = 1'b0;
+        is_div     = 1'b0;
         uniform_wr = 1'b0;
         illegal    = is_illegal(inst, HAS_RAY_UNIT, HAS_DIV_STACK);
 
@@ -111,7 +113,11 @@ module inst_decoder
                 r_we       = (f3 == F3_LANEID) || (f3 == F3_BALLOT) || (f3 == F3_MASKGET);
                 uniform_wr = (f3 == F3_BALLOT) || (f3 == F3_MASKGET);
             end
-            default: ;   // MISC-MEM (FENCE no-op), custom-1/2 and illegal words
+            OPC_CUSTOM2: begin
+                is_div  = HAS_DIV_STACK;
+                imm_sig = 3'b110;           // DIF, DELSE: B-type label
+            end
+            default: ;   // MISC-MEM (FENCE no-op), custom-1 and illegal words
         endcase
     end
 

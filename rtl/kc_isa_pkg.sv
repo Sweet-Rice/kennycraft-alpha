@@ -213,8 +213,10 @@ package kc_isa_pkg;
     // states, and never make an instruction illegal.
     //
     // The remaining illegal cases depend on runtime state, not on the
-    // instruction word, and are checked with is_misaligned(),
-    // is_fetch_outside_imem() and is_fetch_misaligned() below.
+    // instruction word: misaligned data accesses (is_misaligned() below),
+    // fetches outside instruction memory (is_fetch_outside_imem() below), and
+    // taken branches, JAL and JALR whose target is not 4-aligned, which the
+    // core catches at the jump itself (D16).
     //
     // The interface is LANES-independent: one 32-bit word in, one bit out.
     function automatic logic is_illegal(input logic [31:0] instr,
@@ -286,12 +288,6 @@ package kc_isa_pkg;
     // Fetch outside instruction memory (0x0000_0000 to 0x0000_7FFF).
     function automatic logic is_fetch_outside_imem(input logic [31:0] pc);
         return pc >= (IMEM_BASE + IMEM_BYTES);
-    endfunction
-
-    // Fetch from a PC that is not 4-aligned (a JALR, JAL or branch target
-    // with bit 1 set). There are no compressed instructions.
-    function automatic logic is_fetch_misaligned(input logic [31:0] pc);
-        return pc[1:0] != 2'b00;
     endfunction
 
 endpackage
