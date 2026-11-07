@@ -24,7 +24,8 @@ module kc_soc
     parameter string IMEM_HEX  = "kc_imem.hex",
     parameter string DMEM_HEX  = "kc_dmem.hex",
     parameter string TEX_HEX   = "",
-    parameter bit    EXT_WORLD = 1'b0
+    parameter bit    EXT_WORLD = 1'b0,
+    parameter bit    HAS_DIV_STACK = 1'b0   // custom-2 divergence stack in the core
 ) (
     input  logic        clk,
     input  logic        rst,
@@ -83,7 +84,7 @@ module kc_soc
     logic [ERR_WIDTH-1:0] err_set;
     logic [31:0]          err_pc, pc;
 
-    core #(.LANES(LANES)) u_core (
+    core #(.LANES(LANES), .HAS_DIV_STACK(HAS_DIV_STACK)) u_core (
         .clk, .rst,
         .imem_addr, .imem_rdata,
         .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,

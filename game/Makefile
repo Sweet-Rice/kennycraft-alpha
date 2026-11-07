@@ -5,8 +5,9 @@
 #   make vectors    VTRACE test vectors from the C reference (out/vectors)
 #   make contract   vtrace_ref against the wiki VTRACE rules (ties, saturation, cap 0)
 #   make chip       rv32i_zmmul build with stand-in crt0/linker; checks no div/float/libcalls
+#                   and that every lane's call chain fits its 1 KB stack
 #   make chip8      same with KC_LANES=8 (Stage 1 kernel)
-#   make chip-raster  tile rasterizer builds (1 and 8 lanes) + lane lint
+#   make chip-raster  tile rasterizer builds (1 and 8 lanes) + lane lint + stack check
 #   make compare    ray tracer vs rasterizer on the golden poses (out/cmp)
 SRC      := src/kc_libc.c src/arena.c src/fixed.c src/trace.c src/render.c src/terrain.c src/chunks.c src/game.c src/kc_main.c
 RASTER   := src/mesh.c src/raster.c
@@ -62,12 +63,16 @@ chip-raster: build/kc_chip_raster.elf build/kc_chip8_raster.elf
 	@sh tools/chip_check.sh build/kc_chip_raster.elf
 	@sh tools/chip_check.sh build/kc_chip8_raster.elf
 	@sh tools/lane_lint.sh build/kc_chip8_raster.elf
+	@sh tools/stack_check.sh build/kc_chip_raster.elf
+	@sh tools/stack_check.sh build/kc_chip8_raster.elf
 
 chip: build/kc_chip.elf
 	@sh tools/chip_check.sh $<
+	@sh tools/stack_check.sh $<
 chip8: build/kc_chip8.elf
 	@sh tools/chip_check.sh $<
 	@sh tools/lane_lint.sh $<
+	@sh tools/stack_check.sh $<
 
 build:
 	mkdir -p build

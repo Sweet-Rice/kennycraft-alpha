@@ -17,6 +17,7 @@
 parameter int LANES      = 1;
 parameter bit LANE0_ONLY = 1'b0;
 localparam int ALANES    = LANE0_ONLY ? 1 : LANES;   // lanes that can be active
+parameter bit HAS_DIV_STACK = 1'b0;   // custom-2 in the core, see below
 
 `ifdef KC_BASE_CORE
 `define KC_RF(l) dut.u_core.u_rf
@@ -55,6 +56,7 @@ always #(CLK_NS / 2) clk = ~clk;
 /* verilator lint_off PINCONNECTEMPTY */
 kc_soc #(
     .LANES(LANES),
+    .HAS_DIV_STACK(HAS_DIV_STACK),
     .IMEM_HEX(IMEM_HEX),
     .DMEM_HEX(DMEM_HEX)
 ) dut (

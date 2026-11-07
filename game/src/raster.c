@@ -43,7 +43,15 @@ static uint16_t tile_fill[MAX_TILES];
 static uint16_t tile_col[TILE * TILE + 1];
 static uint16_t tile_dep[TILE * TILE + 1];
 
-typedef struct { q16 x, y, z, u, v; } pvert;      // view space + texture coords (blocks)
+// One polygon vertex, two stages in the same five words: view space + texture coords (blocks)
+// while clipping, then the screen vertex project() writes over it in place. Sharing the buffer
+// keeps quad_to_screen off a second MAX_POLY array: the kernel runs it on every lane's 1 KB stack.
+typedef union {
+    struct { q16 x, y, z, u, v; };                 // pvert: view space
+    struct { int32_t X, Y; q16 iz, uz, vz; };      // svert: Q4 subpixels, clamped; 1/z, u/z, v/z
+} vert;
+typedef vert pvert;
+typedef vert svert;
 
 typedef struct {
     int32_t ox, oz;                               // chunk corner in window coordinates
@@ -112,24 +120,22 @@ static int32_t clip_poly(pvert *poly, int32_t n) {
     return n;
 }
 
-// Screen position in Q4 subpixels, clamped to the screen.
-typedef struct { int32_t X, Y; q16 iz, uz, vz; } svert;
-
-static void project(const view_t *vw, const pvert *p, svert *s) {
+// View-space vertex -> screen vertex (Q4 subpixels, clamped to the screen), in place.
+static void project(const view_t *vw, vert *p) {
     q16 z = imax(p->z, NEAR);
     q16 iz = qrcp(z);
     q16 sx = qmul(qmul(p->x, vw->focal), iz);        // pixels from center, Q16
     q16 sy = qmul(qmul(p->y, vw->focal), iz);
-    s->X = iclamp(vw->W * 8 + (sx >> 12), 0, vw->W * 16);
-    s->Y = iclamp(vw->H * 8 - (sy >> 12), 0, vw->H * 16);
-    s->iz = iz;
-    s->uz = qmul(p->u, iz);
-    s->vz = qmul(p->v, iz);
+    q16 uz = qmul(p->u, iz), vz = qmul(p->v, iz);    // every read before the first write
+    p->X = iclamp(vw->W * 8 + (sx >> 12), 0, vw->W * 16);
+    p->Y = iclamp(vw->H * 8 - (sy >> 12), 0, vw->H * 16);
+    p->iz = iz;
+    p->uz = uz;
+    p->vz = vz;
 }
 
-// Transform + cull + clip one quad into a screen polygon. Returns the vertex count.
-static int32_t quad_to_screen(const view_t *vw, int32_t page, int32_t q, svert *out, int32_t *mat) {
-    pvert poly[MAX_POLY];
+// Transform + cull + clip one quad into a screen polygon in poly[MAX_POLY]. Returns the count.
+static int32_t quad_to_screen(const view_t *vw, int32_t page, int32_t q, vert *poly, int32_t *mat) {
     quad_verts(vw, page, q, poly, mat);
 
     // Trivial accept / reject per plane
@@ -141,7 +147,7 @@ static int32_t quad_to_screen(const view_t *vw, int32_t page, int32_t q, svert *
         if (out_n) all_in = 0;
     }
     int32_t n = all_in ? 4 : clip_poly(poly, 4);
-    for (int32_t i = 0; i < n; i++) project(vw, &poly[i], &out[i]);
+    for (int32_t i = 0; i < n; i++) project(vw, &poly[i]);
     return n;
 }
 
@@ -337,6 +343,17 @@ static void raster_tri(const tri_t *t, int32_t tx0, int32_t ty0, int32_t mat, in
         }
 }
 
+// Triangle fan of one screen polygon into the tile. noinline: the tri_t and the raster loops
+// spills then live in this frame, beside quad_to_screen's, not under it (1 KB lane stacks).
+__attribute__((noinline)) static void raster_fan(const svert *sv, int32_t n, int32_t tx0, int32_t ty0,
+                                                 int32_t mat, int32_t lane0) {
+    for (int32_t i = 1; i + 1 < n; i++) {
+        tri_t tri;
+        if (tri_setup(&tri, &sv[0], &sv[i], &sv[i + 1], tx0, ty0))
+            raster_tri(&tri, tx0, ty0, mat, lane0);
+    }
+}
+
 static void tile_clear(int32_t ty0, int32_t lane0) {
     const kc_rparams *p = KC_RP;
     for (int32_t i = 0; i < TILE * TILE; i += 8) {
@@ -415,11 +432,7 @@ void kc_raster_kernel(void) {
                 view_set_slot(&vw, slot);
                 svert sv[MAX_POLY];
                 int32_t mat, n = quad_to_screen(&vw, pg, q, sv, &mat);
-                for (int32_t i = 1; i + 1 < n; i++) {                       // triangle fan
-                    tri_t tri;
-                    if (tri_setup(&tri, &sv[0], &sv[i], &sv[i + 1], X0, Y0))
-                        raster_tri(&tri, X0, Y0, mat, lane0);
-                }
+                raster_fan(sv, n, X0, Y0, mat, lane0);
             }
             tile_flush(X0, Y0, vw.H, lane0);
         }

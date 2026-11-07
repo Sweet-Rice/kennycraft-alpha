@@ -10,7 +10,10 @@ make vectors    # VTRACE test vectors from the C reference -> out/vectors/{world
 make bench      # DDA steps per frame
 make chip       # rv32i_zmmul ELF (stand-in crt0/linker), fails on div/float/libcalls/ecall/csr
 make chip8      # same with KC_LANES=8, plus lane lint (no per-lane branches in the kernel)
+make chip-raster # tile rasterizer ELFs (1 and 8 lanes), same checks
 ```
+
+Every chip target also runs `tools/stack_check.sh`: the worst-case stack depth of each call chain that runs on a lane (`main` on lane 0, `kc_render_frame` / `kc_raster_kernel` on lanes 1-7), from the ELF's prologues and call graph, against the 1 KB lane stack. Nothing catches an overflow on the chip (lane n runs into lane n+1's stack, lane 7 into the statics), so keep big locals out of anything the kernel calls.
 
 ## Files
 
