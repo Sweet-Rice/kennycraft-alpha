@@ -27,7 +27,7 @@
 #                           retirement trace must equal the LANES = 1 trace
 #                           (tb/core/tracediff.py)
 #   lint-core               verilator -Wall over rtl/core, rtl/mem, rtl/soc
-#                           at LANES = 1 and LANES = 8, with and without the
+#                           at LANES = 1, 3 and 8, with and without the
 #                           divergence stack
 #
 # Not in `make check`: `make tracediff-base-core` (Stage 1 rung 1) builds
@@ -140,3 +140,5 @@ lint-core:
 	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=8 $(CORE_RTL)
 	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GHAS_DIV_STACK="1'b1" $(CORE_RTL)
 	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=8 -GHAS_DIV_STACK="1'b1" $(CORE_RTL)
+	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=3 $(CORE_RTL)
+	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=3 -GHAS_DIV_STACK="1'b1" $(CORE_RTL)
