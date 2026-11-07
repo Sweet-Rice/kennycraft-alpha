@@ -63,8 +63,11 @@ TEXTURE_ARGS = $(if $(TEX_HEX),--texture-hex "$(abspath $(TEX_HEX))")
 HARNESS_CPP = $(wildcard tb/harness/*.cpp)
 SDL_CFLAGS := $(shell pkg-config --cflags sdl3 2>/dev/null)
 SDL_LIBS := $(shell pkg-config --libs sdl3 2>/dev/null)
+KC_SDL := $(if $(SDL_LIBS),1,0)
+# Verilator's wrapper drops an empty argument, so never pass -LDFLAGS "".
+SDL_LDFLAGS = $(if $(SDL_LIBS),-LDFLAGS "$(SDL_LIBS)")
 VL_FLAGS = --cc --exe --build -j 0 --verilate-jobs 1 -Wall --prefix Vkc --trace -o kcvl
-HARNESS_CFLAGS = -std=c++17 -Wall -Wextra -I$(abspath tb/harness) $(SDL_CFLAGS)
+HARNESS_CFLAGS = -std=c++17 -Wall -Wextra -I$(abspath tb/harness) -DKC_SDL=$(KC_SDL) $(SDL_CFLAGS)
 RTL_FILES = rtl/kc_isa_pkg.sv $(filter-out rtl/kc_isa_pkg.sv rtl/isa_decode_check.sv rtl/top.sv rtl/display/clk_gen.sv rtl/ddr/ddr_clk.sv,$(wildcard rtl/*.sv rtl/core/*.sv rtl/soc/*.sv rtl/mem/*.sv rtl/display/*.sv rtl/ddr/*.sv rtl/vtrace/*.sv))
 CHIP_FILE = $(if $(filter bench_chip,$(CHIP_TOP)),tb/harness/bench_chip.sv,rtl/top.sv)
 VL_STUBS = $(wildcard tb/harness/stubs/*.sv) tb/ddr/xpm_sim.sv
@@ -72,7 +75,7 @@ VL_STUBS = $(wildcard tb/harness/stubs/*.sv) tb/ddr/xpm_sim.sv
 .PHONY: vl-fixture vl-fixture-build check-fixture
 vl-fixture-build: | out
 	$(VERILATOR) $(VL_FLAGS) --Mdir out/vl-fixture --top-module fixture_top \
-		-CFLAGS "$(HARNESS_CFLAGS) -DKC_FIXTURE" -LDFLAGS "$(SDL_LIBS)" \
+		-CFLAGS "$(HARNESS_CFLAGS) -DKC_FIXTURE" $(SDL_LDFLAGS) \
 		tb/harness/fixture/public.vlt tb/harness/fixture/fixture_top.sv \
 		$(abspath $(HARNESS_CPP))
 
@@ -88,7 +91,7 @@ vl-build: sw
 	$(VERILATOR) $(VL_FLAGS) --Mdir out/vl --top-module $(CHIP_TOP) \
 		-GLANES=$(LANES) -GIMEM_HEX='"out/kc_imem.hex"' -GDMEM_HEX='"out/kc_dmem.hex"' \
 		-GPAL_HEX='"$(PAL_HEX)"' -GTEX_HEX='"$(TEX_HEX)"' \
-		-CFLAGS "$(HARNESS_CFLAGS) -DKC_LANES=$(LANES) -DCHIP_TOP=$(CHIP_TOP)" -LDFLAGS "$(SDL_LIBS)" \
+		-CFLAGS "$(HARNESS_CFLAGS) -DKC_LANES=$(LANES) -DCHIP_TOP=$(CHIP_TOP)" $(SDL_LDFLAGS) \
 		tb/harness/public.vlt $(RTL_FILES) $(CHIP_FILE) $(VL_STUBS) $(abspath $(HARNESS_CPP))
 
 vl: vl-build

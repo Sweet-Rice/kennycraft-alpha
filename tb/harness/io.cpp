@@ -1,5 +1,7 @@
 #include "io.h"
+#if KC_SDL
 #include <SDL3/SDL.h>
+#endif
 #include <cctype>
 #include <cerrno>
 #include <cstdio>
@@ -9,6 +11,7 @@
 #include <sstream>
 #include <stdexcept>
 
+#if KC_SDL
 static int map_key(SDL_Keycode key) {
     switch (key) {
         case SDLK_W:     return 0x77;
@@ -34,6 +37,7 @@ static int map_key(SDL_Keycode key) {
         default:         return -1;
     }
 }
+#endif
 
 IO::IO(const std::string& keys_file, const std::string& record_file, bool live)
     : live_(live) {
@@ -129,6 +133,7 @@ void IO::poll(uint64_t frame) {
         return;
     }
 
+#if KC_SDL
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
@@ -152,6 +157,7 @@ void IO::poll(uint64_t frame) {
             }
         }
     }
+#endif
 }
 
 void IO::boundary(uint64_t frame) {

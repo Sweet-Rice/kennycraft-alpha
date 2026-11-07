@@ -182,6 +182,7 @@ Display::Display(bool headless, const std::string& png_dir, const std::string& p
     load_palette_hex(palette_hex, palette_);
 
     if (!headless) {
+#if KC_SDL
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             throw std::runtime_error(std::string("failed to initialize SDL: ") + SDL_GetError());
         }
@@ -193,10 +194,14 @@ Display::Display(bool headless, const std::string& png_dir, const std::string& p
             sdl_initialized_ = false;
             throw std::runtime_error(std::string("failed to create SDL window and renderer: ") + err);
         }
+#else
+        throw std::runtime_error("built without SDL3; run with --headless");
+#endif
     }
 }
 
 Display::~Display() {
+#if KC_SDL
     if (texture_) {
         SDL_DestroyTexture(texture_);
         texture_ = nullptr;
@@ -213,6 +218,7 @@ Display::~Display() {
         SDL_QuitSubSystem(SDL_INIT_VIDEO);
         sdl_initialized_ = false;
     }
+#endif
 }
 
 bool Display::sample(const DisplaySignals& signals, uint64_t cycle) {
@@ -260,11 +266,13 @@ void Display::emit(bool mode, uint64_t cycle) {
             const uint8_t g = static_cast<uint8_t>(((c12 >> 4) & 0x0F) * 17);
             const uint8_t b = static_cast<uint8_t>((c12 & 0x0F) * 17);
 
+#if KC_SDL
             if (renderer_) {
                 pixels_[out_idx] = (static_cast<uint32_t>(r) << 16) |
                                    (static_cast<uint32_t>(g) << 8) |
                                    static_cast<uint32_t>(b);
             }
+#endif
 
             rgb_[out_idx * 3 + 0] = r;
             rgb_[out_idx * 3 + 1] = g;
@@ -281,6 +289,7 @@ void Display::emit(bool mode, uint64_t cycle) {
         throw std::runtime_error("failed to write PNG: " + png_path.string());
     }
 
+#if KC_SDL
     if (renderer_ != nullptr) {
         if (texture_ == nullptr || texture_width_ != width) {
             if (texture_ != nullptr) {
@@ -313,6 +322,7 @@ void Display::emit(bool mode, uint64_t cycle) {
             throw std::runtime_error(std::string("failed to present SDL renderer: ") + SDL_GetError());
         }
     }
+#endif
 
     const uint64_t delta_cycles = cycle - previous_cycle_;
     previous_cycle_ = cycle;
