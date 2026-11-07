@@ -99,7 +99,8 @@ vl: vl-build
 
 TESTS_0 = t_zmmul t_uart t_illegal_div t_illegal_ecall t_illegal_csr \
 	t_illegal_misaligned t_illegal_vget2 t_illegal_vset8 t_illegal_unknown \
-	t_illegal_misaligned_jalr t_fbswap
+	t_illegal_misaligned_jalr t_illegal_misaligned_branch t_illegal_misaligned_jal \
+	t_fbswap
 TESTS_1 = t_laneid t_mask t_ballot t_maskgetset t_lsu_order t_branch_uniform \
 	t_divstack t_divskip t_mask_zero t_mmio_lanes t_jalr_uniform t_div_nested_lmask \
 	t_divstack_overflow
