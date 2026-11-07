@@ -36,6 +36,7 @@ static void save_frame(const char *name) {
     png_write_fb(path, host_front_buffer(), host_palette(), w, h, w == 160 ? 4 : 2);
     snprintf(path, sizeof path, "%s/%s.fb", outdir, name);
     FILE *f = fopen(path, "wb");
+    if (!f) { fprintf(stderr, "kc_host: cannot write %s (does the folder exist?)\n", path); exit(2); }
     fwrite(host_front_buffer(), 1, 320 * 240, f);
     fclose(f);
 }
@@ -126,13 +127,20 @@ static int cmd_compare(void) {
         memcpy(ray, host_front_buffer(), sizeof ray);
         kc_use_raster = 1; snprintf(name, sizeof name, "%s_raster", s[i].name); shot(name);
         const uint8_t *ras = host_front_buffer();
-        int w = KC_RP->width, h = KC_RP->height, same = 0, close = 0;
+        int w = KC_RP->width, h = KC_RP->height, same = 0, close = 0, geo = 0, holes = 0;
         for (int y = 0; y < h; y++)
             for (int x = 0; x < w; x++) {
                 uint8_t a = ray[y * 320 + x], b = ras[y * 320 + x];
+                int sa = (a >> 4) == COLOR_SKY, sb = (b >> 4) == COLOR_SKY;
                 same += a == b;
                 close += (a >> 2) == (b >> 2);          // same color + shade, fog level may differ
+                geo += sa == sb && (sa || ((a >> 2) & 3) == ((b >> 2) & 3));   // sky vs surface + face
+                holes += !sa && sb;                     // ray hit ground, raster shows sky
             }
+        double geo_pct = 100.0 * geo / (w * h);
+        printf("  %-13s geometry match %5.1f%%, sky holes %d\n", s[i].name, geo_pct, holes);
+        // Edge growth (1/8 px, closes T-junction cracks) fattens silhouettes: 98-99% is expected.
+        if (geo_pct < 97.5 || holes) { printf("  FAIL  %s: geometry below 97.5%% or sky holes\n", s[i].name); failures++; }
         raster_stats_t *r = &raster_stats;
         // Instruction estimates from the rv32 disassembly: covers ~25, shade_px+qrcp ~310,
         // triangle setup ~450, bin per quad ~40 (culled) / ~250 (visible); ray: 52 per DDA step + ~200 per pixel.
@@ -145,7 +153,8 @@ static int cmd_compare(void) {
                r->vis_overflow || r->bin_overflow ? "  OVERFLOW" : "");
     }
     kc_set_resolution(160);
-    return 0;
+    printf("%s\n", failures ? "SOME CHECKS FAILED" : "all checks passed");
+    return failures != 0;
 }
 
 static int cmd_play(void) {
@@ -233,6 +242,46 @@ static int cmd_play(void) {
     return failures != 0;
 }
 
+// VTRACE contract cases (wiki Tai page, "One step"), checked against vtrace_ref.
+static kc_ray contract_ray(q16 tx, q16 ty, q16 tz, q16 dx, q16 dy, q16 dz) {
+    kc_ray r;
+    r.f[0] = CELL_PACK(10, 20, 10);                     // open air above the spawn terrain
+    r.f[1] = (uint32_t)tx; r.f[2] = (uint32_t)ty; r.f[3] = (uint32_t)tz;
+    r.f[4] = (uint32_t)dx; r.f[5] = (uint32_t)dy; r.f[6] = (uint32_t)dz;
+    r.f[7] = 0;
+    return r;
+}
+
+static int cmd_contract(void) {
+    kc_hit h;
+    kc_ray r;
+    printf("vtrace contract\n");
+    r = contract_ray(0x8000, 0x8000, 0x10000, Q16_ONE, Q16_ONE, Q16_ONE);
+    vtrace_ref(&r, 1, &h);
+    check(HIT_AXIS(h.res) == 1, "tie x == y < z steps y (strict <)");
+    r = contract_ray(0x8000, 0x10000, 0x8000, Q16_ONE, Q16_ONE, Q16_ONE);
+    vtrace_ref(&r, 1, &h);
+    check(HIT_AXIS(h.res) == 2, "tie x == z < y steps z");
+    r = contract_ray(0x8000, 0x8000, 0x8000, Q16_ONE, Q16_ONE, Q16_ONE);
+    vtrace_ref(&r, 1, &h);
+    check(HIT_AXIS(h.res) == 2, "three-way tie steps z");
+    r = contract_ray(0x7FFF0000, Q16_ONE, 0x7FFFFFFF, 0x10000, 0x7FFFFFFF, 0x7FFFFFFF);
+    vtrace_ref(&r, 2, &h);       // step 1: y (smallest); tMax.y += 0x7FFF_FFFF saturates instead of
+                                 // wrapping negative, so step 2 is x, not y again
+    check(HIT_AXIS(h.res) == 0 && HIT_STEPS(h.res) == 2, "tMax saturates at 0x7FFF_FFFF (no wrap)");
+    q16 o[3] = { Q16(10.5), Q16(20.5), Q16(10.5) }, d[3] = { 0, -Q16_ONE, 0 };
+    ray_setup(&r, o, d);
+    check(r.f[4] == 0x7FFFFFFF && r.f[6] == 0x7FFFFFFF, "zero direction component gets tDelta 0x7FFF_FFFF");
+    vtrace_ref(&r, 64, &h);
+    check(HIT_AXIS(h.res) == 1 && CELL_X(h.cell) == 10 && CELL_Z(h.cell) == 10, "straight-down ray never steps x or z");
+    kc_hit before = { 0x1234, 0x5678, 0x9ABC };
+    h = before;
+    vtrace_ref(&r, 0, &h);
+    check(h.res == before.res && h.cell == before.cell && h.t == before.t, "max_steps 0 leaves results unchanged");
+    printf("%s\n", failures ? "SOME CHECKS FAILED" : "all checks passed");
+    return failures != 0;
+}
+
 static int cmd_vectors(void) {
     char path[512];
     snprintf(path, sizeof path, "%s/world.hex", outdir);
@@ -287,7 +336,7 @@ static int cmd_bench(void) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: kc_host shots|play|vectors|compare <dir> | bench\n");
+        fprintf(stderr, "usage: kc_host shots|play|vectors|compare <dir> | contract | bench\n");
         return 2;
     }
     if (argc > 2) outdir = argv[2];
@@ -296,6 +345,7 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[1], "shots"))   return cmd_shots();
     if (!strcmp(argv[1], "play"))    return cmd_play();
     if (!strcmp(argv[1], "vectors")) return cmd_vectors();
+    if (!strcmp(argv[1], "contract")) return cmd_contract();
     if (!strcmp(argv[1], "bench"))   return cmd_bench();
     if (!strcmp(argv[1], "compare")) return cmd_compare();
     fprintf(stderr, "unknown command %s\n", argv[1]);
