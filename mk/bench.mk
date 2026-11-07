@@ -45,6 +45,11 @@ out/kc_dmem.hex: out/kc_dmem.bin scripts/elf2hex.py
 arena-host: | out
 	$(HOST_CC) -std=c11 -Wall -Wextra -c sw/arena.c -o out/arena_host.o
 
+.PHONY: clean-bench
+clean: clean-bench
+clean-bench:
+	rm -rf out
+
 VERILATOR ?= verilator
 RUN_ARGS ?=
 STAGE ?= 0
