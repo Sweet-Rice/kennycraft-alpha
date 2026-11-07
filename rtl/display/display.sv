@@ -34,7 +34,11 @@
 //   s3 palette RGB444 (BRAM)
 //   s4 output registers; RGB forced to 0 outside the visible area
 // hsync, vsync and the visible flag ride a matching 3-stage delay into s4.
-module display (
+//
+// PAL_HEX, when not empty, is the palette's initial contents (palette.sv).
+module display #(
+    parameter string PAL_HEX = ""
+) (
     input  logic        clk_core,
     input  logic        rst_core,
     input  logic        clk_pix,
@@ -182,7 +186,7 @@ module display (
         .rdata_b(pixel_s2)
     );
 
-    palette u_pal (
+    palette #(.INIT_FILE(PAL_HEX)) u_pal (
         .clk_w(clk_core),
         .we   (pal_we),
         .waddr(pal_addr),

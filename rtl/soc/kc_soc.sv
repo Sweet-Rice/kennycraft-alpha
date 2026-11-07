@@ -10,7 +10,9 @@
 //          low 4 bits = block type, upper bits read 0, no remap).
 //          EXT_WORLD = 1: the world_* port goes to world_remap (P2b).
 //   tex    16 K x 4-bit BRAM stub (16 types x 3 faces x 16 x 16 texels at
-//          4 bits fit in 12,288; the rest of the 16 K is spare)
+//          4 bits fit in 12,288; the rest of the 16 K is spare), initial
+//          contents from TEX_HEX when not empty (one texel per line, e.g.
+//          game/gen/textures.hex)
 //   fb, palette, FB_SWAP, VSYNC, FRAME_COUNT, FB_MODE  ports to display (P1)
 //   0x2C..0x3C  ddr_reg_* port to the chunk engine (P2b)
 module kc_soc
@@ -21,6 +23,7 @@ module kc_soc
     parameter int    BAUD      = 1_000_000,
     parameter string IMEM_HEX  = "kc_imem.hex",
     parameter string DMEM_HEX  = "kc_dmem.hex",
+    parameter string TEX_HEX   = "",
     parameter bit    EXT_WORLD = 1'b0,
     parameter bit    HAS_DIV_STACK = 1'b0   // custom-2 divergence stack in the core
 ) (
@@ -193,7 +196,7 @@ module kc_soc
     // ------------------------------------------------------------------
     logic [3:0] tex_stub_rdata;
 
-    memory_arr #(.W(4), .D(1 << 14), .NBE(1)) u_tex (
+    memory_arr #(.W(4), .D(1 << 14), .NBE(1), .INIT_FILE(TEX_HEX)) u_tex (
         .clk, .we(tex_req && tex_we), .addr(tex_addr), .wdata(tex_wdata[3:0]),
         .rdata(tex_stub_rdata)
     );
