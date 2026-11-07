@@ -8,6 +8,7 @@
 #include "kc_lanes.h"
 #include "fixed.h"
 #include "kc_budget.h"
+#include "arena.h"
 
 #ifdef KC_HOST
 #define GPUMEM
@@ -25,8 +26,8 @@
 
 
 
-raster_stats_t raster_stats;
 #ifdef KC_HOST
+raster_stats_t raster_stats;
 #define STAT(x) (x)
 #else
 #define STAT(x) ((void)0)
@@ -37,7 +38,8 @@ GPUMEM static uint32_t vis_ref[RASTER_VIS_CAP];   // slot << 16 | page << 8 | qu
 GPUMEM static uint32_t vis_box[RASTER_VIS_CAP];   // tile bbox: tx0 | ty0 << 8 | tx1 << 16 | ty1 << 24
 GPUMEM static uint16_t bin_entry[RASTER_BIN_CAP]; // index into vis_*
 static uint16_t tile_start[MAX_TILES + 1];
-static uint16_t tile_fill[MAX_TILES];
+// Per-tile counts / fill cursors: binning only (lane 0), so frame scratch from the arena.
+static uint16_t *tile_fill;
 
 // ---- tile memory: 16 x 16 x (2-byte color + 2-byte depth) = 1 KB, +1 scratch slot ----------
 // One 32-bit word per pixel (Josh's layout): color 11:0 (the 8-bit palette index, 4 spare
@@ -179,6 +181,7 @@ static void view_set_slot(view_t *vw, int32_t slot) {
 static int32_t bin_frame(const view_t *vw0, int32_t tiles_x, int32_t tiles_y) {
     view_t vw = *vw0;
     int32_t nvis = 0, ntiles = tiles_x * tiles_y;
+    tile_fill = (uint16_t *)arena_alloc(MAX_TILES * sizeof(uint16_t));
     for (int32_t t = 0; t < ntiles; t++) tile_fill[t] = 0;
 
     for (int32_t s = 0; s < 16; s++) {

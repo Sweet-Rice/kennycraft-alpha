@@ -32,8 +32,8 @@ static inline int32_t sel(int32_t c, int32_t a, int32_t b) {
     return b ^ ((a ^ b) & m);
 }
 
-// 1/x for x in Q16.16 (x > 0). Table lookup + one Newton step, no divide.
-// Returns Q16_BIG for x too small. Defined in fixed.c (uses the table in .rodata).
+// 1/x for x in Q16.16 (x > 0). Computed seed + one Newton step, no divide, no table.
+// Returns Q16_BIG for x too small. Defined in fixed.c.
 q16 qrcp(q16 x);
 
 // num / den for den >= 1 without a divide instruction (~16 significant bits). Branch-free.
@@ -42,7 +42,7 @@ int32_t idiv(int64_t num, int32_t den);
 // a / b for Q16 values, b > 0.
 static inline q16 qdiv(q16 a, q16 b) { return idiv((int64_t)a << 16, b); }
 
-// Angles: 1024 units per full turn. Quarter-wave table, Q16.16.
+// Angles: 1024 units per full turn. Quarter-wave polynomial, Q16.16.
 #define ANG_FULL 1024
 q16 qsin(int32_t ang);
 static inline q16 qcos(int32_t ang) { return qsin(ang + ANG_FULL / 4); }
