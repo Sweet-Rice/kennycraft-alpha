@@ -1,3 +1,5 @@
+// Harness stand-in for rtl/ddr/ddr_clk.sv: clk_sys and clk_ref are clk_in, so
+// ui_clk from the mig_ddr3 stub equals clk_core (no unrelated-clock CDC).
 module ddr_clk (
     input wire clk_in,
     input wire rst,

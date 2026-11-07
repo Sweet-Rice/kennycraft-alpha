@@ -1,12 +1,28 @@
-// Board/Simulation composition wrapper for KennyCraft on the Digilent Arty A7-100T.
+// Chip composition for the bench harness only (make vl, check-bench).
 //
-// Interim wrapper until P3 merges the real top:
+// INTERIM: this re-implements P3's rtl/top.sv in a testbench file, including
+// a copy of the two-copy world memory and its VTRACE > core > engine
+// arbitration (from tb/ddr/ddr_harness.svh) instead of rtl/mem/world_mem.sv.
+// So make vl does not yet exercise the world memory that ships (D18). Once P3
+// merges, make CHIP_TOP=top the default and delete this file and its stubs.
+// The ports already match P3's top, so the harness binds to either.
+//
 // Instantiates clk_gen + kc_soc + display + chunk_engine + world_remap +
 // ddr_bridge + behavioral MIG (ddr_model), with two world copies (D17)
-// and 2-cycle read latency model matching tb/ddr/ddr_harness.svh.
+// and the 2-cycle read latency model of tb/ddr/ddr_harness.svh.
 //
-// Hardware mapping:
-//   clk          100 MHz board oscillator (E3) / Verilator harness clk
+// Stub limits (tb/harness/stubs, also used for CHIP_TOP=top):
+//   clk_gen  clk_core IS the harness clk (the harness counts core cycles:
+//            50 per UART bit, fps at 50 MHz); clk_pix = clk / 2. Reset
+//            releases combinationally from ck_rst with locked = 1, so the
+//            real clk_gen reset synchronizers never run.
+//   ddr_clk  clk_sys = clk_ref = clk, so with the MIG stub ui_clk == clk_core:
+//            the ddr_bridge async FIFOs never see unrelated clocks
+//            (tb/ddr runs ui_clk separately for that).
+//   mig_ddr3 ddr_model behind the MIG user interface, no DDR3 pins.
+//
+// Ports (Arty A7-100T pins, as in P3's top):
+//   clk          harness clk = clk_core (50 MHz); E3 100 MHz osc on the board
 //   ck_rst       RESET button (C2, active low)
 //   uart_rxd_out FPGA TX -> USB-UART bridge (D10)
 //   uart_txd_in  FPGA RX <- USB-UART bridge (A9)
@@ -21,7 +37,7 @@ module bench_chip #(
     parameter string PAL_HEX  = "",
     parameter string TEX_HEX  = ""
 ) (
-    input  logic        clk,            // E3,  100 MHz board osc / harness clk
+    input  logic        clk,            // harness clk = clk_core (stub clk_gen)
     input  logic        ck_rst,         // C2,  active low
     output logic        uart_rxd_out,   // D10, FPGA -> USB-UART bridge
     input  logic        uart_txd_in,    // A9,  FPGA <- USB-UART bridge
@@ -198,17 +214,12 @@ module bench_chip #(
     logic [3:0]  remap_core_rdata;
 
     logic [16:0] vt_addr       [REMAP_LANES];
-    logic [16:0] vt_addr_u     [REMAP_LANES];
     logic [16:0] vt_paddr      [REMAP_LANES];
     logic [3:0]  vt_rdata_phys [REMAP_LANES];
     logic [3:0]  vt_rdata      [REMAP_LANES];
 
-    always_comb begin
-        for (int l = 0; l < REMAP_LANES; l++) begin
-            vt_addr[l]   = '0;
-            vt_addr_u[l] = clk_core ? vt_addr[l] : vt_addr[l];
-        end
-    end
+    // VTRACE (Stage 2) is not built: lane addresses stay 0.
+    always_comb for (int l = 0; l < REMAP_LANES; l++) vt_addr[l] = '0;
 
     world_remap #(.LANES(REMAP_LANES)) u_remap (
         .clk             (clk_core),
@@ -220,7 +231,7 @@ module bench_chip #(
         .core_paddr      (core_paddr),
         .core_rdata_phys (wa_rdata[0]),
         .core_rdata      (remap_core_rdata),
-        .vt_addr         (vt_addr_u),
+        .vt_addr         (vt_addr),
         .vt_paddr        (vt_paddr),
         .vt_rdata_phys   (vt_rdata_phys),
         .vt_rdata        (vt_rdata)
@@ -432,7 +443,10 @@ module bench_chip #(
     // ------------------------------------------------------------------
     // Asset initial loading (palette and texture)
     // ------------------------------------------------------------------
-    // Run after time-zero memory initialization, while the harness holds reset.
+    // main's kc_soc, display and palette have no TEX_HEX / PAL_HEX / INIT_FILE
+    // parameters yet (P3 adds them; CHIP_TOP=top uses those), so load the RAMs
+    // hierarchically. Run after time-zero memory initialization, while the
+    // harness holds reset.
     logic assets_loaded;
     initial assets_loaded = 1'b0;
     always @(posedge clk_core) begin
