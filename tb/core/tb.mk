@@ -8,6 +8,8 @@
 #                           programs in tb/core/sw/*.S, assembled with the
 #                           RISC-V GCC, loaded as kc_imem/kc_dmem images
 #   tb-core-t_laneid        Stage 1 rung 3, LANEID / MASKALL / scalar lane
+#   tb-core-t_lsu_order, tb-core-t_mmio_lanes
+#                           Stage 1 rung 4, lane-serial LSU and MMIO
 #   tb-core-<t>-l8          the Stage 1 tests (CORE_L8) at LANES = 8
 #   tracediff-core-<tb>     Stage 1 rung 2: the same test at LANES = 8 with
 #                           only lane 0 able to activate (LANE0_ONLY), whose
@@ -32,8 +34,8 @@ CORE_RTL_CORE := $(wildcard rtl/core/*.sv)
 CORE_RTL_REST := $(wildcard rtl/mem/*.sv) $(wildcard rtl/soc/*.sv)
 CORE_RTL      := rtl/kc_isa_pkg.sv $(CORE_RTL_CORE) $(CORE_RTL_REST)
 CORE_TBS  := datapath_tb program_mem_tb
-CORE_PROG := t_zmmul t_uart t_illegal t_mmio t_lanectl t_cpi t_laneid
-CORE_L8   := t_laneid
+CORE_PROG := t_zmmul t_uart t_illegal t_mmio t_lanectl t_cpi t_laneid t_lsu_order t_mmio_lanes
+CORE_L8   := t_laneid t_lsu_order t_mmio_lanes
 CORE_ALL  := $(CORE_TBS) $(CORE_PROG)
 PLUSARGS  ?=
 
