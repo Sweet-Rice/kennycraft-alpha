@@ -90,3 +90,17 @@ vl-build: sw
 
 vl: vl-build
 	out/vl/kcvl $(PALETTE_ARGS) $(RUN_ARGS)
+
+TESTS_0 = t_zmmul t_uart t_illegal_div t_illegal_ecall t_illegal_csr \
+	t_illegal_misaligned t_illegal_vget2 t_illegal_vset8 t_illegal_unknown \
+	t_illegal_misaligned_jalr t_fbswap
+TESTS = $(TESTS_0)
+TEST_ARGS = --stage $(STAGE) --cc "$(CC)" --objcopy "$(OBJCOPY)" --nm "$(CROSS)nm" --cflags "$(CFLAGS)"
+
+.PHONY: test-stage0 test-images
+test-stage0: vl-build
+	$(PYTHON) scripts/run_tests.py $(TEST_ARGS) $(TESTS_0)
+test-images:
+	$(PYTHON) scripts/run_tests.py $(TEST_ARGS) --build-only $(TESTS)
+test-%: vl-build
+	$(PYTHON) scripts/run_tests.py $(TEST_ARGS) $*
