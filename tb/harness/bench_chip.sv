@@ -10,8 +10,7 @@
 //   ck_rst       RESET button (C2, active low)
 //   uart_rxd_out FPGA TX -> USB-UART bridge (D10)
 //   uart_txd_in  FPGA RX <- USB-UART bridge (A9)
-//   led          LD4 (H5, error LED | MMIO leds[0])
-//   led_aux      LD5..LD7 (J5, T9, T10, MMIO leds[3:1])
+//   led          LD4 (H5, error LED)
 //   VGA          Digilent Pmod VGA on JA (J1: R, B) + JB (J2: G, HS, VS)
 //   DDR3         MIG DDR3L interface on Bank 34
 
@@ -26,8 +25,7 @@ module bench_chip #(
     input  logic        ck_rst,         // C2,  active low
     output logic        uart_rxd_out,   // D10, FPGA -> USB-UART bridge
     input  logic        uart_txd_in,    // A9,  FPGA <- USB-UART bridge
-    output logic        led,            // H5,  error LED | leds[0]
-    output logic [2:0]  led_aux,        // J5, T9, T10 -> leds[3:1]
+    output logic        led,            // H5,  error LED
 
     // Pmod VGA pins (clk_pix)
     output logic [3:0]  vga_r,
@@ -136,8 +134,7 @@ module bench_chip #(
     logic [7:0]  leds;
     logic        err_led;
 
-    assign led     = err_led | leds[0];
-    assign led_aux = leds[3:1];
+    assign led = err_led;
 
     logic        ddr_reg_en, ddr_reg_we, ddr_reg_stall;
     logic [5:0]  ddr_reg_off;
@@ -455,7 +452,7 @@ module bench_chip #(
         clk_locked,
         eng_re,
         app_rd_data_end,
-        leds[7:4],
+        leds,
         wa_rdata[1],
         vt_rdata[0],
         world_wdata[7:4]

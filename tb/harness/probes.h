@@ -4,9 +4,6 @@
 #include <cstdint>
 #define KC_HAS_ERR 1
 #define KC_HAS_RETIRE 1
-#ifndef KC_LANES
-#define KC_LANES 1
-#endif
 
 #define KC_GLUE2(a, b) a##b
 #define KC_GLUE(a, b) KC_GLUE2(a, b)
@@ -54,3 +51,5 @@ inline FrameView kc_frame_view(Vkc& d) {
 #define KC_RD_WE(d, lane) (((d).rootp->KC_TOP_DOT(u_soc__DOT__u_core__DOT__retire_lane_we) >> (lane)) & 1U)
 #define KC_RD_ADDR(d, lane) ((d).rootp->KC_TOP_DOT(u_soc__DOT__u_core__DOT__retire_rd_addr))
 #define KC_RD_WDATA(d, lane) ((d).rootp->KC_TOP_DOT(u_soc__DOT__u_core__DOT__retire_lane_wdata)[lane])
+// Lane count of the built core, so no top needs a LANES parameter.
+#define KC_LANES (sizeof(static_cast<Vkc*>(nullptr)->rootp->KC_TOP_DOT(u_soc__DOT__u_core__DOT__retire_lane_wdata)) / sizeof(uint32_t))

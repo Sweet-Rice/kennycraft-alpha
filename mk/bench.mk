@@ -54,8 +54,11 @@ VERILATOR ?= verilator
 RUN_ARGS ?=
 STAGE ?= 0
 DDR ?= 1
+# CHIP_TOP=top is rtl/top.sv (P3). LANES is a bench_chip parameter only; the
+# harness reads the lane count from the built core.
 LANES ?= $(if $(filter 1 2,$(STAGE)),8,1)
 CHIP_TOP ?= bench_chip
+CHIP_PARAMS = $(if $(filter bench_chip,$(CHIP_TOP)),-GLANES=$(LANES))
 PAL_HEX ?=
 TEX_HEX ?=
 PALETTE_ARGS = $(if $(PAL_HEX),--palette-hex "$(abspath $(PAL_HEX))")
@@ -88,10 +91,10 @@ check-fixture: vl-fixture-build
 
 .PHONY: vl vl-build
 vl-build: sw
-	$(VERILATOR) $(VL_FLAGS) --Mdir out/vl --top-module $(CHIP_TOP) \
-		-GLANES=$(LANES) -GIMEM_HEX='"out/kc_imem.hex"' -GDMEM_HEX='"out/kc_dmem.hex"' \
+	$(VERILATOR) $(VL_FLAGS) --Mdir out/vl --top-module $(CHIP_TOP) $(CHIP_PARAMS) \
+		-GIMEM_HEX='"out/kc_imem.hex"' -GDMEM_HEX='"out/kc_dmem.hex"' \
 		-GPAL_HEX='"$(if $(PAL_HEX),$(abspath $(PAL_HEX)))"' -GTEX_HEX='"$(if $(TEX_HEX),$(abspath $(TEX_HEX)))"' \
-		-CFLAGS "$(HARNESS_CFLAGS) -DKC_LANES=$(LANES) -DCHIP_TOP=$(CHIP_TOP)" $(SDL_LDFLAGS) \
+		-CFLAGS "$(HARNESS_CFLAGS) -DCHIP_TOP=$(CHIP_TOP)" $(SDL_LDFLAGS) \
 		tb/harness/public.vlt $(RTL_FILES) $(CHIP_FILE) $(VL_STUBS) $(abspath $(HARNESS_CPP))
 
 vl: vl-build
