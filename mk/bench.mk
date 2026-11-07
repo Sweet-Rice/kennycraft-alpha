@@ -47,3 +47,25 @@ out/kc_dmem.hex: out/kc_dmem.bin scripts/elf2hex.py
 
 arena-host: | out
 	cc -std=c11 -Wall -Wextra -c sw/arena.c -o out/arena_host.o
+
+VERILATOR ?= verilator
+RUN_ARGS ?=
+HARNESS_CPP = $(wildcard tb/harness/*.cpp)
+SDL_CFLAGS := $(shell pkg-config --cflags sdl3 2>/dev/null)
+SDL_LIBS := $(shell pkg-config --libs sdl3 2>/dev/null)
+VL_FLAGS = --cc --exe --build -j 0 --verilate-jobs 1 -Wall --prefix Vkc --trace -o kcvl
+HARNESS_CFLAGS = -std=c++17 -Wall -Wextra -I$(abspath tb/harness) $(SDL_CFLAGS)
+
+.PHONY: vl-fixture vl-fixture-build check-fixture
+vl-fixture-build: | out
+	$(VERILATOR) $(VL_FLAGS) --Mdir out/vl-fixture --top-module fixture_top \
+		-CFLAGS "$(HARNESS_CFLAGS) -DKC_FIXTURE" -LDFLAGS "$(SDL_LIBS)" \
+		tb/harness/fixture/public.vlt tb/harness/fixture/fixture_top.sv \
+		$(abspath $(HARNESS_CPP))
+
+vl-fixture: vl-fixture-build
+	out/vl-fixture/kcvl $(RUN_ARGS)
+
+check-fixture: vl-fixture-build
+	$(PYTHON) scripts/check_fixture.py
+	$(PYTHON) scripts/check_harness.py
