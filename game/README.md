@@ -20,7 +20,7 @@ Every chip target also runs `tools/stack_check.sh`: the worst-case stack depth o
 | File | What |
 |---|---|
 | `src/kc_hal.h` | The only platform switch. Chip: memory map + MMIO from Interfaces v1.0. Host: `host/hal_host.c` |
-| `src/fixed.[ch]` | Q16.16, `qrcp` (1/x: table + Newton, branch-free), `qsin`, `sel()` |
+| `src/fixed.[ch]` | Q16.16, `qrcp` (1/x: computed seed + Newton, branch-free, no table), `qsin`, `sel()` |
 | `src/trace.[ch]` | `ray_setup` + `kc_trace` with the exact VTRACE contract. `vtrace_ref` = C reference for one ray |
 | `src/render.[ch]` | Ray-tracing kernel. 8x8 tiles, 4x2 block per lane pass (D15). Pixel byte per spec |
 | `src/mesh.[ch]` | Greedy mesher: per-chunk vertex + index buffers in a pool of 4 KB pages |
@@ -71,11 +71,11 @@ Every chip target also runs `tools/stack_check.sh`: the worst-case stack depth o
 | Item | Bytes |
 |---|---|
 | Camera block + render params | 64 |
-| 1/x table + sine table (.rodata) | 2,061 |
+| 1/x and sine (computed, no tables) | 0 |
 | Edit log, 1,024 edits (.bss) | 5,120 |
 | Everything else (.data + .bss) | ~150 |
 | Lane stacks, 8 x 1 KB | 8,192 |
-| **Total** | **~15.6 KB of 32 KB** |
+| **Total** | **~13.5 KB of 32 KB** |
 
 No malloc anywhere: every structure is a fixed-size static array, sized at compile time.
 
