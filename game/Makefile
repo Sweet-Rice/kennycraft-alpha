@@ -19,7 +19,10 @@ CFLAGS   := -std=c11 -O2 -Wall -Wextra -Wno-unused-parameter -Isrc -Igen -Ihost
 CHIP_CC  ?= clang
 CHIP_FLAGS := --target=riscv32-unknown-elf -march=rv32i_zmmul -mabi=ilp32 -ffreestanding \
               -nostdlib -fno-builtin -fno-jump-tables -Wall -Isrc -Igen -mno-relax \
-              -DKC_CHIP -msmall-data-limit=0   # no .sdata/.sbss: Bennett's kc.ld only collects .bss*
+              -DKC_CHIP -msmall-data-limit=0 -ffunction-sections -fdata-sections
+CHIP_LDFLAGS := -Wl,--gc-sections,--entry=_start
+# -msmall-data-limit=0: no .sdata/.sbss, Bennett's kc.ld only collects .bss*.
+# --gc-sections drops functions a build never calls (kc.ld has no ENTRY, so name _start).
 # Per-file optimization. The kernel files (everything the lanes run per pixel / per
 # triangle) stay at -O2; lane-0 game code is built for size: IMEM is 32 KB.
 KERNEL_OPT := -O2
@@ -58,11 +61,11 @@ bench: build/kc_host
 # Each variant compiles its objects into build/<variant>/ with that variant's defines.
 # $(1) variant, $(2) defines, $(3) sources, $(4) linker script
 define CHIP_ELF
-build/$(1)/%.o: src/%.c $$(GEN) $$(wildcard src/*.h) | build
+build/$(1)/%.o: src/%.c $$(GEN) $$(wildcard src/*.h) Makefile | build
 	@mkdir -p $$(@D)
 	$$(CHIP_CC) $$(CHIP_FLAGS) $$(call chip_opt,$$<) $(2) -c $$< -o $$@
-build/kc_$(1).elf: $$(patsubst src/%.c,build/$(1)/%.o,$(3)) chip/bench/crt0.S $(4) | build
-	$$(CHIP_CC) $$(CHIP_FLAGS) $(2) -T $(4) chip/bench/crt0.S $$(filter %.o,$$^) -o $$@
+build/kc_$(1).elf: $$(patsubst src/%.c,build/$(1)/%.o,$(3)) chip/bench/crt0.S $(4) Makefile | build
+	$$(CHIP_CC) $$(CHIP_FLAGS) $$(CHIP_LDFLAGS) $(2) -T $(4) chip/bench/crt0.S $$(filter %.o,$$^) -o $$@
 endef
 $(eval $(call CHIP_ELF,chip,-DKC_LANES=1,$(SRC),chip/bench/kc.ld))
 $(eval $(call CHIP_ELF,chip8,-DKC_LANES=8,$(SRC),chip/bench/kc.ld))
