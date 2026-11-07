@@ -123,6 +123,13 @@ TESTS += $(TESTS_2)
 endif
 TEST_ARGS = --stage $(STAGE) --cc "$(CC)" --objcopy "$(OBJCOPY)" --nm "$(CROSS)nm" --cflags "$(CFLAGS)"
 
+.PHONY: check-bench
+check-bench:
+	$(MAKE) check-fixture
+	$(MAKE) vl-build
+	$(PYTHON) scripts/run_tests.py $(TEST_ARGS) $(TESTS)
+	$(MAKE) golden-check
+
 .PHONY: test-stage0 test-images
 test-stage0: vl-build
 	$(PYTHON) scripts/run_tests.py $(TEST_ARGS) $(TESTS_0)
