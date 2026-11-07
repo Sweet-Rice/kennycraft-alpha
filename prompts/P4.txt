@@ -1,0 +1,31 @@
+You are working in the KennyCraft repo. KennyCraft is an 8-lane SIMD GPU grown from a multi-cycle RV32I core, running a voxel Minecraft on an Arty A7-100T (xc7a100tcsg324-1). The design doc is this repo's GitHub wiki. Before writing any code, read the wiki pages this prompt names, plus Tai_2 sections 1 and 2 (ISA and masking semantics). Tai_2 wins wherever pages disagree.
+
+Rules for this session.
+1. SystemVerilog only, synthesizable in Vivado, lint clean in Verilator with -Wall.
+2. Multi-cycle unless this prompt says otherwise. No pipeline registers, no forwarding, no hazard logic.
+3. Touch only the files this prompt lists. If another file needs a change, stop and say which file and why.
+4. Never change an opcode, encoding, MMIO offset, memory-map address or frozen port list. If the spec looks wrong or ambiguous, stop and ask. Do not pick an interpretation silently.
+5. Keep the LANES parameter on every module that has per-lane state, even when this stage only uses LANES = 1.
+6. Done means every check in this prompt passes. Run each check yourself and paste its real output. Never report a check as passing without running it.
+7. Commit in small steps with clear messages. Do not push.
+8. End with a short report. What you built, files touched, checks run and their results, open questions, and LUT, FF, BRAM, DSP and timing numbers if you ran Vivado.
+
+Goal. Make the Stage 0 core an 8-lane SIMD core with one shared control path, a mask register, LANEID, MASKALL and a lane-serial LSU, without breaking LANES = 1.
+
+Read. Tai page, GPU Core (What changes from the CPU, Register files, SIMD state machine, Lane-serial LSU, Stage 1 bring-up ladder). Tai_2 sections 1 and 2, especially the class table. Shared page, Interfaces, Execution model.
+
+Build.
+1. Split rtl/core into shared control (PC, fetch, decode, FSM, mask) and rtl/core/lane.sv (32x32 register file in distributed RAM with 2 read and 1 write ports, ALU, multiplier, branch comparator, address generator). Instantiate LANES lanes.
+2. Mask register, LANES bits, reset 1. Lane write enable is wb_en & (M[i] | uniform_write) & (rd != 0), where uniform_write is set only for BALLOT and MASKGET.
+3. LANEID and MASKALL per Tai_2.
+4. Scalar lane mux (lowest active lane, lane 0 when M = 0) feeding branch decisions and JALR targets for now. Branch uniform checking comes in P5, so for now take the scalar lane's outcome.
+5. rtl/core/lsu.sv. A priority encoder walks active lanes in ascending order. Issue lane n's address while lane n-1's load data returns, so N active lanes take about N + 1 cycles. Loaded data lands in a per-lane holding register and all lanes write back together. Inactive lanes make no bus access. A store to the world region writes the same address in both world copies (D17).
+
+Touch only. rtl/core/*, tb/core/*.
+
+Done when, in this order, each one passing before you start the next.
+- Rung 1. LANES = 1 passes every Stage 0 test with an unchanged trace.
+- Rung 2. LANES = 8 with M stuck at 0x01 gives a trace identical to LANES = 1 on every test (tracediff).
+- Rung 3. t_laneid passes on the simulator and in Verilator.
+- Rung 4. t_lsu_order and t_mmio_lanes pass. Report LSU cycles for 1, 4 and 8 active lanes.
+- Report LUT usage of the 8 register files.

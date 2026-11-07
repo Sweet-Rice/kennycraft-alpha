@@ -1,0 +1,30 @@
+You are working in the KennyCraft repo. KennyCraft is an 8-lane SIMD GPU grown from a multi-cycle RV32I core, running a voxel Minecraft on an Arty A7-100T (xc7a100tcsg324-1). The design doc is this repo's GitHub wiki. Before writing any code, read the wiki pages this prompt names, plus Tai_2 sections 1 and 2 (ISA and masking semantics). Tai_2 wins wherever pages disagree.
+
+Rules for this session.
+1. SystemVerilog only, synthesizable in Vivado, lint clean in Verilator with -Wall.
+2. Multi-cycle unless this prompt says otherwise. No pipeline registers, no forwarding, no hazard logic.
+3. Touch only the files this prompt lists. If another file needs a change, stop and say which file and why.
+4. Never change an opcode, encoding, MMIO offset, memory-map address or frozen port list. If the spec looks wrong or ambiguous, stop and ask. Do not pick an interpretation silently.
+5. Keep the LANES parameter on every module that has per-lane state, even when this stage only uses LANES = 1.
+6. Done means every check in this prompt passes. Run each check yourself and paste its real output. Never report a check as passing without running it.
+7. Commit in small steps with clear messages. Do not push.
+8. End with a short report. What you built, files touched, checks run and their results, open questions, and LUT, FF, BRAM, DSP and timing numbers if you ran Vivado.
+
+Goal. A standalone, multi-cycle hardware voxel ray walker (Amanatides & Woo DDA) for 8 lanes, matching the frozen port list exactly and proven against Kennedy's C reference.
+
+Read. Tai page, VTRACE Ray Unit in full (Per-lane state, One step, v1 timing, World addressing, Port list, Standalone test). Shared page, Interfaces (Ray unit table, VSET fields, VTRACE result, VGET fields). Tai_2 section 2, the VSET, VTRACE and VGET rows.
+
+Build.
+1. rtl/vtrace/vtrace.sv with the port list from the Tai page, character for character. If the port list cannot work, stop and say why. Do not edit it.
+2. Per-lane state as listed. cfg_we writes cfg_field from cfg_data only in lanes set in lane_mask.
+3. On start, every lane in lane_mask walks. Four cycles per step with two world copies (D17): STEP picks the smallest tMax, moves the cell, adds tDelta with saturation at 0x7FFF_FFFF and issues world_addr, which is held for WORLD_LATENCY = 2 cycles. CHECK reads world_data and finishes the lane on a solid block (hit = 1) or on leaving 0..63 / 0..31 / 0..63 (hit = 0). The start cell is never tested.
+4. Stop when every active lane is done or max_steps is reached. A max_steps of 0 or an empty lane_mask raises done on the next cycle with no state change. Inactive lanes' results never change.
+5. result packs hit, face axis, face sign, block type and steps exactly as the VTRACE result table says. hit_cell packs x, y, z like VSET field 0. t_hit is Q16.16.
+6. World address = {y[4:0], z[5:0], x[5:0]}. world_data is valid WORLD_LATENCY cycles after world_addr (parameter, default 2 for two world copies; the testbench also runs it at 1).
+
+Touch only. rtl/vtrace/*, tb/vtrace/*.
+
+Done when.
+- Verilator testbench with a seeded random 64x32x64 world and 10,000 random rays matches Kennedy's C reference (sw/ref/dda.c, called through DPI or as golden files) on result, hit_cell and t_hit for every ray.
+- Edge cases pass. Axis-aligned rays, a zero direction component, rays starting on a block edge, rays leaving through each of the six faces, step cap reached, empty lane_mask, max_steps = 0.
+- Out-of-context synthesis for xc7a100tcsg324-1 meets 50 MHz. Report LUT, FF and DSP counts.

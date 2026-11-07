@@ -2,7 +2,7 @@
 
 An 8-lane SIMD GPU grown from a multi-cycle RV32I core, running a voxel Minecraft on one Arty A7-100T. HackUTD 2026.
 
-The design doc is the [GitHub wiki](https://github.com/Sweet-Rice/kennycraft/wiki). Tai_2 wins wherever pages disagree.
+The design doc is the [GitHub wiki](https://github.com/Sweet-Rice/kennycraft-alpha/wiki). Tai_2 wins wherever pages disagree.
 
 ## Layout
 
