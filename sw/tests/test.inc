@@ -24,6 +24,13 @@
 .Lbench_ok\@:
     .endm
 
+# Scalar-only register-to-register assertion.
+    .macro EXPECT_REG reg, other, number
+    beq \reg, \other, .Lbench_ok\@
+    FAIL \number
+.Lbench_ok\@:
+    .endm
+
 # Inline output preserves the supplied register; t4/t5 are scratch.
     .macro PUT reg
     li t4, 0x50000000

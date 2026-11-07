@@ -290,23 +290,23 @@ main:
     lw      t3, 420(s3)                     # 384 + 36 = 420 (vector 8 res)
     slli    t3, t3, 16
     srli    t3, t3, 16
-    EXPECT_EQ a0, t3, 100
+    EXPECT_REG a0, t3, 100
 
     lw      a0, 0(t1)
     lw      t3, 424(s3)                     # 384 + 40 = 424 (vector 8 cell)
-    EXPECT_EQ a0, t3, 110
+    EXPECT_REG a0, t3, 110
 
     lw      a0, 0(t2)
     lw      t3, 428(s3)                     # 384 + 44 = 428 (vector 8 t)
-    EXPECT_EQ a0, t3, 120
+    EXPECT_REG a0, t3, 120
 
     # ---- Lane 1: Inactive (store suppressed, must remain canary) ----
     lw      a0, 4(t0)
-    EXPECT_EQ a0, s6, 101
+    EXPECT_REG a0, s6, 101
     lw      a0, 4(t1)
-    EXPECT_EQ a0, s6, 111
+    EXPECT_REG a0, s6, 111
     lw      a0, 4(t2)
-    EXPECT_EQ a0, s6, 121
+    EXPECT_REG a0, s6, 121
 
     # ---- Lane 2: Active (matches vector 10, offset 10 * 48 = 480) ----
     lw      a0, 8(t0)
@@ -315,23 +315,23 @@ main:
     lw      t3, 516(s3)                     # 480 + 36 = 516 (vector 10 res)
     slli    t3, t3, 16
     srli    t3, t3, 16
-    EXPECT_EQ a0, t3, 102
+    EXPECT_REG a0, t3, 102
 
     lw      a0, 8(t1)
     lw      t3, 520(s3)                     # 480 + 40 = 520 (vector 10 cell)
-    EXPECT_EQ a0, t3, 112
+    EXPECT_REG a0, t3, 112
 
     lw      a0, 8(t2)
     lw      t3, 524(s3)                     # 480 + 44 = 524 (vector 10 t)
-    EXPECT_EQ a0, t3, 122
+    EXPECT_REG a0, t3, 122
 
     # ---- Lane 3: Inactive (store suppressed, must remain canary) ----
     lw      a0, 12(t0)
-    EXPECT_EQ a0, s6, 103
+    EXPECT_REG a0, s6, 103
     lw      a0, 12(t1)
-    EXPECT_EQ a0, s6, 113
+    EXPECT_REG a0, s6, 113
     lw      a0, 12(t2)
-    EXPECT_EQ a0, s6, 123
+    EXPECT_REG a0, s6, 123
 
     # ---- Lane 4: Active (matches vector 12, offset 12 * 48 = 576) ----
     lw      a0, 16(t0)
@@ -340,23 +340,23 @@ main:
     lw      t3, 612(s3)                     # 576 + 36 = 612 (vector 12 res)
     slli    t3, t3, 16
     srli    t3, t3, 16
-    EXPECT_EQ a0, t3, 104
+    EXPECT_REG a0, t3, 104
 
     lw      a0, 16(t1)
     lw      t3, 616(s3)                     # 576 + 40 = 616 (vector 12 cell)
-    EXPECT_EQ a0, t3, 114
+    EXPECT_REG a0, t3, 114
 
     lw      a0, 16(t2)
     lw      t3, 620(s3)                     # 576 + 44 = 620 (vector 12 t)
-    EXPECT_EQ a0, t3, 124
+    EXPECT_REG a0, t3, 124
 
     # ---- Lane 5: Inactive (store suppressed, must remain canary) ----
     lw      a0, 20(t0)
-    EXPECT_EQ a0, s6, 105
+    EXPECT_REG a0, s6, 105
     lw      a0, 20(t1)
-    EXPECT_EQ a0, s6, 115
+    EXPECT_REG a0, s6, 115
     lw      a0, 20(t2)
-    EXPECT_EQ a0, s6, 125
+    EXPECT_REG a0, s6, 125
 
     # ---- Lane 6: Active (matches vector 14, offset 14 * 48 = 672) ----
     lw      a0, 24(t0)
@@ -365,23 +365,23 @@ main:
     lw      t3, 708(s3)                     # 672 + 36 = 708 (vector 14 res)
     slli    t3, t3, 16
     srli    t3, t3, 16
-    EXPECT_EQ a0, t3, 106
+    EXPECT_REG a0, t3, 106
 
     lw      a0, 24(t1)
     lw      t3, 712(s3)                     # 672 + 40 = 712 (vector 14 cell)
-    EXPECT_EQ a0, t3, 116
+    EXPECT_REG a0, t3, 116
 
     lw      a0, 24(t2)
     lw      t3, 716(s3)                     # 672 + 44 = 716 (vector 14 t)
-    EXPECT_EQ a0, t3, 126
+    EXPECT_REG a0, t3, 126
 
     # ---- Lane 7: Inactive (store suppressed, must remain canary) ----
     lw      a0, 28(t0)
-    EXPECT_EQ a0, s6, 107
+    EXPECT_REG a0, s6, 107
     lw      a0, 28(t1)
-    EXPECT_EQ a0, s6, 117
+    EXPECT_REG a0, s6, 117
     lw      a0, 28(t2)
-    EXPECT_EQ a0, s6, 127
+    EXPECT_REG a0, s6, 127
 #endif
 
     # All tests passed!
