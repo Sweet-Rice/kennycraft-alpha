@@ -54,9 +54,9 @@ make vl-fixture RUN_ARGS="--headless --frames 5 --record out/keys.txt"
 Production uses `out/vl/kcvl`; the independent fixture uses `out/vl-fixture/kcvl`.
 `STAGE=0 DDR=1` is the default; `STAGE=1` builds 8 lanes with the divergence
 stack. `STAGE=2` adds `t_vtrace`, which needs the ray unit in the core (P7).
-Until P3 merges, `CHIP_TOP=bench_chip` composes the core, display and chunk engine
-under `tb/harness/` with stub clocks (reset releases at once, `ui_clk` is the core
-clock); delete it once `CHIP_TOP=top` is the default. `PAL_HEX=` and `TEX_HEX=`
+The default `CHIP_TOP=bench_chip` wires the shipped RTL like `rtl/top.sv` but takes
+`LANES` and `HAS_DIV_STACK`, with stub clocks (reset releases at once, `ui_clk` is
+the core clock). `CHIP_TOP=top` builds the board top and runs Stage 0. `PAL_HEX=` and `TEX_HEX=`
 load build-time assets, and frames are read from the RTL framebuffer and palette.
 Keys, live or replayed, reach the UART only when the RTL accepts an FB_SWAP.
 
@@ -66,12 +66,12 @@ instructions or values; frame replay does not make peripheral timing identical.
 Golden shots come from the plain C renderer, never from kcvl itself; only
 `g0_spawn` is wired so far, and `golden-check` fails when it compares nothing.
 
-`make board` needs P3's `fpga/program.tcl`, `fpga/hex2mem.py` and `kc.mmi`, and
+`make board` uses `fpga/program.tcl`, `fpga/hex2mem.py` and the `kc.mmi` from `fpga/build.tcl`, and
 Vivado from `VIVADO_BIN` (default `/home/tai/AMD/2026.1/Vivado/bin`). It holds the
 workspace `.fpga-state/hardware.lock` (the fpga-mcp lock; override with
 `HARDWARE_LOCK=`) while programming, and `make keys` holds it while the UART is
 open. Both post `taking-board` and `releasing-board` on issue #1 as `BOARD_AGENT`
-(default `kc-bench`). P3's `kc.mmi` has no palette BRAM, so a `PAL_HEX` change
+(default `kc-bench`). `kc.mmi` has no palette BRAM, so a `PAL_HEX` change
 needs a Vivado rebuild.
 
 ## Credits
