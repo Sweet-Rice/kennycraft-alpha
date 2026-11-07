@@ -96,6 +96,11 @@ commit=$(git rev-parse --short HEAD)
 printf '**[%s]** taking-board\nProgramming %s (software %s) with openFPGALoader.\n' "$current_user" "$BIT" "$commit" > "$scratch/comment.md"
 gh issue comment "$ISSUE" --repo "$REPO" --body-file "$scratch/comment.md"
 taking=1
-hardware_lock=${HARDWARE_LOCK:-.fpga-state/hardware.lock}
-mkdir -p "$(dirname "$hardware_lock")"
-flock -w 600 "$hardware_lock" openFPGALoader -b arty_a7_100t out/kc_patched.bit
+# The fpga-tools MCP's lock (FPGA_STATE/hardware.lock, flock(2)) in the workspace
+# directory that holds the main checkout and wt/, from either of them.
+if [ -z "${HARDWARE_LOCK:-}" ]; then
+    common=$(git rev-parse --path-format=absolute --git-common-dir)
+    HARDWARE_LOCK=$(dirname "$(dirname "$common")")/.fpga-state/hardware.lock
+fi
+mkdir -p "$(dirname "$HARDWARE_LOCK")"
+flock -w 600 "$HARDWARE_LOCK" openFPGALoader -b arty_a7_100t out/kc_patched.bit
