@@ -125,3 +125,13 @@ test-stage1-build:
 	$(PYTHON) scripts/run_tests.py $(TEST_ARGS) --build-only $(TESTS_1)
 test-%: vl-build
 	$(PYTHON) scripts/run_tests.py $(TEST_ARGS) $*
+
+.PHONY: golden-check golden-update tracediff
+golden-check: vl-build
+	$(PYTHON) scripts/golden.py check --binary out/vl/kcvl $(PALETTE_ARGS)
+golden-update: vl-build
+	@test -n "$(NAME)" -a -n "$(FRAMES)" -a -n "$(KEYS)" || { echo "golden-update: set NAME= FRAMES= KEYS=" >&2; exit 5; }
+	$(PYTHON) scripts/golden.py update --binary out/vl/kcvl --name "$(NAME)" --frames "$(FRAMES)" --keys "$(KEYS)" $(PALETTE_ARGS)
+tracediff: vl-build
+	@test -n "$(REF)" || { echo "tracediff: set REF=" >&2; exit 5; }
+	$(PYTHON) scripts/compare_ref.py --ref "$(REF)" --frames $(if $(FRAMES),$(FRAMES),5) $(if $(KEYS),--keys "$(KEYS)") $(PALETTE_ARGS) $(TEXTURE_ARGS)
