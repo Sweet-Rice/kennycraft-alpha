@@ -15,7 +15,7 @@
 #   tb-core-t_branch_uniform, -t_jalr_uniform
 #                           Stage 1 rung 6, uniform checks (ERR.DIVERGE)
 #   tb-core-t_divstack, -t_divskip, -t_div_nested_lmask, -t_divstack_overflow,
-#   tb-core-t_div_cond
+#   tb-core-t_div_cond, -t_div_halts
 #                           Stage 1 rung 7, divergence stack (built with
 #                           HAS_DIV_STACK = 1)
 #   tb-core-t_lsu_stall, tb-core-t_trap_lanes
@@ -48,7 +48,8 @@ CORE_RTL      := rtl/kc_isa_pkg.sv $(CORE_RTL_CORE) $(CORE_RTL_REST)
 CORE_TBS  := datapath_tb program_mem_tb
 CORE_RUNG5 := t_mask t_ballot t_maskgetset t_mask_zero
 CORE_RUNG6 := t_branch_uniform t_jalr_uniform
-CORE_RUNG7 := t_divstack t_divskip t_div_nested_lmask t_divstack_overflow t_div_cond
+CORE_RUNG7 := t_divstack t_divskip t_div_nested_lmask t_divstack_overflow t_div_cond \
+              t_div_halts
 CORE_GAPS  := t_lsu_stall t_trap_lanes
 CORE_PROG := t_zmmul t_uart t_illegal t_mmio t_lanectl t_cpi t_laneid t_lsu_order t_mmio_lanes \
              $(CORE_RUNG5) $(CORE_RUNG6) $(CORE_RUNG7) $(CORE_GAPS)
