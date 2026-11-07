@@ -32,6 +32,7 @@
 
 module bench_chip #(
     parameter int    LANES    = 1,
+    parameter bit    HAS_DIV_STACK = 1'b0,
     parameter string IMEM_HEX = "out/kc_imem.hex",
     parameter string DMEM_HEX = "out/kc_dmem.hex",
     parameter string PAL_HEX  = "",
@@ -167,7 +168,8 @@ module bench_chip #(
         .BAUD      (1_000_000),
         .IMEM_HEX  (IMEM_HEX),
         .DMEM_HEX  (DMEM_HEX),
-        .EXT_WORLD (1'b1)
+        .EXT_WORLD (1'b1),
+        .HAS_DIV_STACK (HAS_DIV_STACK)
     ) u_soc (
         .clk           (clk_core),
         .rst           (rst_core),
