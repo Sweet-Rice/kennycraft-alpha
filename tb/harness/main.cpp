@@ -24,7 +24,7 @@ namespace {
 struct Options {
     bool headless = false, expect_pass = false;
     uint64_t frames = 0, max_cycles = 0;
-    std::string keys, record, png_dir = "out/frames", palette, trace, vcd;
+    std::string keys, record, png_dir = "out/frames", trace, vcd;
     uint64_t vcd_start = 0, vcd_end = std::numeric_limits<uint64_t>::max();
     unsigned expected_err = 0;
     bool check_pc = false;
@@ -52,7 +52,6 @@ Options parse(int argc, char** argv) {
         else if (arg == "--keys") o.keys = value();
         else if (arg == "--record") o.record = value();
         else if (arg == "--png-dir") o.png_dir = value();
-        else if (arg == "--palette-hex") o.palette = value();
         else if (arg == "--trace") o.trace = value();
         else if (arg == "--vcd") o.vcd = value();
         else if (arg == "--vcd-window") {
@@ -78,8 +77,10 @@ Options parse(int argc, char** argv) {
             else throw std::runtime_error("--expect-err needs DIVERGE, DIVSTACK or ILLEGAL");
         } else if (arg == "--help") {
             std::cout << "kcvl [--headless] [--frames N] [--max-cycles N] [--keys FILE] [--record FILE]\n"
-                         "     [--png-dir DIR] [--palette-hex FILE] [--expect-pass] [--expect-err NAME[@PC]]\n"
-                         "     [--trace FILE] [--vcd FILE --vcd-window START:END]\n";
+                         "     [--png-dir DIR] [--expect-pass] [--expect-err NAME[@PC]]\n"
+                         "     [--trace FILE] [--vcd FILE --vcd-window START:END]\n"
+                         "Frames are the RTL back buffer and palette at each swap the RTL accepts;\n"
+                         "live keys reach the UART at those swaps, like a --keys replay.\n";
             std::exit(0);
         } else throw std::runtime_error("unknown option: " + arg);
     }
@@ -111,7 +112,7 @@ int main(int argc, char** argv) {
             trace.open(o.trace);
             if (!trace) throw std::runtime_error("cannot open trace: " + o.trace);
         }
-        Display display{o.headless, o.png_dir, o.palette};
+        Display display{o.headless, o.png_dir};
         IO io{o.keys, o.record, !o.headless};
         KC_UART_RX(dut) = 1;
         KC_RESET(dut) = KC_RESET_ACTIVE;
@@ -140,12 +141,15 @@ int main(int argc, char** argv) {
             const bool dump = !o.vcd.empty() && cycle >= o.vcd_start && cycle <= o.vcd_end;
             if (dump) waveform.dump(context.time());
             context.timeInc(1);
+            // A swap the RTL accepts this edge presents the back buffer as it stands now.
             const DisplaySignals signals{
-                bool(KC_FB_WE(dut)), uint32_t(KC_FB_ADDR(dut)), uint8_t(KC_FB_WDATA(dut)),
-                bool(KC_PAL_WE(dut)), uint8_t(KC_PAL_ADDR(dut)), uint16_t(KC_PAL_WDATA(dut)),
                 bool(KC_SWAP_REQ(dut)), bool(KC_SWAP_PENDING(dut)), bool(KC_FB_MODE(dut))};
-            const bool frame = display.sample(signals, cycle);
-            if (frame) { io.poll(display.frames()); io.boundary(display.frames()); }
+            const bool frame = Display::accepts_swap(signals);
+            if (frame) {
+                display.emit(kc_frame_view(dut), signals.fb_mode, cycle);
+                io.poll(display.frames());
+                io.boundary(display.frames());
+            }
             io.tick(KC_UART_TX(dut), cycle);
             const unsigned leds = KC_LEDS(dut);
             if (leds != previous_leds) {

@@ -9,12 +9,10 @@ import sys
 from pngdiff import compare
 
 
-def run(binary, keys, frames, output, palette):
+def run(binary, keys, frames, output):
     output.mkdir(parents=True, exist_ok=True)
     command = [str(binary), '--headless', '--keys', str(keys), '--frames', str(frames),
                '--png-dir', str(output)]
-    if palette is not None:
-        command += ['--palette-hex', str(palette)]
     subprocess.run(command, check=True)
     shot = output / f'frame_{frames:05d}.png'
     if not shot.is_file():
@@ -30,7 +28,6 @@ def main():
     parser.add_argument('--name')
     parser.add_argument('--frames', type=int)
     parser.add_argument('--keys', type=Path)
-    parser.add_argument('--palette-hex', type=Path)
     args = parser.parse_args()
     try:
         if args.action == 'check':
@@ -39,14 +36,13 @@ def main():
                 print('golden: no approved shots')
                 return 0
         binary = args.binary.resolve(strict=True)
-        palette = args.palette_hex.resolve(strict=True) if args.palette_hex else None
         if args.action == 'update':
             if not args.name or not re.fullmatch(r'[A-Za-z0-9_-]+', args.name):
                 parser.error('update needs --name with letters, digits, _ or -')
             if not args.frames or args.frames < 1 or args.keys is None:
                 parser.error('update needs positive --frames and --keys')
             keys = args.keys.resolve(strict=True)
-            shot = run(binary, keys, args.frames, Path('out/golden') / args.name / 'update', palette)
+            shot = run(binary, keys, args.frames, Path('out/golden') / args.name / 'update')
             args.golden_dir.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(shot, args.golden_dir / f'{args.name}_f{args.frames}.png')
             destination = args.golden_dir / f'{args.name}.keys'
@@ -63,7 +59,7 @@ def main():
                 raise ValueError(f'bad golden filename: {golden}')
             name, frame = match.group(1), int(match.group(2))
             keys = (args.golden_dir / f'{name}.keys').resolve(strict=True)
-            shot = run(binary, keys, frame, Path('out/golden') / name / f'f{frame}', palette)
+            shot = run(binary, keys, frame, Path('out/golden') / name / f'f{frame}')
             if compare(golden, shot, Path('out/golden') / f'{name}_diff.png'):
                 return 1
             print(f'golden: {name} frame {frame} PASS')

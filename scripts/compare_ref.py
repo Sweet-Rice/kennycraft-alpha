@@ -51,8 +51,6 @@ def main():
                        '--png-dir', str(traces / f'{label}-frames')]
             if keys:
                 command += ['--keys', str(keys)]
-            if palette is not None:
-                command += ['--palette-hex', str(palette)]
             subprocess.run(command, cwd=cwd, check=True)
         return compare(traces / 'reference.trace', traces / 'current.trace')
     except subprocess.CalledProcessError as error:

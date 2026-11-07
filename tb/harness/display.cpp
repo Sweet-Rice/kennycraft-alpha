@@ -1,11 +1,8 @@
 #include "display.h"
 #include <cstdio>
-#include <cctype>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -72,114 +69,12 @@ void validate_and_clear_png_dir(const std::string& png_dir) {
     }
 }
 
-void load_palette_hex(const std::string& palette_hex, std::array<uint16_t, 256>& palette) {
-    if (palette_hex.empty()) {
-        return;
-    }
-
-    std::ifstream file(palette_hex);
-    if (!file.is_open()) {
-        throw std::runtime_error("failed to open palette hex file: " + palette_hex);
-    }
-
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-    const std::string content = buffer.str();
-
-    // Strip comments (// and /* ... */)
-    std::string clean;
-    clean.reserve(content.size());
-    size_t i = 0;
-    while (i < content.size()) {
-        if (content[i] == '/' && i + 1 < content.size() && content[i + 1] == '/') {
-            i += 2;
-            while (i < content.size() && content[i] != '\n') {
-                ++i;
-            }
-        } else if (content[i] == '/' && i + 1 < content.size() && content[i + 1] == '*') {
-            i += 2;
-            bool closed = false;
-            while (i + 1 < content.size()) {
-                if (content[i] == '*' && content[i + 1] == '/') {
-                    closed = true;
-                    i += 2;
-                    break;
-                }
-                ++i;
-            }
-            if (!closed) {
-                throw std::runtime_error("unclosed block comment in palette hex file: " + palette_hex);
-            }
-        } else {
-            clean.push_back(content[i++]);
-        }
-    }
-
-    std::istringstream iss(clean);
-    std::string token;
-    size_t current_addr = 0;
-    size_t words_loaded = 0;
-
-    while (iss >> token) {
-        if (token.empty()) {
-            continue;
-        }
-
-        if (token[0] == '@') {
-            std::string addr_str = token.substr(1);
-            if (addr_str.empty()) {
-                throw std::runtime_error("empty address directive in palette hex file: " + palette_hex);
-            }
-            std::string addr_clean;
-            for (char c : addr_str) {
-                if (c == '_') continue;
-                if (!std::isxdigit(static_cast<unsigned char>(c))) {
-                    throw std::runtime_error("invalid hex character in palette address directive: " + token);
-                }
-                addr_clean.push_back(c);
-            }
-            if (addr_clean.empty()) {
-                throw std::runtime_error("invalid address directive in palette hex file: " + token);
-            }
-            unsigned long parsed_addr = std::stoul(addr_clean, nullptr, 16);
-            if (parsed_addr >= 256) {
-                throw std::runtime_error("palette address directive out of range (>= 256): " + token);
-            }
-            current_addr = static_cast<size_t>(parsed_addr);
-        } else {
-            std::string word_clean;
-            for (char c : token) {
-                if (c == '_') continue;
-                if (!std::isxdigit(static_cast<unsigned char>(c))) {
-                    throw std::runtime_error("invalid hex token in palette file: " + token);
-                }
-                word_clean.push_back(c);
-            }
-            if (word_clean.empty()) {
-                throw std::runtime_error("invalid hex token in palette file: " + token);
-            }
-            if (current_addr >= 256) {
-                throw std::runtime_error("palette hex file exceeds 256 entries");
-            }
-            unsigned long val = std::stoul(word_clean, nullptr, 16);
-            palette[current_addr] = static_cast<uint16_t>(val & 0x0FFF);
-            current_addr++;
-            words_loaded++;
-        }
-    }
-
-    if (words_loaded == 0) {
-        throw std::runtime_error("palette hex file contains no data: " + palette_hex);
-    }
-}
-
 } // namespace
 
-Display::Display(bool headless, const std::string& png_dir, const std::string& palette_hex)
+Display::Display(bool headless, const std::string& png_dir)
     : png_dir_(png_dir) {
 
     validate_and_clear_png_dir(png_dir_);
-    load_palette_hex(palette_hex, palette_);
 
     if (!headless) {
 #if KC_SDL
@@ -221,46 +116,18 @@ Display::~Display() {
 #endif
 }
 
-bool Display::sample(const DisplaySignals& signals, uint64_t cycle) {
-    if (previous_pending_ && !signals.swap_pending) {
-        front_ ^= 1;
-    }
-
-    // A cleared pending flag exposes the newly selected back buffer this cycle.
-    if (signals.fb_we && signals.fb_addr < 76800) {
-        buffers_[front_ ^ 1][signals.fb_addr] = signals.fb_wdata;
-    }
-
-    if (signals.pal_we) {
-        palette_[signals.pal_addr] = static_cast<uint16_t>(signals.pal_wdata & 0x0FFF);
-    }
-
-    bool frame_emitted = false;
-    if (!previous_swap_ && signals.swap_req) {
-        emit(signals.fb_mode, cycle);
-        frame_emitted = true;
-    }
-
-    previous_swap_ = signals.swap_req;
-    previous_pending_ = signals.swap_pending;
-
-    return frame_emitted;
-}
-
-void Display::emit(bool mode, uint64_t cycle) {
+void Display::emit(const FrameView& view, bool mode, uint64_t cycle) {
     frames_++;
 
     const int width = mode ? 160 : 320;
     const int height = mode ? 120 : 240;
 
-    const auto& back_buf = buffers_[front_ ^ 1];
-
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
             const size_t out_idx = static_cast<size_t>(y * width + x);
-            const size_t fb_idx = static_cast<size_t>(y * 320 + x);
-            const uint8_t pal_idx = back_buf[fb_idx];
-            const uint16_t c12 = palette_[pal_idx];
+            const unsigned fb_idx = static_cast<unsigned>(y * 320 + x);
+            const uint8_t pal_idx = view.banks[fb_idx / view.bank_bytes][fb_idx % view.bank_bytes];
+            const uint16_t c12 = view.palette[pal_idx];
 
             const uint8_t r = static_cast<uint8_t>(((c12 >> 8) & 0x0F) * 17);
             const uint8_t g = static_cast<uint8_t>(((c12 >> 4) & 0x0F) * 17);

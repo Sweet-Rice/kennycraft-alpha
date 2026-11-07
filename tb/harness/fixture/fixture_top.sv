@@ -1,3 +1,7 @@
+// No-CPU harness fixture. It mirrors the display's core-side contract in
+// RTL: two framebuffers written at the back buffer (!front_sel), a palette,
+// and swap_req/swap_pending, so the harness reads frames the same way it
+// reads rtl/display (see fixture/probes.h).
 module fixture_top (
     input logic clk,
     input logic rst_n,
@@ -5,14 +9,18 @@ module fixture_top (
     output wire uart_tx,
     output wire [3:0] leds
 );
-    // Read only by the C++ harness through public.vlt.
-    /* verilator lint_off UNUSEDSIGNAL */
-    logic fb_we, pal_we, swap_req, swap_pending;
+    logic fb_we, pal_we;
     logic [16:0] fb_addr;
     logic [7:0] fb_wdata, pal_addr;
     logic [11:0] pal_wdata;
+    // Read only by the C++ harness through public.vlt.
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic swap_req, swap_pending;
     wire fb_mode = 1'b0;
+    logic [7:0] fb_mem [2][76800];
+    logic [11:0] pal_mem [256];
     /* verilator lint_on UNUSEDSIGNAL */
+    logic front_sel;
     logic [7:0] palette_index;
     logic [8:0] x;
     logic [7:0] y, frame;
@@ -21,6 +29,10 @@ module fixture_top (
     state_t state;
     assign uart_tx = uart_rx;
     assign leds = frame[3:0];
+
+    initial begin
+        for (int i = 0; i < 256; i++) pal_mem[i] = '0;
+    end
 
     always_comb begin
         fb_we = rst_n && state == PIXELS;
@@ -34,6 +46,11 @@ module fixture_top (
     end
 
     always_ff @(posedge clk) begin
+        if (fb_we) fb_mem[!front_sel][fb_addr] <= fb_wdata;
+        if (pal_we) pal_mem[pal_addr] <= pal_wdata;
+    end
+
+    always_ff @(posedge clk) begin
         if (!rst_n) begin
             state <= PALETTE;
             palette_index <= 0;
@@ -41,6 +58,7 @@ module fixture_top (
             y <= 0;
             frame <= 0;
             wait_cycles <= 0;
+            front_sel <= 1'b0;
         end else begin
             case (state)
                 PALETTE: begin
@@ -63,6 +81,7 @@ module fixture_top (
                 WAIT_SWAP: begin
                     if (wait_cycles == 999) begin
                         frame <= frame + 1'b1;
+                        front_sel <= !front_sel;
                         state <= PIXELS;
                     end else wait_cycles <= wait_cycles + 1'b1;
                 end

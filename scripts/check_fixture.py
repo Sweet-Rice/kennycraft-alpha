@@ -27,7 +27,7 @@ def main():
             for x in range(320):
                 i = (x + y + frame) & 255
                 expected.extend(((i >> 4) * 17, (i & 15) * 17, 8 * 17))
-        # Includes pixel zero written on the falling swap_pending edge.
+        # Read from the fixture's RTL back buffer and palette at the accepted swap.
         assert image.tobytes() == expected, f'RGB mismatch in frame {frame + 1}'
     second = subprocess.run(args, capture_output=True, text=True, check=True)
     assert first.stdout == second.stdout, 'nondeterministic UART/frame log'

@@ -6,33 +6,36 @@
 #include <SDL3/SDL.h>
 #endif
 
+// Core-side swap signals, sampled before the clk_core edge.
 struct DisplaySignals {
-    bool fb_we;
-    uint32_t fb_addr;
-    uint8_t fb_wdata;
-    bool pal_we;
-    uint8_t pal_addr;
-    uint16_t pal_wdata;
     bool swap_req;
     bool swap_pending;
     bool fb_mode;
 };
 
+// The RTL's back buffer and palette, read from the model at emit time.
+// Byte i of the back buffer is banks[i / bank_bytes][i % bank_bytes].
+struct FrameView {
+    const uint8_t* const* banks;
+    unsigned bank_bytes;
+    const uint16_t* palette;    // 256 RGB444 entries
+};
+
 class Display {
 public:
-    Display(bool headless, const std::string& png_dir, const std::string& palette_hex);
+    Display(bool headless, const std::string& png_dir);
     ~Display();
     Display(const Display&) = delete;
     Display& operator=(const Display&) = delete;
-    bool sample(const DisplaySignals& signals, uint64_t cycle);
+    // True when the RTL accepts a swap this edge: swap_req && !swap_pending
+    // (rtl/display/display.sv ignores swap_req while a swap is pending).
+    static bool accepts_swap(const DisplaySignals& signals) {
+        return signals.swap_req && !signals.swap_pending;
+    }
+    void emit(const FrameView& view, bool mode, uint64_t cycle);
     uint64_t frames() const { return frames_; }
 private:
-    void emit(bool mode, uint64_t cycle);
-    std::array<std::array<uint8_t, 76800>, 2> buffers_{};
-    std::array<uint16_t, 256> palette_{};
     std::array<uint8_t, 76800 * 3> rgb_{};
-    unsigned front_ = 0;
-    bool previous_swap_ = false, previous_pending_ = false;
     uint64_t frames_ = 0, previous_cycle_ = 0;
     std::string png_dir_;
 #if KC_SDL
