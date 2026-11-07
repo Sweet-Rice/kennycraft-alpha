@@ -94,7 +94,13 @@ vl: vl-build
 TESTS_0 = t_zmmul t_uart t_illegal_div t_illegal_ecall t_illegal_csr \
 	t_illegal_misaligned t_illegal_vget2 t_illegal_vset8 t_illegal_unknown \
 	t_illegal_misaligned_jalr t_fbswap
+TESTS_1 = t_laneid t_mask t_ballot t_maskgetset t_lsu_order t_branch_uniform \
+	t_divstack t_divskip t_mask_zero t_mmio_lanes t_jalr_uniform t_div_nested_lmask \
+	t_divstack_overflow
 TESTS = $(TESTS_0)
+ifneq ($(filter 1 2,$(STAGE)),)
+TESTS += $(TESTS_1)
+endif
 TEST_ARGS = --stage $(STAGE) --cc "$(CC)" --objcopy "$(OBJCOPY)" --nm "$(CROSS)nm" --cflags "$(CFLAGS)"
 
 .PHONY: test-stage0 test-images
@@ -102,5 +108,8 @@ test-stage0: vl-build
 	$(PYTHON) scripts/run_tests.py $(TEST_ARGS) $(TESTS_0)
 test-images:
 	$(PYTHON) scripts/run_tests.py $(TEST_ARGS) --build-only $(TESTS)
+.PHONY: test-stage1-build
+test-stage1-build:
+	$(PYTHON) scripts/run_tests.py $(TEST_ARGS) --build-only $(TESTS_1)
 test-%: vl-build
 	$(PYTHON) scripts/run_tests.py $(TEST_ARGS) $*
