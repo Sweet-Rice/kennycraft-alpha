@@ -10,6 +10,8 @@ set hex_dir obj_dir/top_hex
 puts [exec make -C $root top-hex 2>@1]
 foreach f {kc_imem.hex kc_dmem.hex textures.hex palette.hex} {
     read_mem $hex_dir/$f
+    # snapshot next to the bitstream (fpga/patch_bit.sh checks the palette)
+    file copy -force $hex_dir/$f $out/$f
 }
 
 read_verilog -sv rtl/kc_isa_pkg.sv

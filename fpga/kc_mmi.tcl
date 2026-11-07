@@ -11,8 +11,7 @@
 # updatemem selects it with -proc. updatemem 2026.1 accepts only MemType
 # RAMB32 (data bits, no parity) and reads Placement as a RAMB36 site, so only
 # RAMB36-resident memories can be listed (not the RAMB18 palette). MEM files
-# hold one word per entry
-# with ceil(width / 4) hex digits (fpga/hex2mem.py).
+# hold one word per entry with ceil(width / 4) hex digits (fpga/hex2mem.py).
 # <mmi>_bram_info.txt lists every cell and its mapping.
 #
 #   mems  list of {name cell_pattern width depth}, width and depth of the RTL array

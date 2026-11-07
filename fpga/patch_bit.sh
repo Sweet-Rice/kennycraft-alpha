@@ -25,6 +25,12 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 bin=${VIVADO_BIN:-/home/tai/AMD/2026.1/Vivado/bin}
 state=${FPGA_STATE:-$root/../../.fpga-state}
 
+if [ -f "$hex/palette.hex" ] && ! cmp -s "$hex/palette.hex" "$build/palette.hex"; then
+    echo "patch_bit.sh: $hex/palette.hex differs from the one built into $build;" >&2
+    echo "  the palette (RAMB18) cannot be patched with updatemem 2026.1, rebuild instead" >&2
+    exit 1
+fi
+
 mkdir -p "$out"
 python3 "$root/fpga/hex2mem.py" "$hex/kc_imem.hex"  "$out/kc_imem.mem"  32
 python3 "$root/fpga/hex2mem.py" "$hex/kc_dmem.hex"  "$out/kc_dmem.mem"  32
