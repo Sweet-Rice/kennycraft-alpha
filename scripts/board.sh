@@ -78,9 +78,14 @@ done
 REPO=${BOARD_REPO:-Sweet-Rice/kennycraft-alpha}
 ISSUE=${BOARD_ISSUE:-1}
 
-current_user=$(gh api user -q .login 2>/dev/null || true)
-if [ -z "$current_user" ]; then
-    echo 'board: GitHub authorization required; run gh auth login' >&2
+# Claims on issue #1 are `**[agent-name]** `taking-board` · ...`; the shared gh
+# login (Sweet-Rice) would not say which agent holds the board.
+agent=${BOARD_AGENT-kc-bench}
+if [ -z "$agent" ]; then
+    agent=$(gh api user -q .login 2>/dev/null || true)
+fi
+if [ -z "$agent" ]; then
+    echo 'board: set BOARD_AGENT= or run gh auth login' >&2
     exit 5
 fi
 
@@ -90,7 +95,7 @@ cleanup() {
     status=$?
     trap - EXIT INT TERM
     if [ "$taking" = 1 ]; then
-        printf '**[%s]** releasing-board\nProgramming exited with status %s; board released.\n' "$current_user" "$status" > "$scratch/comment.md"
+        printf '**[%s]** `releasing-board` · programming exited with status %s. Board is free.\n' "$agent" "$status" > "$scratch/comment.md"
         if ! gh issue comment "$ISSUE" --repo "$REPO" --body-file "$scratch/comment.md"; then
             echo "board: failed to post releasing-board; notify $REPO issue #$ISSUE manually" >&2
             if [ "$status" = 0 ]; then status=5; fi
@@ -129,7 +134,7 @@ if active:
     sys.exit(5)
 PY
 commit=$(git rev-parse --short HEAD)
-printf '**[%s]** taking-board\nProgramming %s (software %s) with fpga/program.tcl.\n' "$current_user" "$BIT" "$commit" > "$scratch/comment.md"
+printf '**[%s]** `taking-board` · programming %s patched with software %s via fpga/program.tcl (about 1 min)\n' "$agent" "$BIT" "$commit" > "$scratch/comment.md"
 gh issue comment "$ISSUE" --repo "$REPO" --body-file "$scratch/comment.md"
 taking=1
 # The fpga-tools MCP's lock (FPGA_STATE/hardware.lock, flock(2)) in the workspace
