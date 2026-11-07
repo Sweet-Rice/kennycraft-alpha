@@ -34,15 +34,46 @@ if [ ! -f out/kc_imem.bin ] || [ ! -f out/kc_dmem.bin ]; then
     echo 'board: missing out/kc_imem.bin or out/kc_dmem.bin; run make sw first' >&2
     exit 5
 fi
-paths=$("$PYTHON" scripts/mmi_paths.py "$MMI" --imem "${IMEM_PROC:-}" --dmem "${DMEM_PROC:-}")
-imem_proc=${paths%%$'\n'*}
-dmem_proc=${paths#*$'\n'}
+# imem and dmem always; the texture and palette BRAMs when TEX_HEX= / PAL_HEX=
+# give $readmemh images (as for the Verilator build).
+names=("imem${IMEM_PROC:+=$IMEM_PROC}" "dmem${DMEM_PROC:+=$DMEM_PROC}")
+images=(out/kc_imem.bin out/kc_dmem.bin)
+if [ -n "${TEX_HEX:-}" ]; then names+=("tex${TEX_PROC:+=$TEX_PROC}"); images+=("$TEX_HEX"); fi
+if [ -n "${PAL_HEX:-}" ]; then names+=("palette${PALETTE_PROC:+=$PALETTE_PROC}"); images+=("$PAL_HEX"); fi
+if [ "${#names[@]}" -gt 2 ] && [ ! -f fpga/hex2mem.py ]; then
+    echo 'board: fpga/hex2mem.py missing; TEX_HEX=/PAL_HEX= need the P3 fpga/ scripts (stage0/p3)' >&2
+    exit 5
+fi
+if ! procs=$("$PYTHON" scripts/mmi_paths.py "$MMI" "${names[@]}"); then
+    if [ -n "${PAL_HEX:-}" ]; then
+        echo 'board: note: P3 kc.mmi leaves out the RAMB18 palette (fpga/build.tcl), so palette changes need a Vivado rebuild' >&2
+    fi
+    exit 5
+fi
+mapfile -t procs <<< "$procs"
 mkdir -p out
-"$PYTHON" scripts/elf2hex.py out/kc_imem.bin out/kc_imem.mem --offset-bytes 0 --words 8192 --mem
-"$PYTHON" scripts/elf2hex.py out/kc_dmem.bin out/kc_dmem.mem --offset-bytes 0x100 --words 8192 --mem
-"$VIVADO_BIN/updatemem" -force -meminfo "$MMI" -bit "$BIT" \
-    -data out/kc_imem.mem -proc "$imem_proc" \
-    -data out/kc_dmem.mem -proc "$dmem_proc" -out out/kc_patched.bit
+data=()
+for i in "${!procs[@]}"; do
+    proc=${procs[$i]% *}
+    width=${procs[$i]##* }
+    name=${names[$i]%%=*}
+    case $name in
+        imem|dmem)
+            if [ "$width" != 32 ]; then
+                echo "board: MMI $name processor $proc is $width bits wide, expected 32" >&2
+                exit 5
+            fi
+            offset=0
+            if [ "$name" = dmem ]; then offset=0x100; fi
+            "$PYTHON" scripts/elf2hex.py "${images[$i]}" "out/kc_$name.mem" --offset-bytes "$offset" --words 8192 --mem
+            ;;
+        *)
+            "$PYTHON" fpga/hex2mem.py "${images[$i]}" "out/kc_$name.mem" "$width"
+            ;;
+    esac
+    data+=(-data "out/kc_$name.mem" -proc "$proc")
+done
+"$VIVADO_BIN/updatemem" -force -meminfo "$MMI" -bit "$BIT" "${data[@]}" -out out/kc_patched.bit
 
 REPO=${BOARD_REPO:-Sweet-Rice/kennycraft-alpha}
 ISSUE=${BOARD_ISSUE:-1}

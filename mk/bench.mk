@@ -143,6 +143,8 @@ tracediff: vl-build
 
 .PHONY: board keys
 board: check
-	BIT="$(BIT)" MMI="$(MMI)" IMEM_PROC="$(IMEM_PROC)" DMEM_PROC="$(DMEM_PROC)" PYTHON="$(PYTHON)" bash scripts/board.sh
+	BIT="$(BIT)" MMI="$(MMI)" IMEM_PROC="$(IMEM_PROC)" DMEM_PROC="$(DMEM_PROC)" \
+		TEX_HEX="$(TEX_HEX)" PAL_HEX="$(PAL_HEX)" TEX_PROC="$(TEX_PROC)" PALETTE_PROC="$(PALETTE_PROC)" \
+		PYTHON="$(PYTHON)" bash scripts/board.sh
 keys:
 	$(PYTHON) scripts/kc.py $(if $(PORT),--port "$(PORT)")
