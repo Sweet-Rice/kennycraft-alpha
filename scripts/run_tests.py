@@ -8,6 +8,10 @@ import shutil
 import subprocess
 import sys
 
+# Tests whose whole UART output is checked, not only the PASS verdict.
+# t_uart echoes the bytes of t_uart.keys before PASS (same bytes back).
+EXPECTED_STDOUT = {'t_uart': 'kc!\nPASS\n'}
+
 
 def build(name, args):
     if not re.fullmatch(r't_[A-Za-z0-9_]+', name):
@@ -101,6 +105,9 @@ def main():
                         sys.stderr.write(proc.stderr)
                         sys.stderr.flush()
                     raise ValueError(f'{name}: consumer-visible failure or early quit without PASS')
+                echo = EXPECTED_STDOUT.get(name)
+                if echo is not None and proc.stdout != echo:
+                    raise ValueError(f'{name}: UART output {proc.stdout!r}, expected {echo!r}')
             print(f'{name}: PASS', flush=True)
     except subprocess.CalledProcessError as error:
         print(f'tests: command failed ({error.returncode}): {error.cmd}', file=sys.stderr)
