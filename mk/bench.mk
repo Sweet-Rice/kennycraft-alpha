@@ -8,7 +8,7 @@ OBJCOPY := $(CROSS)objcopy
 OBJDUMP := $(CROSS)objdump
 MARCH := rv32i_zmmul
 CFLAGS = -march=$(MARCH) -mabi=ilp32 -O2 -ffreestanding -nostdlib -fno-builtin -msmall-data-limit=0 -Wall -DKC_CHIP -Isw
-LDFLAGS = -T sw/kc.ld -nostdlib
+LDFLAGS = -T sw/kc.ld -nostdlib -Wl,--build-id=none
 LIBS = -lgcc
 PROG ?= sw/demo/pattern.c
 PYTHON ?= python3

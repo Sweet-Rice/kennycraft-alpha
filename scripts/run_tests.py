@@ -23,7 +23,7 @@ def build(name, args):
     directory.mkdir(parents=True, exist_ok=True)
     elf = directory / 'kc.elf'
     subprocess.run([args.cc, *shlex.split(args.cflags), f'-DKC_STAGE={args.stage}',
-                    '-T', 'sw/kc.ld', '-nostdlib', f'-Wl,-Map,{directory}/kc.map',
+                    '-T', 'sw/kc.ld', '-nostdlib', '-Wl,--build-id=none', f'-Wl,-Map,{directory}/kc.map',
                     'sw/crt0.S', str(source), 'sw/arena.c', '-lgcc', '-o', str(elf)], check=True)
     for kind, sections, offset in [('imem', ['.text'], '0'), ('dmem', ['.rodata', '.data'], '0x100')]:
         binary = directory / f'kc_{kind}.bin'
