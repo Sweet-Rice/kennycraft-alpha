@@ -18,6 +18,14 @@
 //   +trace_lo=LO +trace_hi=HI  print the first 64 retired instructions whose
 //                 PC (hex) is in LO..HI: PC, instruction, active mask, rd,
 //                 lanes written
+//   +prof=FILE +prof_swap=N  per-PC profile of the core cycles from FB_SWAP N
+//                 (default 1) to FB_SWAP N+1, one line per PC that used a
+//                 cycle: PC, cycles, retires, active lanes summed over the
+//                 retires, cycles in the memory state, and the bus region
+//                 (address bits 31:28) of its last data access
+//   +wlog=FILE +wlog_swap=N  every world load the LSU issues between FB_SWAP N
+//                 (default 0, i.e. from reset) and FB_SWAP N+1: core cycle,
+//                 PC, lane, world index, loaded value
 //
 // LANES / HAS_DIV_STACK pick the core (tb/top/tb.mk: 1 / 0 for the one-lane
 // game builds, 8 / 1 for the 8-lane ones).
@@ -182,6 +190,69 @@ module t_top_frame #(
                      8'(dut.u_soc.u_core.retire_mask), dut.u_soc.u_core.retire_rd_addr,
                      8'(dut.u_soc.u_core.retire_lane_we));
         end
+
+    // Optional per-PC profile (+prof) and world-load log (+wlog), for frame
+    // cycle breakdowns and lane-by-lane DDA walks.
+    localparam int PROF_WORDS = 8192;   // imem: 32 KB
+    int          prof_fd = 0, prof_swap = 1, wlog_fd = 0, wlog_swap = 0;
+    longint      prof_cyc [PROF_WORDS], prof_ret [PROF_WORDS], prof_lanes [PROF_WORDS],
+                 prof_mem [PROF_WORDS];
+    logic [3:0]  prof_region [PROF_WORDS];
+    bit          wq = 0;
+    logic [31:0] wq_cyc, wq_pc, wq_addr;
+    int          wq_lane;
+    initial begin
+        string fn;
+        void'($value$plusargs("prof_swap=%d", prof_swap));
+        void'($value$plusargs("wlog_swap=%d", wlog_swap));
+        if ($value$plusargs("prof=%s", fn)) begin
+            prof_fd = $fopen(fn, "w");
+            if (prof_fd == 0) $fatal(1, "cannot write %s", fn);
+        end
+        if ($value$plusargs("wlog=%s", fn)) begin
+            wlog_fd = $fopen(fn, "w");
+            if (wlog_fd == 0) $fatal(1, "cannot write %s", fn);
+        end
+    end
+    always @(posedge dut.clk_core) begin
+        int i;
+        i = int'(dut.u_soc.u_core.pc[14:2]);
+        if (prof_fd != 0 && swaps == prof_swap) begin
+            prof_cyc[i]++;
+            if (dut.u_soc.u_core.retire_valid) begin
+                prof_ret[i]++;
+                prof_lanes[i] += longint'($countones(dut.u_soc.u_core.retire_mask));
+            end
+            if (dut.u_soc.u_core.u_lsu.go) begin
+                prof_mem[i]++;
+                prof_region[i] = dut.u_soc.u_core.bus_addr[31:28];
+            end
+        end else if (prof_fd != 0 && swaps > prof_swap) begin
+            for (int p = 0; p < PROF_WORDS; p++)
+                if (prof_cyc[p] != 0)
+                    $fwrite(prof_fd, "%08h %0d %0d %0d %0d %0h\n", p * 4, prof_cyc[p], prof_ret[p],
+                            prof_lanes[p], prof_mem[p], prof_region[p]);
+            $fclose(prof_fd);
+            prof_fd = 0;
+            $display("t_top_frame: profile of FB_SWAP %0d to %0d written", prof_swap, prof_swap + 1);
+        end
+        if (wlog_fd != 0) begin
+            if (wq) $fwrite(wlog_fd, "%0d %08h %0d %05h %0d\n", wq_cyc, wq_pc, wq_lane, wq_addr[16:0],
+                            dut.u_soc.u_core.ld_value);
+            wq = 0;
+            if (swaps > wlog_swap) begin
+                $fclose(wlog_fd);
+                wlog_fd = 0;
+            end else if (swaps == wlog_swap && dut.u_soc.u_core.bus_req && dut.u_soc.u_core.bus_ready &&
+                         !dut.u_soc.u_core.bus_we && dut.u_soc.u_core.bus_addr[31:28] == 4'h2) begin
+                wq      = 1;
+                wq_cyc  = dut.u_soc.u_mmio.cycles;
+                wq_pc   = dut.u_soc.u_core.pc;
+                wq_lane = int'(dut.u_soc.u_core.u_lsu.cur);
+                wq_addr = dut.u_soc.u_core.bus_addr;
+            end
+        end
+    end
 
     // The program never comes back to address 0 (crt0's _start) once it has
     // left it: a second retire at PC 0 fails the test and prints the last 32
