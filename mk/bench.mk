@@ -135,3 +135,9 @@ golden-update: vl-build
 tracediff: vl-build
 	@test -n "$(REF)" || { echo "tracediff: set REF=" >&2; exit 5; }
 	$(PYTHON) scripts/compare_ref.py --ref "$(REF)" --frames $(if $(FRAMES),$(FRAMES),5) $(if $(KEYS),--keys "$(KEYS)") $(PALETTE_ARGS) $(TEXTURE_ARGS)
+
+.PHONY: board keys
+board: check
+	BIT="$(BIT)" MMI="$(MMI)" IMEM_PROC="$(IMEM_PROC)" DMEM_PROC="$(DMEM_PROC)" PYTHON="$(PYTHON)" bash scripts/board.sh
+keys:
+	$(PYTHON) scripts/kc.py $(if $(PORT),--port "$(PORT)")
