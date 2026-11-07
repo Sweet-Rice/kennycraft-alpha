@@ -120,7 +120,7 @@ module bench_chip #(
     logic [31:0] frame_count;
     logic        fb_mode;
 
-    display u_display (
+    display #(.PAL_HEX(PAL_HEX)) u_display (
         .clk_core     (clk_core),
         .rst_core     (rst_core),
         .clk_pix      (clk_pix),
@@ -168,6 +168,7 @@ module bench_chip #(
         .BAUD      (1_000_000),
         .IMEM_HEX  (IMEM_HEX),
         .DMEM_HEX  (DMEM_HEX),
+        .TEX_HEX   (TEX_HEX),
         .EXT_WORLD (1'b1),
         .HAS_DIV_STACK (HAS_DIV_STACK)
     ) u_soc (
@@ -390,23 +391,6 @@ module bench_chip #(
         .sys_rst             (ddr_locked & ck_rst)
     );
     /* verilator lint_on PINCONNECTEMPTY */
-
-    // ------------------------------------------------------------------
-    // Asset initial loading (palette and texture)
-    // ------------------------------------------------------------------
-    // main's kc_soc, display and palette have no TEX_HEX / PAL_HEX / INIT_FILE
-    // parameters yet (P3 adds them; CHIP_TOP=top uses those), so load the RAMs
-    // hierarchically. Run after time-zero memory initialization, while the
-    // harness holds reset.
-    logic assets_loaded;
-    initial assets_loaded = 1'b0;
-    always @(posedge clk_core) begin
-        if (!assets_loaded) begin
-            if (PAL_HEX != "") $readmemh(PAL_HEX, u_display.u_pal.mem);
-            if (TEX_HEX != "") $readmemh(TEX_HEX, u_soc.u_tex.mem);
-            assets_loaded <= 1'b1;
-        end
-    end
 
     // ------------------------------------------------------------------
     // Unused signals reduction
