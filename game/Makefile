@@ -33,6 +33,13 @@ GAME_OPT   := -Os
 GAME_FILES := arena.c terrain.c chunks.c game.c kc_main.c mesh.c
 chip_opt    = $(if $(filter $(GAME_FILES),$(notdir $(1))),$(GAME_OPT),$(KERNEL_OPT))
 
+# Per-frame arena size override, applied to the laptop AND chip builds alike (default 8 KB in
+# src/arena.h). Measured peaks (kc_host sweep): ray 288 B, raster 1,632 B. make clean after changing.
+ifdef ARENA_SIZE
+CFLAGS     += -DARENA_SIZE=$(ARENA_SIZE)
+CHIP_FLAGS += -DARENA_SIZE=$(ARENA_SIZE)
+endif
+
 .PHONY: all shots play vectors contract compare bench chip chip8 chip-raster clean FORCE
 all: build/kc_host
 
