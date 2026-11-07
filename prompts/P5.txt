@@ -1,0 +1,30 @@
+You are working in the KennyCraft repo. KennyCraft is an 8-lane SIMD GPU grown from a multi-cycle RV32I core, running a voxel Minecraft on an Arty A7-100T (xc7a100tcsg324-1). The design doc is this repo's GitHub wiki. Before writing any code, read the wiki pages this prompt names, plus Tai_2 sections 1 and 2 (ISA and masking semantics). Tai_2 wins wherever pages disagree.
+
+Rules for this session.
+1. SystemVerilog only, synthesizable in Vivado, lint clean in Verilator with -Wall.
+2. Multi-cycle unless this prompt says otherwise. No pipeline registers, no forwarding, no hazard logic.
+3. Touch only the files this prompt lists. If another file needs a change, stop and say which file and why.
+4. Never change an opcode, encoding, MMIO offset, memory-map address or frozen port list. If the spec looks wrong or ambiguous, stop and ask. Do not pick an interpretation silently.
+5. Keep the LANES parameter on every module that has per-lane state, even when this stage only uses LANES = 1.
+6. Done means every check in this prompt passes. Run each check yourself and paste its real output. Never report a check as passing without running it.
+7. Commit in small steps with clear messages. Do not push.
+8. End with a short report. What you built, files touched, checks run and their results, open questions, and LUT, FF, BRAM, DSP and timing numbers if you ran Vivado.
+
+Goal. Finish the Stage 1 GPU. LMASK, MASKGET, MASKSET, BALLOT, the uniform-branch and uniform-JALR checks, and the DIF / DELSE / DENDIF stack, all exactly as Tai_2 section 2 states them.
+
+Read. Tai_2 sections 1 and 2 in full, including the divergence pseudocode and the mask-loop rule. Tai page, GPU Core (Divergence, Where GCC can hurt us, BALLOT). Shared page, Verification (per-instruction tests).
+
+Build.
+1. LMASK, MASKGET, MASKSET, BALLOT. BALLOT result is {0, rs1_nonzero & M} written to rd in every lane.
+2. Uniform check on branch outcomes and JALR targets across active lanes. A mismatch halts with ERR.DIVERGE and ERR_PC. With M = 0 there is no check and lane 0 decides.
+3. rtl/core/divstack.sv. 8 entries of {saved, else}, LANES bits each. Implement the pseudocode in Tai_2 section 2 line for line, including the DIVSTACK halts and the jump-on-empty cases. DIF and DELSE take the standard B-type immediate.
+4. Add the six tests listed at the end of Tai_2 section 2 (also in the Verification section, Shared tab). Coordinate the file names with Bennett, who owns sw/tests and the simulator.
+
+Touch only. rtl/core/*, tb/core/*, sw/tests/ (new test files only).
+
+Done when, in order.
+- Rung 5. t_mask, t_ballot, t_maskgetset, t_mask_zero pass.
+- Rung 6. t_branch_uniform and t_jalr_uniform pass, and ERR_PC matches the faulting instruction.
+- Rung 7. t_divstack, t_divskip, t_div_nested_lmask, t_divstack_overflow pass.
+- Rung 8. Kennedy's 8-lane software DDA kernel matches the simulator pixel for pixel in make check, then on the board.
+- Fill the Stage 1 row of the Actual utilization table, and report the measured fps from CYCLES.
