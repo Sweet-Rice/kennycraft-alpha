@@ -23,9 +23,14 @@
 //          S_READY, remesh. All of it is on lane 0 inside world_update, before the kernel
 //          runs, and world_get / the mesher only see S_READY slots: nothing that draws or
 //          collides can read a tag nibble.
-// The boot nonce is a hash of CYCLES once the startup loads have landed, so it differs per
-// reset and chunks stored by an earlier boot don't match (as with the bitmap, they're
-// regenerated). KC_TAG_PERSIST=1 fixes the nonce at 0: chunks survive a reset. Random DRAM
+// The boot nonce hashes a boot counter kept in DDR3 with CYCLES once the startup loads have
+// landed, so it differs per reset even when boot timing repeats exactly, and chunks stored
+// by an earlier boot don't match (as with the bitmap, they're regenerated). The counter
+// lives in chunk (0, 0)'s y = 0 row z = 2 (BOOT_CELLS nibbles: count, then a check hash):
+// every boot loads that chunk, bumps the count, and stores it back before anything else;
+// whenever chunk (0, 0) is stored later its tag write puts the count back, and a tag clear
+// or generation turns the cells to bedrock like the tag cells. A failed check (power-on
+// DRAM) starts the count from the garbage itself. KC_TAG_PERSIST=1 fixes the nonce at 0: chunks survive a reset. Random DRAM
 // matches with probability 2^-128 per load; a constant fill or another chunk's bytes
 // (address mix-up) doesn't match. Cost: never-seen chunks take one extra LOAD (async)
 // before they are generated; revisits are unchanged.
@@ -55,15 +60,21 @@
 
 #define TAG_CELLS 32                           // y = 0, z = 0..1, x = 0..15: 32 nibbles = 128 bits
 #define TAG_FORMAT 0x4B430001u                 // bump if the DDR3 chunk layout changes
+#define BOOT_ID    0                           // chunk (0, 0) holds the boot counter
+#define BOOT_CELLS 16                          // y = 0, z = 2, x = 0..15: count + check hash
+#define BOOT_MAGIC 0x6B63626Fu
 
 enum { S_EMPTY = 0, S_NEED, S_LOAD, S_GEN, S_READY };
-enum { TAG_WRITE, TAG_CHECK, TAG_CLEAR };
+enum { TAG_WRITE, TAG_CHECK, TAG_CLEAR, TAG_READ };
 
 #if KC_GEN_BITMAP
 static uint8_t  generated[WORLD_CHUNKS * WORLD_CHUNKS / 8];   // 8 KB: chunk was generated before
 #else
 static uint32_t tag_key;                       // hash of seed, format and boot nonce
 static uint32_t n_tag_hit, n_tag_miss;
+static uint32_t boot_nonce;                    // laptop test only
+static uint32_t boot_count;                    // DDR3 boot counter, this boot's value
+static uint32_t boot_rd[2];                    // TAG_READ: the boot cells as found (count, check)
 #endif
 static uint16_t slot_id[16];                   // chunk id (cz * 256 + cx) this slot holds or fills
 static uint8_t  slot_state[16];                // S_EMPTY = holds nothing
@@ -105,26 +116,50 @@ void window_origin(int corner_x, int corner_z) {
 }
 
 // ---------------------------------------------------------------- helpers ----------------
+#if !KC_GEN_BITMAP
+__attribute__((noinline))   // one copy for this file's hashes (.text)
+static uint32_t h32(uint32_t x) { return hash32(x); }
+#endif
 #if KC_GEN_BITMAP
 static int32_t gen_bit(int32_t id) { return (generated[id >> 3] >> (id & 7)) & 1; }
 static void    gen_set(int32_t id) { generated[id >> 3] |= (uint8_t)(1u << (id & 7)); }
 #else
-// Tag cells of chunk id at its window position. TAG_CHECK returns 1 on a match; it needs
-// the slot's SLOT_VALID bit on. TAG_WRITE and TAG_CLEAR need it off.
+// Tag cells of chunk id at its window position (chunk BOOT_ID: the boot cells too).
+// TAG_CHECK returns 1 on a match and TAG_READ fills boot_rd; both need the slot's SLOT_VALID
+// bit on. TAG_WRITE and TAG_CLEAR need it off.
 __attribute__((noinline))   // one copy, not three inlined ones (.text)
 static int32_t tag_cells(int32_t id, int32_t mode) {
     int32_t wx = ((id & 255) - corner_cx) * CHUNK_W, wz = ((id >> 8) - corner_cz) * CHUNK_W;
-    int32_t ok = 1;
+    int32_t ok = 1, n = TAG_CELLS + (id == BOOT_ID ? BOOT_CELLS : 0);
     uint32_t w = 0;
-    for (int32_t k = 0; k < TAG_CELLS; k++) {
-        if (!(k & 7)) w = hash32((uint32_t)id * 0x9E3779B1u ^ hash32(tag_key + (uint32_t)k * 0x85EBCA6Bu));
+    for (int32_t k = 0; k < n; k++) {
+        if (!(k & 7))
+            w = k < TAG_CELLS ? h32((uint32_t)id * 0x9E3779B1u ^ h32(tag_key + (uint32_t)k * 0x85EBCA6Bu))
+              : k < TAG_CELLS + 8 ? boot_count : h32(boot_count ^ BOOT_MAGIC);
         int32_t x = (wx + (k & 15)) & 63, z = (wz + (k >> 4)) & 63;
         uint8_t v = (uint8_t)((w >> ((k & 7) * 4)) & 15);
         if (mode == TAG_WRITE)      hal_win_set(x, 0, z, v);
-        else if (mode == TAG_CHECK) ok &= hal_win_get(x, 0, z) == v;
+        else if (mode == TAG_CHECK) ok &= k >= TAG_CELLS || hal_win_get(x, 0, z) == v;
+        else if (mode == TAG_READ)  { if (k >= TAG_CELLS) boot_rd[(k >> 3) & 1] |= (uint32_t)hal_win_get(x, 0, z) << ((k & 7) * 4); }
         else                        hal_win_set(x, 0, z, B_BEDROCK);
     }
     return ok;
+}
+
+// Startup, window corner 0: load chunk (0, 0), bump the counter in its boot cells, store it
+// back (tag_cells writes them; its tag cells get a key-0 tag no boot will match). Runs
+// before any window chunk is requested; the engine is in order, so the window's own load of
+// slot 0 comes after this store has read the slot out.
+__attribute__((noinline))   // startup only: keep it out of world_update (.text)
+static void boot_count_bump(void) {
+    chunk_wait(chunk_load(0, 0));
+    slot_valid(0, 0, 1);                                      // reads of an invalid slot are air
+    boot_rd[0] = boot_rd[1] = 0;
+    tag_cells(BOOT_ID, TAG_READ);
+    slot_valid(0, 0, 0);
+    boot_count = boot_rd[1] == h32(boot_rd[0] ^ BOOT_MAGIC) ? boot_rd[0] + 1 : h32(boot_rd[0] ^ boot_rd[1]);
+    tag_cells(BOOT_ID, TAG_WRITE);
+    chunk_wait(chunk_store(0, 0));
 }
 
 static void puts_nonce(uint32_t v) {
@@ -166,6 +201,9 @@ void world_update(int px, int pz) {
         for (int32_t s = 0; s < 16; s++) { slot_state[s] = S_EMPTY; slot_ticket[s] = issued; }
         hal_mmio_w(MMIO_SLOT_VALID, 0);
         window_origin(0, 0);                                  // corner 0 until the first commit
+#if !KC_GEN_BITMAP
+        if (storage_ok && !KC_TAG_PERSIST) boot_count_bump();
+#endif
     }
 
     // 1-2. New target: evict slots that hold the wrong chunk.
@@ -214,10 +252,13 @@ void world_update(int px, int pz) {
     if (!started) {                                           // startup: whole window now
         chunk_wait(issued);
 #if !KC_GEN_BITMAP
-        // Boot nonce: CYCLES after the first loads, which cross into the DDR3 clock domain.
-        uint32_t nonce = KC_TAG_PERSIST ? 0 : hash32(hal_mmio_r(MMIO_CYCLES) ^ 0x6B637467u);
-        tag_key = hash32(hash32(WORLD_SEED ^ TAG_FORMAT) + nonce);
+        // Boot nonce: the DDR3 boot counter, plus CYCLES after the first loads (which cross
+        // into the DDR3 clock domain) for boots whose counter was lost.
+        uint32_t nonce = KC_TAG_PERSIST ? 0
+                       : h32(hal_mmio_r(MMIO_CYCLES) ^ 0x6B637467u) ^ h32(boot_count * 0x9E3779B1u);
+        tag_key = h32(h32(WORLD_SEED ^ TAG_FORMAT) + nonce);
         if (storage_ok) puts_nonce(nonce);
+        boot_nonce = nonce;
 #endif
     }
     for (int32_t s = 0; s < 16; s++) {
@@ -304,6 +345,20 @@ uint32_t world_stats_tag_misses(void) { return n_tag_miss; }
 #endif
 
 #ifdef KC_HOST
+uint32_t world_boot_nonce(void) {
+#if KC_GEN_BITMAP
+    return 0;
+#else
+    return boot_nonce;
+#endif
+}
+uint32_t world_boot_count(void) {
+#if KC_GEN_BITMAP
+    return 0;
+#else
+    return boot_count;
+#endif
+}
 // Laptop only: forget everything, as a reset would (DDR3 keeps its contents).
 void world_reboot(void) {
     for (int32_t s = 0; s < 16; s++) { slot_id[s] = 0; slot_state[s] = S_EMPTY; slot_ticket[s] = 0; }

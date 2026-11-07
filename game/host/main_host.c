@@ -342,6 +342,35 @@ static int cmd_play(void) {
         }
     }
 
+    // Reset again with exactly the same CYCLES jitter as the last boot. The nonce must still
+    // change (DDR3 boot counter), or chunks stored by the last boot would be trusted.
+    if (world_storage_ok() && !KC_GEN_BITMAP && !KC_TAG_PERSIST) {
+        int32_t rx = 2048 + 5, rz = 2048 + 3;
+        uint32_t n1 = world_boot_nonce();
+        world_set(rx, 27, rz, B_PLANKS);
+        pose(Q16_INT(rx) + Q16(200.0), Q16(30.0), Q16_INT(rz), 0, 0);   // store the spawn window
+        host_reset(0x5A17u);                               // same jitter as the reset above
+        world_reboot();
+        kc_init();
+        uint32_t n2 = world_boot_nonce();
+        printf("  same-jitter reset: nonce 0x%08x -> 0x%08x\n", (unsigned)n1, (unsigned)n2);
+        check(n1 != n2, "same-jitter reset: boot nonce still changes (boot counter)");
+        pose(Q16_INT(rx), Q16(30.0), Q16_INT(rz), 0, 0);
+        check(world_get(rx, 27, rz) == B_AIR && world_stats_tag_hits() == 0,
+              "same-jitter reset: no tag from the previous boot accepted, edit gone");
+        // Visit the world corner: chunk (0, 0) is generated (bedrock over the counter cells)
+        // and stored on leaving, so its tag write must put the counter back.
+        uint32_t c2 = world_boot_count();
+        pose(Q16(8.0), Q16(30.0), Q16(8.0), 0, 0);
+        pose(Q16_INT(rx), Q16(30.0), Q16_INT(rz), 0, 0);
+        host_reset(0x5A17u);
+        world_reboot();
+        kc_init();
+        printf("  boot counter across a corner visit: %u -> %u\n", (unsigned)c2, (unsigned)world_boot_count());
+        check(world_boot_count() == c2 + 1, "boot counter survives chunk (0, 0) being generated and stored in play");
+        check(world_boot_nonce() != n2, "nonce changes again after the corner visit");
+    }
+
     printf("tag visibility\n");
     check(tag_leaks() == 0, "window settled: every y = 0 cell of every valid slot is bedrock");
     printf("  %llu frame swaps and %llu world_updates with tag-matched loads checked\n",
