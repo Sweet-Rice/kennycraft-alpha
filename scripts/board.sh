@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 set -eu
-if ! command -v updatemem >/dev/null 2>&1; then
-    echo 'board: updatemem not found; run make board on the Vivado host' >&2
+VIVADO_BIN=${VIVADO_BIN:-/home/tai/AMD/2026.1/Vivado/bin}
+for tool in "$VIVADO_BIN/updatemem" "$VIVADO_BIN/vivado"; do
+    if [ ! -x "$tool" ]; then
+        echo "board: $tool not found; set VIVADO_BIN= to the Vivado bin directory" >&2
+        exit 5
+    fi
+done
+if [ ! -f fpga/program.tcl ]; then
+    echo 'board: fpga/program.tcl missing; make board needs the P3 fpga/ scripts (stage0/p3)' >&2
     exit 5
 fi
 if [ -z "${BIT:-}" ] || [ -z "${MMI:-}" ]; then
-    echo 'board: set BIT= and MMI=' >&2
+    echo 'board: set BIT= and MMI= (top.bit and kc.mmi from a P3 fpga/build.tcl build)' >&2
     exit 5
 fi
 if [ ! -f "$BIT" ]; then
@@ -13,10 +20,10 @@ if [ ! -f "$BIT" ]; then
     exit 5
 fi
 if [ ! -f "$MMI" ]; then
-    echo "board: meminfo file not found: $MMI" >&2
+    echo "board: meminfo file not found: $MMI (kc.mmi is written by the P3 fpga/build.tcl)" >&2
     exit 5
 fi
-for tool in gh openFPGALoader flock; do
+for tool in gh flock; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "board: $tool not found" >&2
         exit 5
@@ -33,7 +40,7 @@ dmem_proc=${paths#*$'\n'}
 mkdir -p out
 "$PYTHON" scripts/elf2hex.py out/kc_imem.bin out/kc_imem.mem --offset-bytes 0 --words 8192 --mem
 "$PYTHON" scripts/elf2hex.py out/kc_dmem.bin out/kc_dmem.mem --offset-bytes 0x100 --words 8192 --mem
-updatemem -force -meminfo "$MMI" -bit "$BIT" \
+"$VIVADO_BIN/updatemem" -force -meminfo "$MMI" -bit "$BIT" \
     -data out/kc_imem.mem -proc "$imem_proc" \
     -data out/kc_dmem.mem -proc "$dmem_proc" -out out/kc_patched.bit
 
@@ -93,7 +100,7 @@ if active:
     sys.exit(5)
 PY
 commit=$(git rev-parse --short HEAD)
-printf '**[%s]** taking-board\nProgramming %s (software %s) with openFPGALoader.\n' "$current_user" "$BIT" "$commit" > "$scratch/comment.md"
+printf '**[%s]** taking-board\nProgramming %s (software %s) with fpga/program.tcl.\n' "$current_user" "$BIT" "$commit" > "$scratch/comment.md"
 gh issue comment "$ISSUE" --repo "$REPO" --body-file "$scratch/comment.md"
 taking=1
 # The fpga-tools MCP's lock (FPGA_STATE/hardware.lock, flock(2)) in the workspace
@@ -103,4 +110,6 @@ if [ -z "${HARDWARE_LOCK:-}" ]; then
     HARDWARE_LOCK=$(dirname "$(dirname "$common")")/.fpga-state/hardware.lock
 fi
 mkdir -p "$(dirname "$HARDWARE_LOCK")"
-flock -w 600 "$HARDWARE_LOCK" openFPGALoader -b arty_a7_100t out/kc_patched.bit
+flock -w 600 "$HARDWARE_LOCK" \
+    "$VIVADO_BIN/vivado" -mode batch -nojournal -nolog -notrace \
+    -source fpga/program.tcl -tclargs out/kc_patched.bit
