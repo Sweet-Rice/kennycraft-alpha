@@ -183,6 +183,46 @@ module t_top_frame #(
                      8'(dut.u_soc.u_core.retire_lane_we));
         end
 
+    // The program never comes back to address 0 (crt0's _start) once it has
+    // left it: a second retire at PC 0 fails the test and prints the last 32
+    // retired instructions, every lane's ra and sp, CYCLES and the reset.
+    localparam int RING = 32;
+    logic [31:0] ring_pc [RING], ring_inst [RING], ring_wdata [RING];
+    logic [7:0]  ring_mask [RING], ring_we [RING];
+    logic [4:0]  ring_rd [RING];
+    int          ring_n = 0, boots = 0;
+    logic [31:0] lane_ra [LANES], lane_sp [LANES];
+    for (genvar g = 0; g < LANES; g++) begin : g_peek
+        assign lane_ra[g] = dut.u_soc.u_core.g_lane[g].u_lane.u_rf.regs[1];
+        assign lane_sp[g] = dut.u_soc.u_core.g_lane[g].u_lane.u_rf.regs[2];
+    end
+    always @(posedge dut.clk_core) if (dut.u_soc.u_core.retire_valid) begin
+        if (dut.u_soc.u_core.retire_pc == 32'h0) begin
+            boots++;
+            if (boots > 1) begin
+                $display("t_top_frame: PC 0 retired again at core cycle %0d (rst_core %b); last %0d retires:",
+                         dut.u_soc.u_mmio.cycles, dut.rst_core, RING);
+                for (int i = ring_n - RING; i < ring_n; i++)
+                    if (i >= 0)
+                        $display("t_top_frame:   pc %08h inst %08h mask %02h rd x%0d lanes written %02h lane0 wdata %08h",
+                                 ring_pc[i % RING], ring_inst[i % RING], ring_mask[i % RING],
+                                 ring_rd[i % RING], ring_we[i % RING], ring_wdata[i % RING]);
+                for (int l = 0; l < LANES; l++)
+                    $display("t_top_frame:   lane %0d ra %08h sp %08h", l, lane_ra[l], lane_sp[l]);
+                $fatal(1, "core jumped back to address 0");
+            end
+        end
+        ring_pc[ring_n % RING]    = dut.u_soc.u_core.retire_pc;
+        ring_inst[ring_n % RING]  = dut.u_soc.u_core.retire_inst;
+        ring_mask[ring_n % RING]  = 8'(dut.u_soc.u_core.retire_mask);
+        ring_rd[ring_n % RING]    = dut.u_soc.u_core.retire_rd_addr;
+        ring_we[ring_n % RING]    = 8'(dut.u_soc.u_core.retire_lane_we);
+        ring_wdata[ring_n % RING] = dut.u_soc.u_core.retire_rd_wdata;
+        ring_n++;
+    end
+    always @(posedge dut.rst_core)
+        if (boots > 0) $display("t_top_frame: rst_core asserted at time %0t", $time);
+
     initial begin
         int min_swaps = 0;
         void'($value$plusargs("outdir=%s", outdir));
