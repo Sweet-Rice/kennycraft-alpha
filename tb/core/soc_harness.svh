@@ -6,6 +6,23 @@
 // UART receiver on uart_tx and sender on uart_rx, a retirement trace
 // (+trace), and memory and register peek helpers. The world port is unused
 // (EXT_WORLD = 0, internal stub).
+//
+// LANES (-GLANES=n) sizes the core. LANE0_ONLY = 1 pins mask bits
+// LANES-1..1 to 0, so only lane 0 can ever be active (Stage 1 rung 2:
+// LANES = 8 with the mask stuck at lane 0 must trace like LANES = 1).
+// lane_x[l][n] is lane l's register n. KC_BASE_CORE (define) builds against
+// the Stage 0 core (one register file, no per-lane retire wires) for
+// tracediff against the pre-lanes RTL.
+
+parameter int LANES      = 1;
+parameter bit LANE0_ONLY = 1'b0;
+localparam int ALANES    = LANE0_ONLY ? 1 : LANES;   // lanes that can be active
+
+`ifdef KC_BASE_CORE
+`define KC_RF(l) dut.u_core.u_rf
+`else
+`define KC_RF(l) dut.u_core.g_lane[l].u_lane.u_rf
+`endif
 
 localparam int CLK_NS   = 20;    // 50 MHz core clock
 localparam int BIT_CLKS = 50;    // 1 Mbaud: 50 clocks per bit
@@ -37,6 +54,7 @@ always #(CLK_NS / 2) clk = ~clk;
 
 /* verilator lint_off PINCONNECTEMPTY */
 kc_soc #(
+    .LANES(LANES),
     .IMEM_HEX(IMEM_HEX),
     .DMEM_HEX(DMEM_HEX)
 ) dut (
@@ -112,9 +130,29 @@ task automatic dmem_wr(input logic [31:0] addr, input logic [31:0] value);
     dut.u_dmem.mem[addr[14:2]] = value;
 endtask
 
+logic [31:0] lane_x [LANES][32];
+
+for (genvar l = 0; l < LANES; l++) begin : g_peek
+    for (genvar n = 0; n < 32; n++) begin : g_reg
+        if (n == 0) begin : g_x0
+            assign lane_x[l][n] = 32'd0;
+        end else begin : g_xn
+            assign lane_x[l][n] = `KC_RF(l).regs[n];
+        end
+    end
+end
+
 function automatic logic [31:0] xreg(input int n);
-    return (n == 0) ? 32'd0 : dut.u_core.u_rf.regs[n];
+    return lane_x[0][n];
 endfunction
+
+// The core only updates the mask on a rising edge and only samples it on the
+// next one, so clearing bits LANES-1..1 at every falling edge pins them to 0
+// for every observable cycle. (A force on dut.u_core.mask does not take
+// effect in Verilator 5.020.)
+if (LANE0_ONLY && LANES > 1) begin : g_lane0_only
+    always @(negedge clk) dut.u_core.mask <= LANES'(dut.u_core.mask[0]);
+end
 
 task automatic do_reset();
     rst = 1'b1;
@@ -134,20 +172,32 @@ endtask
 
 // ---------------------------------------------------------------------
 // Retirement trace from the core's retire_* wires: +trace prints one line
-// per retired instruction (with the rd write, if any) and one per halt.
+// per retired instruction (cycle, PC, instruction, active mask, lane 0's rd
+// write if any), one line per other lane that wrote rd, and one per halt.
+// tb/core/tracediff.py compares these lines between two builds.
 // ---------------------------------------------------------------------
 bit trace_on = 1'b0;
 initial trace_on = $test$plusargs("trace");
 
 always @(posedge clk) begin
     if (trace_on && !rst) begin
-        if (dut.u_core.retire_valid && dut.u_core.retire_rd_we)
-            $display("trace pc=%08h inst=%08h x%0d=%08h", dut.u_core.retire_pc,
-                     dut.u_core.retire_inst, dut.u_core.retire_rd_addr, dut.u_core.retire_rd_wdata);
-        else if (dut.u_core.retire_valid)
-            $display("trace pc=%08h inst=%08h", dut.u_core.retire_pc, dut.u_core.retire_inst);
+        if (dut.u_core.retire_valid) begin
+            if (dut.u_core.retire_rd_we)
+                $display("trace %0d pc=%08h inst=%08h m=%0h x%0d=%08h", cycle,
+                         dut.u_core.retire_pc, dut.u_core.retire_inst, dut.u_core.retire_mask,
+                         dut.u_core.retire_rd_addr, dut.u_core.retire_rd_wdata);
+            else
+                $display("trace %0d pc=%08h inst=%08h m=%0h", cycle, dut.u_core.retire_pc,
+                         dut.u_core.retire_inst, dut.u_core.retire_mask);
+`ifndef KC_BASE_CORE
+            for (int l = 1; l < LANES; l++)
+                if (dut.u_core.retire_lane_we[l])
+                    $display("trace %0d   lane%0d x%0d=%08h", cycle, l,
+                             dut.u_core.retire_rd_addr, dut.u_core.retire_lane_wdata[l]);
+`endif
+        end
         if (dut.u_core.err_set != 0)
-            $display("trace pc=%08h halt err=%b", dut.u_core.err_pc, dut.u_core.err_set);
+            $display("trace %0d pc=%08h halt err=%b", cycle, dut.u_core.err_pc, dut.u_core.err_set);
     end
 end
 

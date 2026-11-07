@@ -57,96 +57,95 @@ for byte in range(256):
     palette_rgb.append(to444(c))
 
 # ---------------------------------------------------------------- textures ----------------
-T = 16
+# Blocky style: every image is drawn at 8 x 8 with few colors, then each pixel is doubled to
+# fill the 16 x 16 texture the hardware expects (format and addressing unchanged).
+T = 16                      # texture size in memory
+S = 8                       # drawing resolution
 NTYPES, NFACES = 16, 3
 tex = [[[[0] * T for _ in range(T)] for _ in range(NFACES)] for _ in range(NTYPES)]
 rng = random.Random(0x4B43)
 
-def noise_fill(img, colors, weights):
-    for v in range(T):
-        for u in range(T):
+def new(): return [[0] * S for _ in range(S)]
+
+def noise(colors, weights):
+    img = new()
+    for v in range(S):
+        for u in range(S):
             img[v][u] = rng.choices(colors, weights)[0]
+    return img
 
-def new(): return [[0] * T for _ in range(T)]
+def up(img):                # 8 x 8 -> 16 x 16, each pixel becomes 2 x 2
+    return [[img[v // 2][u // 2] for u in range(T)] for v in range(T)]
 
-def grass_top():
-    img = new(); noise_fill(img, [1, 2], [3, 1]); return img
-def dirt():
-    img = new(); noise_fill(img, [3, 4], [3, 1]); return img
+def grass_top(): return noise([1, 2], [3, 1])
+def dirt():      return noise([3, 4], [3, 1])
 def grass_side():
     img = dirt()
-    for u in range(T):
-        depth = 3 + rng.choice([0, 0, 1, 1, 2])
-        for v in range(depth):
+    for u in range(S):
+        for v in range(2 + (rng.random() < 0.4)):     # green lip, 2-3 pixels deep
             img[v][u] = rng.choices([1, 2], [3, 1])[0]
     return img
 def stone():
-    img = new(); noise_fill(img, [5, 6], [4, 1])
-    for _ in range(5):                                # a few darker streaks
-        u, v = rng.randrange(T), rng.randrange(T)
-        for k in range(rng.randrange(2, 5)):
-            img[v][(u + k) % T] = 6
+    img = noise([5, 6], [5, 1])
+    for _ in range(2):                                # two short cracks
+        u, v = rng.randrange(S), rng.randrange(S)
+        img[v][u] = img[v][(u + 1) % S] = 6
     return img
 def cobble():
     img = new()
-    rows = [0, 5, 10]
-    for v in range(T):
-        band = max(i for i, r in enumerate(rows) if v >= r)
-        off = [0, 6, 3][band]
-        for u in range(T):
-            edge = v in rows or (u + off) % 8 == 0 or (u + off * 2 + 5) % 13 == 0 and band == 1
-            img[v][u] = 0 if edge and rng.random() < 0.6 else (6 if edge else rng.choices([5, 12, 6], [6, 1, 1])[0])
+    for v in range(S):
+        band = v // 4
+        for u in range(S):
+            edge = v % 4 == 0 or (u + 2 * band) % 4 == 0
+            img[v][u] = (0 if rng.random() < 0.5 else 6) if edge else rng.choices([5, 12], [5, 1])[0]
     return img
 def log_side():
     img = new()
-    for u in range(T):
-        col = 7 if u % 4 in (0, 1) else 4
-        for v in range(T):
-            img[v][u] = col if rng.random() < 0.85 else (4 if col == 7 else 7)
+    for u in range(S):
+        for v in range(S):
+            img[v][u] = 7 if u % 4 < 2 else 4
     return img
 def log_top():
     img = new()
-    for v in range(T):
-        for u in range(T):
-            d = max(abs(u - 7.5), abs(v - 7.5))
-            img[v][u] = 7 if d > 6.5 else (13 if int(d) % 3 else 8)
+    for v in range(S):
+        for u in range(S):
+            d = max(abs(u - 3.5), abs(v - 3.5))
+            img[v][u] = 7 if d > 3 else (13 if d > 2 else (8 if d > 1 else 13))
     return img
-def leaves():
-    img = new(); noise_fill(img, [10, 2, 0], [5, 3, 1]); return img
+def leaves(): return noise([10, 2, 0], [5, 3, 1])
 def planks():
     img = new()
-    for v in range(T):
-        for u in range(T):
-            seam = v % 4 == 3 or (u + (v // 4) * 7) % 16 == 0
-            img[v][u] = 7 if seam else rng.choices([8, 13], [5, 1])[0]
+    for v in range(S):
+        for u in range(S):
+            seam = v % 4 == 3 or u == (5 if v < 4 else 1)
+            img[v][u] = 7 if seam else (13 if rng.random() < 0.12 else 8)
     return img
-def sand():
-    img = new(); noise_fill(img, [9, 12, 8], [8, 2, 1]); return img
+def sand(): return noise([9, 12], [6, 1])
 def brick():
     img = new()
-    for v in range(T):
-        for u in range(T):
-            mortar = v % 4 == 3 or (u + (4 if (v // 4) % 2 else 0)) % 8 == 7
-            img[v][u] = 12 if mortar else rng.choices([11, 4], [6, 1])[0]
+    for v in range(S):
+        for u in range(S):
+            mortar = v % 4 == 3 or u == (3 if v < 4 else 7)
+            img[v][u] = 12 if mortar else (4 if rng.random() < 0.1 else 11)
     return img
-def bedrock():
-    img = new(); noise_fill(img, [0, 6, 5], [3, 3, 1]); return img
+def bedrock(): return noise([0, 6, 5], [3, 3, 1])
 def missing():
     img = new()
-    for v in range(T):
-        for u in range(T):
-            img[v][u] = 14 if ((u >> 2) ^ (v >> 2)) & 1 else 0
+    for v in range(S):
+        for u in range(S):
+            img[v][u] = 14 if ((u >> 1) ^ (v >> 1)) & 1 else 0
     return img
 
-def same(f): img = f(); return (img, img, img)
+def same(f): img = up(f()); return (img, img, img)
+def faces(top, side, bottom): return (up(top), up(side), up(bottom))
 
 FACES = {
-    0: (new(), new(), new()),                 # air
-    1: (grass_top(), grass_side(), dirt()),   # grass
+    0: faces(new(), new(), new()),            # air
+    1: faces(grass_top(), grass_side(), dirt()),
     2: same(dirt),
     3: same(stone),
     4: same(cobble),
-    5: (log_top(), log_side(), log_top()),
+    5: faces(log_top(), log_side(), log_top()),
     6: same(leaves),
     7: same(planks),
     8: same(sand),
@@ -154,9 +153,9 @@ FACES = {
     10: same(bedrock),
 }
 for t in range(NTYPES):
-    faces = FACES.get(t) or same(missing)
+    imgs = FACES.get(t) or same(missing)
     for f in range(NFACES):
-        tex[t][f] = faces[f]
+        tex[t][f] = imgs[f]
 
 # ---------------------------------------------------------------- editable atlas ----------
 # assets/textures.png (if present) overrides the procedural textures. Layout: 48 x 256,
