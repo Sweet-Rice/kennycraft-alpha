@@ -20,7 +20,10 @@ main:
     li   t3, 1500
     bltu t2, t3, .Lwait_second_byte
 
-    # 3. Set mask to 0x03 (lanes 0 and 1 active)
+    # 3. Set mask to 0x03 (lanes 0 and 1 active). main starts with only
+    # lane 0 active, so give every lane the MMIO base first.
+    .insn r 0x0B, 7, 0, x0, x0, x0      # MASKALL
+    li   t4, 0x50000000
     li   t0, 3
     .insn r 0x0B, 6, 0, x0, t0, x0      # MASKSET 3
 
