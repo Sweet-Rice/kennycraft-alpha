@@ -7,9 +7,10 @@
 // changes), then start the walk and check
 //   - busy stays high and done pulses exactly once, N * (WORLD_LATENCY + 2)
 //     cycles after start, N = the most steps any active lane takes;
-//   - active lanes: result, hit_cell and t_hit equal the golden value bit
-//     for bit, misses included (golden.c checks that vtrace_ref and its wiki
-//     model agree on every field of every ray);
+//   - active lanes on a hit: result, hit_cell and t_hit equal the golden
+//     value bit for bit; on a miss only hit and steps (result[0] and
+//     result[15:8]) must match, the other fields being undefined (Shared,
+//     VTRACE result; Tai_2 P6 item 5);
 //   - lanes outside lane_mask: outputs unchanged.
 // World model: WORLD_LATENCY = 1 is a registered read of every lane's address.
 // WORLD_LATENCY = 2 is the tb/ddr world_mem model (D17): a phase bit toggles
@@ -65,7 +66,7 @@ module vtrace_tb;
   // ---------------------------------------------------------------- data ----
   logic [31:0] grp [];
   string       dir;
-  int          errors = 0, checked = 0, cycles_total = 0, steps_total = 0;
+  int          errors = 0, checked = 0, hits = 0, cycles_total = 0, steps_total = 0;
 
   task automatic load(input string set, output int n);
     int fd, c;
@@ -190,13 +191,18 @@ module vtrace_tb;
       ec = 17'(lw(g, l, 9));
       et = lw(g, l, 10);
       checked++;
-      if (result[l] !== er || hit_cell[l] !== ec || t_hit[l] !== et) begin
-        $display("ERROR %s group %0d lane %0d ms %0d: got result %h cell %h t %h, want %h %h %h",
-                 set, g, l, ms, result[l], hit_cell[l], t_hit[l], er, ec, et);
-        $display("  fields %h %h %h %h %h %h %h %h", lw(g, l, 0), lw(g, l, 1), lw(g, l, 2), lw(g, l, 3),
-                 lw(g, l, 4), lw(g, l, 5), lw(g, l, 6), lw(g, l, 7));
-        errors++;
+      if (er[0]) begin
+        hits++;
+        if (result[l] === er && hit_cell[l] === ec && t_hit[l] === et) continue;
+      end else if (result[l][0] === 1'b0 && result[l][15:8] === er[15:8]) begin
+        continue;
       end
+      $display("ERROR %s group %0d lane %0d ms %0d %s: got result %h cell %h t %h, want %h %h %h",
+               set, g, l, ms, er[0] ? "hit" : "miss (hit and steps only)",
+               result[l], hit_cell[l], t_hit[l], er, ec, et);
+      $display("  fields %h %h %h %h %h %h %h %h", lw(g, l, 0), lw(g, l, 1), lw(g, l, 2), lw(g, l, 3),
+               lw(g, l, 4), lw(g, l, 5), lw(g, l, 6), lw(g, l, 7));
+      errors++;
     end
     expect_unchanged($sformatf("%s group %0d inactive lanes", set, g), ~mask);
 
@@ -212,12 +218,12 @@ module vtrace_tb;
   endtask
 
   task automatic run_set(input string set);
-    int n, c0, s0, k0;
+    int n, c0, s0, k0, h0;
     load(set, n);
-    c0 = cycles_total; s0 = steps_total; k0 = checked;
+    c0 = cycles_total; s0 = steps_total; k0 = checked; h0 = hits;
     for (int g = 0; g < n; g++) run_group(set, g);
-    $display("vtrace_tb: %s: %0d groups, %0d rays, %0d walk cycles for %0d steps (%0.2f cycles/step)",
-             set, n, checked - k0, cycles_total - c0, steps_total - s0,
+    $display("vtrace_tb: %s: %0d groups, %0d rays (%0d hits), %0d walk cycles for %0d steps (%0.2f cycles/step)",
+             set, n, checked - k0, hits - h0, cycles_total - c0, steps_total - s0,
              real'(cycles_total - c0) / real'(steps_total - s0));
   endtask
 
@@ -235,8 +241,8 @@ module vtrace_tb;
     run_set("edge");
     run_set("rand");
 
-    $display("vtrace_tb: WORLD_LATENCY = %0d, %0d rays checked bit for bit, misses included",
-             WORLD_LATENCY, checked);
+    $display("vtrace_tb: WORLD_LATENCY = %0d, %0d rays checked: %0d hits bit for bit, %0d misses on hit and steps",
+             WORLD_LATENCY, checked, hits, checked - hits);
     if (errors != 0) $fatal(1, "vtrace_tb: FAIL, %0d errors", errors);
     $display("vtrace_tb: PASS");
     $finish;
