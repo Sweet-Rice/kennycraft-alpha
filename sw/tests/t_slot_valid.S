@@ -137,8 +137,8 @@ main:
     #   packed = 0x294F
     #
     # Single-step geometry stepping +x:
-    #   tMax.x = 1.0 (0x00010000), tMax.y/z large (0x7FFF0000)
-    #   tDelta.x = 1.0 (0x00010000), tDelta.y/z large (0x7FFF0000)
+    #   tMax.x = 1.0 (0x00010000), tMax.y/z large (0x07FFF000)
+    #   tDelta.x = 1.0 (0x00010000), tDelta.y/z large (0x07FFF000)
     #   signs = 0 (+x, +y, +z)
 
     # Part A: Slot 1 INVALID (SLOT_VALID = 0x0001)
