@@ -7,11 +7,17 @@
 // (+trace), and memory and register peek helpers. The world port is unused
 // (EXT_WORLD = 0, internal stub).
 //
-// LANES (-GLANES=n) sizes the core. lane_x[l][n] is lane l's register n.
+// LANES (-GLANES=n) sizes the core. lane_x[l][n] is lane l's register n. KC_BASE_CORE (define) builds against
+// the Stage 0 core (one register file, no per-lane retire wires) for
+// tracediff against the pre-lanes RTL.
 
 parameter int LANES = 1;
 
+`ifdef KC_BASE_CORE
+`define KC_RF(l) dut.u_core.u_rf
+`else
 `define KC_RF(l) dut.u_core.g_lane[l].u_lane.u_rf
+`endif
 
 localparam int CLK_NS   = 20;    // 50 MHz core clock
 localparam int BIT_CLKS = 50;    // 1 Mbaud: 50 clocks per bit
@@ -153,20 +159,32 @@ endtask
 
 // ---------------------------------------------------------------------
 // Retirement trace from the core's retire_* wires: +trace prints one line
-// per retired instruction (with the rd write, if any) and one per halt.
+// per retired instruction (cycle, PC, instruction, active mask, lane 0's rd
+// write if any), one line per other lane that wrote rd, and one per halt.
+// tb/core/tracediff.py compares these lines between two builds.
 // ---------------------------------------------------------------------
 bit trace_on = 1'b0;
 initial trace_on = $test$plusargs("trace");
 
 always @(posedge clk) begin
     if (trace_on && !rst) begin
-        if (dut.u_core.retire_valid && dut.u_core.retire_rd_we)
-            $display("trace pc=%08h inst=%08h x%0d=%08h", dut.u_core.retire_pc,
-                     dut.u_core.retire_inst, dut.u_core.retire_rd_addr, dut.u_core.retire_rd_wdata);
-        else if (dut.u_core.retire_valid)
-            $display("trace pc=%08h inst=%08h", dut.u_core.retire_pc, dut.u_core.retire_inst);
+        if (dut.u_core.retire_valid) begin
+            if (dut.u_core.retire_rd_we)
+                $display("trace %0d pc=%08h inst=%08h m=%0h x%0d=%08h", cycle,
+                         dut.u_core.retire_pc, dut.u_core.retire_inst, dut.u_core.retire_mask,
+                         dut.u_core.retire_rd_addr, dut.u_core.retire_rd_wdata);
+            else
+                $display("trace %0d pc=%08h inst=%08h m=%0h", cycle, dut.u_core.retire_pc,
+                         dut.u_core.retire_inst, dut.u_core.retire_mask);
+`ifndef KC_BASE_CORE
+            for (int l = 1; l < LANES; l++)
+                if (dut.u_core.retire_lane_we[l])
+                    $display("trace %0d   lane%0d x%0d=%08h", cycle, l,
+                             dut.u_core.retire_rd_addr, dut.u_core.retire_lane_wdata[l]);
+`endif
+        end
         if (dut.u_core.err_set != 0)
-            $display("trace pc=%08h halt err=%b", dut.u_core.err_pc, dut.u_core.err_set);
+            $display("trace %0d pc=%08h halt err=%b", cycle, dut.u_core.err_pc, dut.u_core.err_set);
     end
 end
 

@@ -10,6 +10,10 @@
 #   lint-core               verilator -Wall over rtl/core, rtl/mem, rtl/soc
 #                           at LANES = 1 and LANES = 8
 #
+# Not in `make check`: `make tracediff-base-core` (Stage 1 rung 1) builds
+# every test above against the Stage 0 core of git ref CORE_BASE_REF and
+# compares its LANES = 1 trace with the current core's.
+#
 # `make tb-core-t_cpi` prints the measured CPI of every instruction class.
 # Add PLUSARGS=+trace for a per-instruction retirement trace.
 
@@ -18,13 +22,15 @@ CORE_SW_FLAGS := -march=rv32i_zmmul -mabi=ilp32 -nostdlib -nostartfiles \
                  -Wl,--build-id=none -Ttb/core/sw/test.ld
 CORE_SW_OBJ   := $(OBJ)/core_sw
 
-CORE_RTL  := rtl/kc_isa_pkg.sv $(wildcard rtl/core/*.sv) $(wildcard rtl/mem/*.sv) \
-             $(wildcard rtl/soc/*.sv)
+CORE_RTL_CORE := $(wildcard rtl/core/*.sv)
+CORE_RTL_REST := $(wildcard rtl/mem/*.sv) $(wildcard rtl/soc/*.sv)
+CORE_RTL      := rtl/kc_isa_pkg.sv $(CORE_RTL_CORE) $(CORE_RTL_REST)
 CORE_TBS  := datapath_tb program_mem_tb
 CORE_PROG := t_zmmul t_uart t_illegal t_mmio t_lanectl t_cpi
+CORE_ALL  := $(CORE_TBS) $(CORE_PROG)
 PLUSARGS  ?=
 
-TB_TARGETS += $(addprefix tb-core-,$(CORE_TBS) $(CORE_PROG)) lint-core
+TB_TARGETS += $(addprefix tb-core-,$(CORE_ALL)) lint-core
 
 # Test programs -> imem/dmem images
 $(CORE_SW_OBJ)/%.elf: tb/core/sw/%.S tb/core/sw/kc_test.h tb/core/sw/test.ld
@@ -39,23 +45,46 @@ $(CORE_SW_OBJ)/%_imem.hex $(CORE_SW_OBJ)/%_dmem.hex: $(CORE_SW_OBJ)/%.elf tb/cor
 
 .PRECIOUS: $(CORE_SW_OBJ)/%.elf $(CORE_SW_OBJ)/%_imem.hex $(CORE_SW_OBJ)/%_dmem.hex
 
-CORE_VL = $(VERILATOR) $(VL_TB) -Itb/core -Mdir $(OBJ)/core_$(1) --top-module $(1) \
-          $(CORE_RTL) tb/core/$(1).sv
+# Memory images per testbench
+CORE_HEX_datapath_tb    :=
+CORE_HEX_program_mem_tb := -GIMEM_HEX='"$(CURDIR)/tb/core/program.mem"'
+$(foreach t,$(CORE_PROG),$(eval CORE_HEX_$(t)_tb := \
+    -GIMEM_HEX='"$(CURDIR)/$(CORE_SW_OBJ)/$(t)_imem.hex"' \
+    -GDMEM_HEX='"$(CURDIR)/$(CORE_SW_OBJ)/$(t)_dmem.hex"'))
 
-tb-core-datapath_tb:
+# Testbench module of a test name (t_zmmul -> t_zmmul_tb, datapath_tb as is)
+core_tb = $(if $(filter %_tb,$(1)),$(1),$(1)_tb)
+core_hex_deps = $(if $(filter $(1),$(CORE_PROG)),$(CORE_SW_OBJ)/$(1)_imem.hex $(CORE_SW_OBJ)/$(1)_dmem.hex)
+
+# $(call CORE_VL,tb module,obj suffix,extra flags[,rtl])
+CORE_VL = $(VERILATOR) $(VL_TB) -Itb/core -Mdir $(OBJ)/core_$(1)$(2) --top-module $(1) \
+          $(if $(4),$(4),$(CORE_RTL)) tb/core/$(1).sv $(CORE_HEX_$(1)) $(3)
+core_bin = $(OBJ)/core_$(1)$(2)/V$(1)
+
+define CORE_TB_RULES
+tb-core-$(1): $(call core_hex_deps,$(1))
 	@mkdir -p $(OBJ)
-	$(call CORE_VL,datapath_tb)
-	$(OBJ)/core_datapath_tb/Vdatapath_tb $(PLUSARGS)
+	$(call CORE_VL,$(call core_tb,$(1)))
+	$(call core_bin,$(call core_tb,$(1))) $(PLUSARGS)
+endef
+$(foreach t,$(CORE_ALL),$(eval $(call CORE_TB_RULES,$(t))))
 
-tb-core-program_mem_tb:
-	@mkdir -p $(OBJ)
-	$(call CORE_VL,program_mem_tb) -GIMEM_HEX='"$(CURDIR)/tb/core/program.mem"'
-	$(OBJ)/core_program_mem_tb/Vprogram_mem_tb $(PLUSARGS)
+# Rung 1: the Stage 0 core (git ref CORE_BASE_REF) against the current core,
+# both at LANES = 1, same harness, same test images
+CORE_BASE_REF ?= 16bccea
+CORE_BASE_DIR := $(OBJ)/core_base_rtl
 
-$(addprefix tb-core-,$(CORE_PROG)): tb-core-%: $(CORE_SW_OBJ)/%_imem.hex $(CORE_SW_OBJ)/%_dmem.hex
-	$(call CORE_VL,$*_tb) -GIMEM_HEX='"$(CURDIR)/$(CORE_SW_OBJ)/$*_imem.hex"' \
-	    -GDMEM_HEX='"$(CURDIR)/$(CORE_SW_OBJ)/$*_dmem.hex"'
-	$(OBJ)/core_$*_tb/V$*_tb $(PLUSARGS)
+tracediff-base-core: $(addprefix tracediff-base-core-,$(CORE_ALL))
+
+$(addprefix tracediff-base-core-,$(CORE_ALL)): tracediff-base-core-%: tb-core-%
+	@rm -rf $(CORE_BASE_DIR)_$* && mkdir -p $(CORE_BASE_DIR)_$*
+	git archive $(CORE_BASE_REF) rtl/core | tar -x -C $(CORE_BASE_DIR)_$*
+	$(call CORE_VL,$(call core_tb,$*),_base,+define+KC_BASE_CORE, \
+	    rtl/kc_isa_pkg.sv $$(ls $(CORE_BASE_DIR)_$*/rtl/core/*.sv) $(CORE_RTL_REST))
+	python3 tb/core/tracediff.py $*@base $(call core_bin,$(call core_tb,$*),_base) \
+	    $(call core_bin,$(call core_tb,$*))
+
+.PHONY: tracediff-base-core $(addprefix tracediff-base-core-,$(CORE_ALL))
 
 lint-core:
 	$(VERILATOR) $(VL_LINT) --top-module kc_soc $(CORE_RTL)
