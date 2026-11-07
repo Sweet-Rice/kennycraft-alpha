@@ -9,6 +9,27 @@
 #
 # Run from the repo root:  vivado -mode batch -source fpga/build.tcl
 # The MCP enters through build/build.tcl, which sources this file.
+#
+# Outputs in $out: top.bit, timing.rpt, utilization.rpt (+ _hier), routed.dcp,
+# top.mmi (write_mem_info: XPM memories only, i.e. the ddr_bridge FIFOs) and,
+# for KC_TARGET=top, kc.mmi (fpga/kc_mmi.tcl): the imem, dmem and texture
+# BRAMs, which are inferred and so missing from top.mmi. The palette is not in
+# it: it sits in a RAMB18, and updatemem 2026.1 mis-places RAMB18 bit lanes
+# (it read RAMB18_X0Y26 as RAMB36_X0Y26, i.e. imem), so palette.hex changes
+# need a rebuild.
+#
+# Fast rebuild (D8): new kc_imem.hex / kc_dmem.hex / textures.hex go into the
+# last bitstream without Vivado:
+#   [FPGA_STATE=<MCP state dir>] fpga/patch_bit.sh $out obj_dir/top_hex <dir> [program]
+# (FPGA_STATE is required with `program`: it names the MCP's hardware.lock)
+# which converts each image with fpga/hex2mem.py (kc_imem 32, kc_dmem 32,
+# textures 4 bits) and runs
+#   updatemem -force -meminfo $out/kc.mmi -bit $out/top.bit \
+#     -data kc_imem.mem -proc imem -data kc_dmem.mem -proc dmem \
+#     -data textures.mem -proc tex \
+#     -out <dir>/patched.bit
+# then, with `program`, fpga/program.tcl under the MCP hardware lock (the
+# MCP's own `program` only accepts unmodified build outputs).
 
 set root [file normalize [file join [file dirname [info script]] ..]]
 cd $root
@@ -29,6 +50,15 @@ source $sources
 if {$top eq ""} { error "$sources did not set top" }
 
 synth_design -top $top -part $part
+if {$target eq "top"} {
+    source fpga/kc_mmi.tcl
+    set kc_mems {
+        {imem    u_soc/u_imem/*    32 8192}
+        {dmem    u_soc/u_dmem/*    32 8192}
+        {tex     u_soc/u_tex/*      4 16384}
+    }
+    kc_record_brams $kc_mems
+}
 if {[info exists ::env(FPGA_FAIL_TIMING)] && $::env(FPGA_FAIL_TIMING)} {
     # Acceptance-only: every target's 100 MHz board clock port is `clk` (E3).
     create_clock -name sys_clk -period 0.5 [get_ports clk]
@@ -40,9 +70,14 @@ route_design
 
 report_timing_summary -report_unconstrained -check_timing_verbose -file $out/timing.rpt
 report_utilization -file $out/utilization.rpt
+report_utilization -hierarchical -hierarchical_depth 4 -file $out/utilization_hier.rpt
 check_timing -verbose -file $out/check_timing.rpt
 write_checkpoint -force $out/routed.dcp
 write_bitstream -force $out/top.bit
+write_mem_info -force $out/top.mmi
+if {$target eq "top"} {
+    kc_write_mmi $out/kc.mmi $kc_mems
+}
 
 set log $out/build.log
 if {![file exists $log]} {
