@@ -22,13 +22,13 @@ typedef struct {
     q16 pos[3];          // feet center, absolute blocks
     q16 vel_y;
     q16 yaw, pitch;      // Q16 angle units (1024 per turn)
-    int32_t on_ground;
-    int32_t selected;    // hotbar slot 0..8
-    uint32_t held;       // bitmask of held movement/look keys
-    int32_t aim_hit;     // aimed block (absolute) valid?
-    int32_t aim[3], place[3];
-    int32_t want_break, want_place;   // set by keys, applied in pick_and_edit()
-} kc_player;
+    int16_t aim[3], place[3];         // aimed block and the cell in front of it (absolute)
+    uint16_t held;       // bitmask of held movement/look keys (9 bits)
+    uint8_t on_ground;
+    uint8_t selected;    // hotbar slot 0..8
+    uint8_t aim_hit;     // aim / place valid?
+    uint8_t want_break, want_place;   // set by keys, applied in pick_and_edit()
+} kc_player;                          // 44 bytes
 
 extern kc_player kc_me;
 
