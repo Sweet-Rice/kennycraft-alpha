@@ -17,7 +17,7 @@ The design doc is the [GitHub wiki](https://github.com/Sweet-Rice/kennycraft-alp
 ## Checks
 
 ```sh
-make check                                     # every registered Verilator testbench and lint target
+make check                                     # every registered Verilator testbench and lint target, JOBS (default nproc) at a time
 vivado -mode batch -source fpga/build.tcl      # KC_TARGET=<name> picks fpga/<name>/sources.tcl
 ```
 
