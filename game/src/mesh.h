@@ -52,5 +52,8 @@ void mesh_mark_block(int32_t ax, int32_t az); // block edit: its slot, plus neig
 void mesh_update(void);                     // rebuild every marked slot (lane 0)
 int32_t mesh_pages_used(void);
 int32_t mesh_total_quads(void);
+#ifdef KC_HOST
+extern uint32_t mesh_stat_slots;            // laptop profiling: chunks meshed since boot
+#endif
 
 #endif

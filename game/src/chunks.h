@@ -38,6 +38,7 @@ int     world_ready(void);                     // window complete and committed
 int     world_storage_ok(void);                // DDR3 calibrated (else every chunk is generated)
 int     world_slot_chunk(int slot);            // chunk id (cz * 256 + cx) + 1 if loaded, else 0
 int     world_loaded(int x, int z);            // block column's chunk is loaded and valid
+uint32_t world_column_bits(int x, int z);      // bit y = solid (not air); all ones if not loaded
 uint32_t world_stats_generated(void);          // chunks generated since boot
 uint32_t world_stats_tag_hits(void);           // loads whose tag matched (0 with KC_GEN_BITMAP)
 uint32_t world_stats_tag_misses(void);         // loads with no matching tag, then generated

@@ -531,8 +531,8 @@ static int cmd_sweep(const char *mode) {
     printf("  arena high water: %u of %u bytes (first reached at location %u)\n",
            (unsigned)arena_high_water(), (unsigned)ARENA_SIZE, (unsigned)worst_loc);
     printf("  window digest %016llx\n", (unsigned long long)wd);
-    if (raster) printf("  mesh digest   %016llx (%d quads, %d pages now)\n", (unsigned long long)md,
-                       mesh_total_quads(), mesh_pages_used());
+    if (raster) printf("  mesh digest   %016llx (%d quads, %d pages now, %u chunks meshed)\n", (unsigned long long)md,
+                       mesh_total_quads(), mesh_pages_used(), (unsigned)mesh_stat_slots);
     return 0;
 }
 
