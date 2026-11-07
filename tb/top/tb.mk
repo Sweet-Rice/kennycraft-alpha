@@ -26,6 +26,12 @@
 #                    t_top_frame.sv);
 #                    TOP_HEX=dir runs other images (e.g. ones patched in with
 #                    fpga/patch_bit.sh), TOP_OUT=dir puts the frames elsewhere.
+#   tb-top-golden-<build>
+#                    the same run (GOLDEN_FRAMES frames, into $(OBJ)/top/<build>),
+#                    then tb/top/kc_golden.c compares every frame pixel for pixel
+#                    with the plain-C reference: Kennedy's game sources on his
+#                    laptop HAL running the chip's kc_init + kc_frame sequence.
+#                    make check runs it for kc_chip8 (P5 rung 8).
 #   lint-top         verilator -Wall over the whole top at Stage 1 and Stage 0
 #                    (sim models for the MMCM, BUFG, MIG and XPM, as in tb/ddr)
 
@@ -38,6 +44,8 @@ TOP_FRAMES    ?= 1
 TOP_SWAPS     ?= 0
 TOP_TIMEOUT   ?= 20
 TOP_ARGS      ?=
+GOLDEN_FRAMES ?= 2
+HOST_CC       ?= zig cc
 TOP_RTL    := rtl/kc_isa_pkg.sv $(wildcard rtl/core/*.sv) $(wildcard rtl/mem/*.sv) \
               $(wildcard rtl/soc/*.sv) $(wildcard rtl/display/*.sv) \
               rtl/ddr/chunk_engine.sv rtl/ddr/ddr_bridge.sv rtl/ddr/world_remap.sv \
@@ -49,9 +57,9 @@ TOP_IMAGES := kc_imem.hex kc_dmem.hex textures.hex palette.hex
 top_lanes = $(if $(filter kc_chip8%,$(1)),8,1)
 top_div   = $(if $(filter kc_chip8%,$(1)),1,0)
 
-TB_TARGETS += tb-top-t_top_frame lint-top
+TB_TARGETS += tb-top-t_top_frame tb-top-golden-kc_chip8 lint-top
 
-.PHONY: top-hex
+.PHONY: top-hex $(addprefix tb-top-golden-,$(TOP_ELFS))
 top-hex: $(foreach e,$(TOP_ELFS),$(addprefix $(TOP_GEN)/$(e)/,$(TOP_IMAGES)))
 
 # game/ owns its build; its outputs (game/build, game/gen) are gitignored there.
@@ -64,7 +72,7 @@ game/build/kc_chip8.elf: $(GAME_DEPS)
 game/build/kc_chip_raster.elf game/build/kc_chip8_raster.elf &: $(GAME_DEPS)
 	$(MAKE) -C game chip-raster
 
-game/gen/textures.hex game/gen/palette.hex: game/build/kc_chip.elf
+game/gen/textures.hex game/gen/palette.hex game/gen/kc_assets.h game/gen/kc_tables.h: game/build/kc_chip.elf
 
 define TOP_IMAGE_RULES
 $(TOP_GEN)/$(1)/kc_imem.hex $(TOP_GEN)/$(1)/kc_dmem.hex &: game/build/$(1).elf tb/core/sw/bin2hex.py
@@ -94,6 +102,28 @@ endef
 
 tb-top-t_top_frame: $(addprefix $(TOP_HEX)/,$(TOP_IMAGES))
 	$(call top_run,$(TOP_ELF),$(TOP_HEX),$(TOP_OUT),$(TOP_FRAMES))
+
+# Plain-C reference: the game's sources + game/host/hal_host.c, KC_LANES = 1,
+# with or without the rasterizer to match the chip build.
+GOLDEN_SRC := $(addprefix game/src/,kc_libc.c arena.c fixed.c trace.c render.c terrain.c \
+                chunks.c game.c kc_main.c) game/host/hal_host.c tb/top/kc_golden.c
+GOLDEN_CFLAGS := -std=c11 -O2 -Wall -Wextra -Wno-unused-parameter -Igame/src -Igame/gen -Igame/host -DKC_HOST
+
+$(OBJ)/kc_golden_ray: $(GOLDEN_SRC) $(wildcard game/src/*.h) game/gen/kc_assets.h game/gen/kc_tables.h
+	@mkdir -p $(OBJ)
+	$(HOST_CC) $(GOLDEN_CFLAGS) $(GOLDEN_SRC) -o $@
+$(OBJ)/kc_golden_raster: $(GOLDEN_SRC) $(wildcard game/src/*.h) game/gen/kc_assets.h game/gen/kc_tables.h
+	@mkdir -p $(OBJ)
+	$(HOST_CC) $(GOLDEN_CFLAGS) -DKC_RASTER=1 $(GOLDEN_SRC) game/src/mesh.c game/src/raster.c -o $@
+
+top_golden = $(OBJ)/kc_golden_$(if $(filter %_raster,$(1)),raster,ray)
+
+define TOP_GOLDEN_RULE
+tb-top-golden-$(1): $(addprefix $(TOP_GEN)/$(1)/,$(TOP_IMAGES)) $(call top_golden,$(1))
+	$(call top_run,$(1),$(TOP_GEN)/$(1),$(OBJ)/top/$(1),$(GOLDEN_FRAMES))
+	$(call top_golden,$(1)) $(GOLDEN_FRAMES) $(OBJ)/top/$(1) $(OBJ)/top/$(1)
+endef
+$(foreach e,$(TOP_ELFS),$(eval $(call TOP_GOLDEN_RULE,$(e))))
 
 lint-top:
 	$(VERILATOR) $(VL_LINT) --timing --top-module top $(TOP_RTL)
