@@ -1,0 +1,7 @@
+`verilator_config
+public_flat_rd -module "fixture_top" -var "swap_req"
+public_flat_rd -module "fixture_top" -var "swap_pending"
+public_flat_rd -module "fixture_top" -var "fb_mode"
+public_flat_rd -module "fixture_top" -var "front_sel"
+public_flat_rd -module "fixture_top" -var "fb_mem"
+public_flat_rd -module "fixture_top" -var "pal_mem"
