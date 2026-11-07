@@ -8,9 +8,16 @@
 #define KC_CHUNKS_H
 #include <stdint.h>
 
+#ifndef KC_GEN_BITMAP
+#define KC_GEN_BITMAP 0     // 1: issue #2's 8 KB "generated" bitmap; 0: tags inside the DDR3 chunks
+#endif
+#ifndef KC_TAG_PERSIST
+#define KC_TAG_PERSIST 0    // 1: tags without the boot nonce, so stored chunks survive a reset
+#endif
+
 // ---- high level ------------------------------------------------------------------------
 // Once per frame. Keeps the player 24-40 blocks from every window edge: evicts (storing
-// dirty chunks), loads chunks generated before, generates new ones (at most one per frame
+// dirty chunks), loads chunks stored this boot, generates new ones (at most one per frame
 // after startup), and moves WIN_ORIGIN once the whole new edge is in.
 void    world_update(int px, int pz);
 uint8_t world_get(int x, int y, int z);        // air if not loaded, bedrock below y = 0
@@ -32,5 +39,10 @@ int     world_storage_ok(void);                // DDR3 calibrated (else every ch
 int     world_slot_chunk(int slot);            // chunk id (cz * 256 + cx) + 1 if loaded, else 0
 int     world_loaded(int x, int z);            // block column's chunk is loaded and valid
 uint32_t world_stats_generated(void);          // chunks generated since boot
+uint32_t world_stats_tag_hits(void);           // loads whose tag matched (0 with KC_GEN_BITMAP)
+uint32_t world_stats_tag_misses(void);         // loads with no matching tag, then generated
+#ifdef KC_HOST
+void    world_reboot(void);                    // laptop: forget all state, as a reset would
+#endif
 
 #endif
