@@ -1,7 +1,37 @@
 #!/usr/bin/env python3
-"""Forward focused pygame keyboard events to KennyCraft's 1 Mbaud UART."""
+"""Forward focused pygame keyboard events to KennyCraft's 1 Mbaud UART.
+
+The board UART is only opened under the board claim and hardware lock of
+scripts/board.sh keys (issue #1 taking-board, fpga-tools MCP hardware.lock);
+run directly, it re-runs itself through board.sh.
+"""
 import argparse
+import fcntl
+import os
+from pathlib import Path
+import stat
 import sys
+
+
+def hold_board(port):
+    """Return None when board.sh holds the lock for us, else exec board.sh keys."""
+    fd = os.environ.get('KC_HARDWARE_LOCK_FD')
+    if fd is None:
+        root = Path(__file__).resolve().parents[1]
+        os.chdir(root)
+        os.environ['PYTHON'] = sys.executable
+        print('keys: claiming the board through scripts/board.sh keys', file=sys.stderr)
+        os.execvp('bash', ['bash', 'scripts/board.sh', 'keys', '--port', port])
+    try:
+        # board.sh holds the flock on this open file description; taking it
+        # again here is a no-op and guarantees it is held while the UART is open.
+        if not stat.S_ISREG(os.fstat(int(fd)).st_mode):
+            raise OSError(f'KC_HARDWARE_LOCK_FD={fd} is not a lock file')
+        fcntl.flock(int(fd), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, ValueError) as error:
+        print(f'keys: hardware lock not held: {error}', file=sys.stderr)
+        return 5
+    return None
 
 
 def main(argv=None):
@@ -19,6 +49,12 @@ def main(argv=None):
         print('keys: pyserial is not installed; pip install pyserial', file=sys.stderr)
         return 5
     port = args.port
+    if not os.path.exists(port):
+        print(f'keys: {port} does not exist; set --port (make keys PORT=)', file=sys.stderr)
+        return 5
+    status = hold_board(port)
+    if status is not None:
+        return status
     keymap = {
         pygame.K_w: 0x77, pygame.K_a: 0x61, pygame.K_s: 0x73, pygame.K_d: 0x64,
         pygame.K_SPACE: 0x20,
