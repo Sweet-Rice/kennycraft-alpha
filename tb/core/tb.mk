@@ -7,6 +7,8 @@
 #   tb-core-t_lanectl, tb-core-t_cpi
 #                           programs in tb/core/sw/*.S, assembled with the
 #                           RISC-V GCC, loaded as kc_imem/kc_dmem images
+#   tb-core-t_laneid        Stage 1 rung 3, LANEID / MASKALL / scalar lane
+#   tb-core-<t>-l8          the Stage 1 tests (CORE_L8) at LANES = 8
 #   tracediff-core-<tb>     Stage 1 rung 2: the same test at LANES = 8 with
 #                           only lane 0 able to activate (LANE0_ONLY), whose
 #                           retirement trace must equal the LANES = 1 trace
@@ -30,12 +32,13 @@ CORE_RTL_CORE := $(wildcard rtl/core/*.sv)
 CORE_RTL_REST := $(wildcard rtl/mem/*.sv) $(wildcard rtl/soc/*.sv)
 CORE_RTL      := rtl/kc_isa_pkg.sv $(CORE_RTL_CORE) $(CORE_RTL_REST)
 CORE_TBS  := datapath_tb program_mem_tb
-CORE_PROG := t_zmmul t_uart t_illegal t_mmio t_lanectl t_cpi
+CORE_PROG := t_zmmul t_uart t_illegal t_mmio t_lanectl t_cpi t_laneid
+CORE_L8   := t_laneid
 CORE_ALL  := $(CORE_TBS) $(CORE_PROG)
 PLUSARGS  ?=
 
 TB_TARGETS += $(addprefix tb-core-,$(CORE_ALL)) $(addprefix tracediff-core-,$(CORE_ALL)) \
-              lint-core
+              $(addsuffix -l8,$(addprefix tb-core-,$(CORE_L8))) lint-core
 
 # Test programs -> imem/dmem images
 $(CORE_SW_OBJ)/%.elf: tb/core/sw/%.S tb/core/sw/kc_test.h tb/core/sw/test.ld
@@ -79,6 +82,15 @@ tracediff-core-$(1): tb-core-$(1)
 	    $(call core_bin,$(call core_tb,$(1)),_l8z)
 endef
 $(foreach t,$(CORE_ALL),$(eval $(call CORE_TB_RULES,$(t))))
+
+# Stage 1 tests at LANES = 8, every lane free
+define CORE_L8_RULES
+tb-core-$(1)-l8: $(call core_hex_deps,$(1))
+	@mkdir -p $(OBJ)
+	$(call CORE_VL,$(call core_tb,$(1)),_l8,-GLANES=8)
+	$(call core_bin,$(call core_tb,$(1)),_l8) $(PLUSARGS)
+endef
+$(foreach t,$(CORE_L8),$(eval $(call CORE_L8_RULES,$(t))))
 
 # Rung 1: the Stage 0 core (git ref CORE_BASE_REF) against the current core,
 # both at LANES = 1, same harness, same test images
