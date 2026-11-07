@@ -29,7 +29,7 @@ def build(name, args):
         subprocess.run([*command, str(elf), str(binary)], check=True)
         subprocess.run([sys.executable, 'scripts/elf2hex.py', str(binary),
                         str(directory / f'kc_{kind}.hex'), '--offset-bytes', offset,
-                        '--words', '8192'], check=True)
+                        '--words', '8192', *(['--nonempty'] if kind == 'imem' else [])], check=True)
     return directory
 
 

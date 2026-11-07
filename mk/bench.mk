@@ -37,7 +37,7 @@ out/kc_dmem.bin: out/kc.elf
 	$(OBJCOPY) -O binary -j .rodata -j .data $< $@
 
 out/kc_imem.hex: out/kc_imem.bin scripts/elf2hex.py
-	$(PYTHON) scripts/elf2hex.py $< $@ --offset-bytes 0 --words 8192
+	$(PYTHON) scripts/elf2hex.py $< $@ --offset-bytes 0 --words 8192 --nonempty
 
 out/kc_dmem.hex: out/kc_dmem.bin scripts/elf2hex.py
 	$(PYTHON) scripts/elf2hex.py $< $@ --offset-bytes 0x100 --words 8192

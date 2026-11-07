@@ -12,11 +12,16 @@ def main():
     p.add_argument('--offset-bytes', type=lambda s: int(s, 0), required=True)
     p.add_argument('--words', type=int, default=8192)
     p.add_argument('--mem', action='store_true')
+    p.add_argument('--nonempty', action='store_true',
+                   help='fail on an empty input (an instruction image must hold code)')
     a = p.parse_args()
     if a.offset_bytes < 0 or a.words < 0:
         p.error('offset and words must be nonnegative')
     try:
         data = a.input.read_bytes()
+        if a.nonempty and not data:
+            print(f'elf2hex: {a.input} is empty', file=sys.stderr)
+            return 1
         size = (a.offset_bytes + len(data) + 3) // 4
         if size > a.words:
             print(f'elf2hex: image too large ({size} words > {a.words})', file=sys.stderr)
