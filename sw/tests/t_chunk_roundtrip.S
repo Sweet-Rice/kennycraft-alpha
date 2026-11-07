@@ -114,9 +114,33 @@ main:
     li      t4, 32
     bltu    t1, t4, .Lclear_y
 
-    # Verify sample block cleared
-    lbu     t0, 0(s2)
+    # Verify every block of the slot reads back as air before the reload,
+    # so dropped clears cannot leave the old pattern for the reload check
+    li      t1, 0                   # y = 0
+.Lverify_clear_y:
+    li      t2, 0                   # z = 0
+.Lverify_clear_z:
+    li      t3, 0                   # x = 0
+.Lverify_clear_x:
+    slli    t5, t1, 12
+    slli    t6, t2, 6
+    or      t5, t5, t6
+    or      t5, t5, t3
+    add     t5, s2, t5
+    lbu     t0, 0(t5)
+    andi    t0, t0, 0x0F
     bnez    t0, .Lfail_clear
+
+    addi    t3, t3, 1
+    li      t4, 16
+    bltu    t3, t4, .Lverify_clear_x
+
+    addi    t2, t2, 1
+    bltu    t2, t4, .Lverify_clear_z
+
+    addi    t1, t1, 1
+    li      t4, 32
+    bltu    t1, t4, .Lverify_clear_y
 
     # 8. Issue CHUNK_CMD LOAD: op=0 (bit 31), cz=0, cx=0 -> 0x00000000
     sw      zero, 0x30(s0)
