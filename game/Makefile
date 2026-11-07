@@ -17,9 +17,18 @@ GEN      := gen/kc_tables.h gen/kc_assets.h gen/textures.hex gen/palette.hex
 CC       ?= cc
 CFLAGS   := -std=c11 -O2 -Wall -Wextra -Wno-unused-parameter -Isrc -Igen -Ihost
 CHIP_CC  ?= clang
-CHIP_FLAGS := --target=riscv32-unknown-elf -march=rv32i_zmmul -mabi=ilp32 -O2 -ffreestanding \
+CHIP_FLAGS := --target=riscv32-unknown-elf -march=rv32i_zmmul -mabi=ilp32 -ffreestanding \
               -nostdlib -fno-builtin -fno-jump-tables -Wall -Isrc -Igen -mno-relax \
-              -DKC_CHIP -msmall-data-limit=0   # no .sdata/.sbss: Bennett's kc.ld only collects .bss*
+              -DKC_CHIP -msmall-data-limit=0 -ffunction-sections -fdata-sections
+CHIP_LDFLAGS := -Wl,--gc-sections,--entry=_start
+# -msmall-data-limit=0: no .sdata/.sbss, Bennett's kc.ld only collects .bss*.
+# --gc-sections drops functions a build never calls (kc.ld has no ENTRY, so name _start).
+# Per-file optimization. The kernel files (everything the lanes run per pixel / per
+# triangle) stay at -O2; lane-0 game code is built for size: IMEM is 32 KB.
+KERNEL_OPT := -O2
+GAME_OPT   := -Os
+GAME_FILES := arena.c terrain.c chunks.c game.c kc_main.c mesh.c
+chip_opt    = $(if $(filter $(GAME_FILES),$(notdir $(1))),$(GAME_OPT),$(KERNEL_OPT))
 
 .PHONY: all shots play vectors contract compare bench chip chip8 chip-raster clean
 all: build/kc_host
@@ -49,15 +58,19 @@ bench: build/kc_host
 
 # Ray tracer: Bennett's real kc.ld + crt0 (bench/kc-bench). crt0 runs MASKALL/LANEID/MASKSET,
 # which Stage 0 executes at LANES = 1 (issue #1, option A).
-build/kc_chip.elf: $(SRC) $(GEN) src/*.h chip/bench/crt0.S chip/bench/kc.ld | build
-	$(CHIP_CC) $(CHIP_FLAGS) -DKC_LANES=1 -T chip/bench/kc.ld chip/bench/crt0.S $(SRC) -o $@
-build/kc_chip8.elf: $(SRC) $(GEN) src/*.h chip/bench/crt0.S chip/bench/kc.ld | build
-	$(CHIP_CC) $(CHIP_FLAGS) -DKC_LANES=8 -T chip/bench/kc.ld chip/bench/crt0.S $(SRC) -o $@
-
-build/kc_chip_raster.elf: $(SRC) $(RASTER) $(GEN) src/*.h chip/bench/crt0.S chip/stub_kc.ld | build
-	$(CHIP_CC) $(CHIP_FLAGS) -DKC_LANES=1 -DKC_RASTER=1 -T chip/stub_kc.ld chip/bench/crt0.S $(SRC) $(RASTER) -o $@
-build/kc_chip8_raster.elf: $(SRC) $(RASTER) $(GEN) src/*.h chip/bench/crt0.S chip/stub_kc.ld | build
-	$(CHIP_CC) $(CHIP_FLAGS) -DKC_LANES=8 -DKC_RASTER=1 -T chip/stub_kc.ld chip/bench/crt0.S $(SRC) $(RASTER) -o $@
+# Each variant compiles its objects into build/<variant>/ with that variant's defines.
+# $(1) variant, $(2) defines, $(3) sources, $(4) linker script
+define CHIP_ELF
+build/$(1)/%.o: src/%.c $$(GEN) $$(wildcard src/*.h) Makefile | build
+	@mkdir -p $$(@D)
+	$$(CHIP_CC) $$(CHIP_FLAGS) $$(call chip_opt,$$<) $(2) -c $$< -o $$@
+build/kc_$(1).elf: $$(patsubst src/%.c,build/$(1)/%.o,$(3)) chip/bench/crt0.S $(4) Makefile | build
+	$$(CHIP_CC) $$(CHIP_FLAGS) $$(CHIP_LDFLAGS) $(2) -T $(4) chip/bench/crt0.S $$(filter %.o,$$^) -o $$@
+endef
+$(eval $(call CHIP_ELF,chip,-DKC_LANES=1,$(SRC),chip/bench/kc.ld))
+$(eval $(call CHIP_ELF,chip8,-DKC_LANES=8,$(SRC),chip/bench/kc.ld))
+$(eval $(call CHIP_ELF,chip_raster,-DKC_LANES=1 -DKC_RASTER=1,$(SRC) $(RASTER),chip/stub_kc.ld))
+$(eval $(call CHIP_ELF,chip8_raster,-DKC_LANES=8 -DKC_RASTER=1,$(SRC) $(RASTER),chip/stub_kc.ld))
 
 chip-raster: build/kc_chip_raster.elf build/kc_chip8_raster.elf
 	@sh tools/chip_check.sh build/kc_chip_raster.elf
