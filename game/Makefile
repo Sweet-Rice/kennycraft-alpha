@@ -3,6 +3,7 @@
 #   make shots      golden camera shots into out/shots (PNG + raw .fb)
 #   make play       scripted play-through with checks
 #   make vectors    VTRACE test vectors from the C reference (out/vectors)
+#   make contract   vtrace_ref against the wiki VTRACE rules (ties, saturation, cap 0)
 #   make chip       rv32i_zmmul build with stand-in crt0/linker; checks no div/float/libcalls
 #   make chip8      same with KC_LANES=8 (Stage 1 kernel)
 #   make chip-raster  tile rasterizer builds (1 and 8 lanes) + lane lint
@@ -19,7 +20,7 @@ CHIP_FLAGS := --target=riscv32-unknown-elf -march=rv32i_zmmul -mabi=ilp32 -O2 -f
               -nostdlib -fno-builtin -fno-jump-tables -Wall -Isrc -Igen -mno-relax \
               -DKC_CHIP -msmall-data-limit=0   # no .sdata/.sbss: Bennett's kc.ld only collects .bss*
 
-.PHONY: all shots play vectors bench chip chip8 clean
+.PHONY: all shots play vectors contract compare bench chip chip8 chip-raster clean
 all: build/kc_host
 
 $(GEN): tools/gen_assets.py $(wildcard assets/textures.png)
@@ -38,6 +39,8 @@ play: build/kc_host
 	mkdir -p out/play && ./build/kc_host play out/play
 vectors: build/kc_host
 	mkdir -p out/vectors && ./build/kc_host vectors out/vectors
+contract: build/kc_host
+	./build/kc_host contract
 compare: build/kc_host
 	mkdir -p out/cmp && ./build/kc_host compare out/cmp
 bench: build/kc_host
