@@ -1,16 +1,12 @@
 .DEFAULT_GOAL := check
 
-CROSS ?= riscv-none-elf-
-ifeq ($(shell command -v $(CROSS)gcc 2>/dev/null),)
-CROSS := riscv64-unknown-elf-
-endif
-ifneq ($(shell command -v $(CROSS)gcc 2>/dev/null),)
-RISCV_PREFIX ?= $(CROSS)
-endif
+# Same pinned GCC as tb/core and tb/isa. It must support Zmmul (D5).
+RISCV_PREFIX ?= /home/tai/AMD/2026.1/gnu/riscv/lin/bin/riscv64-unknown-elf-
+CROSS ?= $(RISCV_PREFIX)
 CC := $(CROSS)gcc
 OBJCOPY := $(CROSS)objcopy
 OBJDUMP := $(CROSS)objdump
-MARCH := $(shell $(CC) -march=rv32i_zmmul -mabi=ilp32 -E -x c /dev/null >/dev/null 2>&1 && echo rv32i_zmmul || echo rv32im)
+MARCH := rv32i_zmmul
 CFLAGS = -march=$(MARCH) -mabi=ilp32 -O2 -ffreestanding -nostdlib -fno-builtin -msmall-data-limit=0 -Wall -DKC_CHIP -Isw
 LDFLAGS = -T sw/kc.ld -nostdlib
 LIBS = -lgcc
