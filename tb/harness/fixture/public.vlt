@@ -1,0 +1,10 @@
+`verilator_config
+public_flat_rw -module "fixture_top" -var "fb_we"
+public_flat_rw -module "fixture_top" -var "fb_addr"
+public_flat_rw -module "fixture_top" -var "fb_wdata"
+public_flat_rw -module "fixture_top" -var "pal_we"
+public_flat_rw -module "fixture_top" -var "pal_addr"
+public_flat_rw -module "fixture_top" -var "pal_wdata"
+public_flat_rw -module "fixture_top" -var "swap_req"
+public_flat_rw -module "fixture_top" -var "swap_pending"
+public_flat_rw -module "fixture_top" -var "fb_mode"

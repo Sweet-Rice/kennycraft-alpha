@@ -1,0 +1,20 @@
+MEMORY {
+  IMEM   (rx) : ORIGIN = 0x00000000, LENGTH = 32K
+  DMEM   (rw) : ORIGIN = 0x10000100, LENGTH = 0x5F00
+  GPUMEM (rw) : ORIGIN = 0x70000000, LENGTH = 0x11000
+}
+SECTIONS {
+  .text   : { *(.text.start) *(.text*) } > IMEM
+  .rodata : { *(.rodata*) *(.srodata*) } > DMEM
+  .data   : { *(.data*) *(.sdata*) }   > DMEM
+  .bss    : {
+    . = ALIGN(4);
+    __bss_start = .;
+    *(.bss*)
+    *(.sbss*)
+    *(COMMON)
+    . = ALIGN(4);
+    __bss_end = .;
+  } > DMEM
+  .gpumem (NOLOAD) : { *(.gpumem*) } > GPUMEM
+}
