@@ -12,6 +12,7 @@ LDFLAGS = -T sw/kc.ld -nostdlib
 LIBS = -lgcc
 PROG ?= sw/demo/pattern.c
 PYTHON ?= python3
+HOST_CC ?= zig cc
 
 .PHONY: sw arena-host FORCE
 sw: out/kc.elf out/kc.dis out/kc.map out/kc_imem.hex out/kc_dmem.hex
@@ -42,7 +43,7 @@ out/kc_dmem.hex: out/kc_dmem.bin scripts/elf2hex.py
 	$(PYTHON) scripts/elf2hex.py $< $@ --offset-bytes 0x100 --words 8192
 
 arena-host: | out
-	cc -std=c11 -Wall -Wextra -c sw/arena.c -o out/arena_host.o
+	$(HOST_CC) -std=c11 -Wall -Wextra -c sw/arena.c -o out/arena_host.o
 
 VERILATOR ?= verilator
 RUN_ARGS ?=
