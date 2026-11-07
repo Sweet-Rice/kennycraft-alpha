@@ -13,7 +13,7 @@ module datapath_tb;
     int errors = 0;
 
     task automatic clear_all();
-        for (int i = 1; i < 32; i++)   dut.u_core.u_rf.regs[i] = '0;
+        for (int i = 1; i < 32; i++)   `KC_RF(0).regs[i] = '0;
         for (int i = 0; i < 8192; i++) dut.u_imem.mem[i]       = 32'h0000_0013;  // nop
         for (int i = 0; i < 8192; i++) dut.u_dmem.mem[i]       = '0;
     endtask

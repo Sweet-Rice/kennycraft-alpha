@@ -1,32 +1,44 @@
-// KennyCraft core, Stage 0: multi-cycle RV32I + Zmmul + custom-0 lane
-// control, LANES = 1 (D7).
+// KennyCraft core, Stage 1: multi-cycle RV32I + Zmmul + custom-0 lane
+// control on LANES SIMD lanes with one shared control path (Tai page, GPU
+// Core; Tai_2 sections 1 and 2).
 //
 // Grown from Tai's multicycle core (datapath.sv in RISC-V-Core-progression).
 // No pipeline registers, no forwarding, no hazard logic. One FSM walks every
-// instruction through the states of the Tai page, CPU Core, State machine:
+// instruction through the states of the Tai page, GPU Core, SIMD state
+// machine:
 //
 //   IF    send PC to the instruction BRAM                          1 cycle
-//   ID    instruction arrives, decode, read registers              1
-//   EX    ALU, branch compare, address generation, multiply        1
+//   ID    instruction arrives, decode once, read every lane's registers
+//   EX    every lane's ALU, comparator, address generator, multiply;
+//         lane control updates the mask                             1
 //   MUL   second EXECUTE cycle for MUL family (registered product) 1
-//   MEM   one bus access; stores retire here                       1 + slave wait
-//   WB    write rd (load data arrives here), update PC             1
+//   MEM   lane-serial LSU, one bus access per active lane, ascending
+//         order; stores retire on the last lane's access           N + slave wait
+//   WB    every lane writes rd together (the last load lane's data
+//         arrives here), update PC                                  1
 //
-// Lane control (custom-0, Tai_2 sections 1 and 2, "Width with LANES < 8").
-// One shared LANES-bit active mask, reset to 1. LANEID returns 0, LMASK
-// clears the bit when rs1 = 0, MASKSET keeps rs1[LANES-1:0] of the scalar
-// lane (lane 0), MASKALL sets every bit, BALLOT and MASKGET write rd in every
-// lane, zero-extended. With the lane inactive, rd writes (ALU, LUI, AUIPC,
-// MUL, loads, JAL/JALR links, LANEID) and loads/stores are suppressed (no bus
-// access, so no misaligned error either); branches and jumps still take lane
-// 0's outcome. custom-2 (divergence stack, P5) and custom-1 (ray unit,
-// Stage 2) are absent in this build and decode as illegal.
+// Shared state here: PC, fetch, decode, FSM, the LANES-bit active mask (reset
+// 1) and the scalar-lane mux. rtl/core/lane.sv is one lane's datapath and
+// rtl/core/lsu.sv the lane-serial LSU.
+//
+// Lane control (custom-0). LANEID returns the lane index, LMASK clears the
+// bits of lanes whose rs1 = 0, MASKSET keeps rs1[LANES-1:0] of the scalar
+// lane, MASKALL sets every bit, BALLOT ({0, M & rs1 != 0}) and MASKGET ({0,
+// M}) write rd in every lane, zero-extended. Lane n writes rd when
+// wb_en & (M[n] | uniform_write) & (rd != 0), uniform_write being BALLOT and
+// MASKGET only. Loads and stores access memory for active lanes only, so an
+// inactive lane's misaligned address raises no error.
+//
+// Scalar lane: the lowest active lane, lane 0 when M = 0. Branch decisions and
+// JALR targets come from it (the uniform checks across lanes are P5).
+// custom-2 (divergence stack, P5) and custom-1 (ray unit, Stage 2) are absent
+// in this build and decode as illegal.
 //
 // Errors (Tai_2 sections 1 and 2). An illegal instruction (caught in ID), a
 // fetch outside instruction memory or from a PC that is not 4-aligned (ID), or
-// a misaligned load/store (EX, before any bus access) pulses
-// err_set[ERR_ILLEGAL] with err_pc = the instruction's PC and parks the FSM in
-// HALT until reset: nothing is fetched or written.
+// a misaligned load/store in any active lane (EX, before any bus access)
+// pulses err_set[ERR_ILLEGAL] with err_pc = the instruction's PC and parks the
+// FSM in HALT until reset: nothing is fetched or written.
 //
 // Buses. imem_rdata is the instruction BRAM output for imem_addr one cycle
 // earlier. On the data bus, bus_req is held until bus_ready; the access
@@ -60,12 +72,14 @@ module core
     output logic [31:0]          pc
 );
 
-    if (LANES != 1) begin : g_lanes_check
-        $error("core: Stage 0 implements LANES = 1 only");
+    if (LANES < 1 || LANES > 8) begin : g_lanes_check
+        $error("core: LANES must be 1 to 8");
     end
     if (HAS_DIV_STACK || HAS_RAY_UNIT) begin : g_unit_check
         $error("core: the divergence stack and the ray unit are not built yet");
     end
+
+    localparam int LW = (LANES > 1) ? $clog2(LANES) : 1;
 
     typedef enum logic [2:0] {
         S_IF, S_ID, S_EX, S_MUL, S_MEM, S_WB, S_HALT
@@ -74,14 +88,14 @@ module core
     state_t state;
 
     // ------------------------------------------------------------------
-    // ID: decode the BRAM output, read registers
+    // ID: decode the BRAM output once
     // ------------------------------------------------------------------
     logic [3:0]  d_alu_ctrl;
     logic        d_alu_a_pc, d_r_we, d_res_imm, d_is_load, d_is_store, d_is_mul;
     logic        d_is_branch, d_is_jal, d_is_jalr, d_is_lane, d_uniform_wr, d_illegal;
     logic [1:0]  d_alu_b_sel;
     logic [2:0]  d_imm_sig;
-    logic [31:0] d_imm, rs1_raw, rs2_raw;
+    logic [31:0] d_imm;
     logic        id_fault;
 
     inst_decoder #(.HAS_DIV_STACK(HAS_DIV_STACK), .HAS_RAY_UNIT(HAS_RAY_UNIT)) u_dec (
@@ -95,91 +109,93 @@ module core
 
     immgen u_imm (.inst(imem_rdata[31:7]), .imm_sig(d_imm_sig), .imm(d_imm));
 
-    logic        rf_we;
-    logic [4:0]  ex_rd;
-    logic [31:0] rf_wdata;
-
-    reg_module #(.W(32), .D(32)) u_rf (
-        .clk, .we(rf_we), .wr(ex_rd),
-        .rd1(instr_rs1(imem_rdata)), .rd2(instr_rs2(imem_rdata)),
-        .d_in(rf_wdata), .d_out1(rs1_raw), .d_out2(rs2_raw)
-    );
-
     assign id_fault = d_illegal || is_fetch_outside_imem(pc) || is_fetch_misaligned(pc);
 
-    // ID -> EX registers
+    // ID -> EX registers (shared decode; the operands live in the lanes)
     logic [3:0]  ex_alu_ctrl;
     logic        ex_alu_a_pc, ex_r_we, ex_res_imm, ex_is_load, ex_is_store, ex_is_mul;
     logic        ex_is_branch, ex_is_jal, ex_is_jalr, ex_is_lane, ex_uniform_wr;
     logic [1:0]  ex_alu_b_sel;
     logic [2:0]  ex_funct3;
-    logic [31:0] ex_imm, ex_rs1, ex_rs2;
+    logic [4:0]  ex_rd;
+    logic [31:0] ex_imm;
     logic [31:0] ir;          // instruction in flight, for the retire wires
 
     always_ff @(posedge clk) begin
         if (state == S_ID) begin
-            ir           <= imem_rdata;
-            ex_alu_ctrl  <= d_alu_ctrl;
-            ex_alu_a_pc  <= d_alu_a_pc;
-            ex_alu_b_sel <= d_alu_b_sel;
-            ex_r_we      <= d_r_we && (instr_rd(imem_rdata) != 5'd0);
-            ex_res_imm   <= d_res_imm;
-            ex_is_load   <= d_is_load;
-            ex_is_store  <= d_is_store;
-            ex_is_mul    <= d_is_mul;
-            ex_is_branch <= d_is_branch;
-            ex_is_jal    <= d_is_jal;
-            ex_is_jalr   <= d_is_jalr;
-            ex_is_lane   <= d_is_lane;
+            ir            <= imem_rdata;
+            ex_alu_ctrl   <= d_alu_ctrl;
+            ex_alu_a_pc   <= d_alu_a_pc;
+            ex_alu_b_sel  <= d_alu_b_sel;
+            ex_r_we       <= d_r_we && (instr_rd(imem_rdata) != 5'd0);
+            ex_res_imm    <= d_res_imm;
+            ex_is_load    <= d_is_load;
+            ex_is_store   <= d_is_store;
+            ex_is_mul     <= d_is_mul;
+            ex_is_branch  <= d_is_branch;
+            ex_is_jal     <= d_is_jal;
+            ex_is_jalr    <= d_is_jalr;
+            ex_is_lane    <= d_is_lane;
             ex_uniform_wr <= d_uniform_wr;
-            ex_funct3    <= instr_funct3(imem_rdata);
-            ex_rd        <= instr_rd(imem_rdata);
-            ex_imm       <= d_imm;
-            ex_rs1       <= (instr_rs1(imem_rdata) == 5'd0) ? 32'd0 : rs1_raw;
-            ex_rs2       <= (instr_rs2(imem_rdata) == 5'd0) ? 32'd0 : rs2_raw;
+            ex_funct3     <= instr_funct3(imem_rdata);
+            ex_rd         <= instr_rd(imem_rdata);
+            ex_imm        <= d_imm;
         end
     end
 
     // ------------------------------------------------------------------
-    // EX: ALU, branch, address, store lanes, multiply
+    // Lanes
     // ------------------------------------------------------------------
-    logic [31:0] alu_a, alu_b, alu_y, target, mul_y;
-    logic        cmp, take;
-    logic [3:0]  st_be;
-    logic [31:0] st_wdata, ld_value;
-    logic        misaligned;
+    logic [LANES-1:0] mask, mask_d;
+    logic             mask_we;
+    logic [31:0]      lane_y;                 // BALLOT / MASKGET result
+    logic [31:0]      l_rs1 [LANES];
+    logic [31:0]      l_rs2 [LANES];
+    logic [31:0]      l_alu [LANES];
+    logic [31:0]      l_res [LANES];
+    logic [31:0]      l_wdata [LANES];
+    logic [1:0]       l_addr_lo [LANES];
+    logic [LANES-1:0] l_cmp, l_we, nonzero, ld_cap, mis;
+    logic [31:0]      ld_value;
+    logic             wb_en;
 
-    assign alu_a = ex_alu_a_pc ? pc : ex_rs1;
-    always_comb begin
-        unique case (ex_alu_b_sel)
-            2'b00:   alu_b = ex_rs2;
-            2'b10:   alu_b = 32'd4;
-            default: alu_b = ex_imm;
-        endcase
+    assign wb_en = (state == S_WB) && ex_r_we;
+
+    for (genvar i = 0; i < LANES; i++) begin : g_lane
+        lane #(.ID(i)) u_lane (
+            .clk,
+            .id_en(state == S_ID),
+            .rs1_addr(instr_rs1(imem_rdata)), .rs2_addr(instr_rs2(imem_rdata)),
+            .ex_en(state == S_EX), .mul_en(state == S_MUL),
+            .alu_ctrl(ex_alu_ctrl), .alu_a_pc(ex_alu_a_pc), .alu_b_sel(ex_alu_b_sel),
+            .funct3(ex_funct3), .pc, .imm(ex_imm), .res_imm(ex_res_imm),
+            .is_lane(ex_is_lane), .lane_y,
+            .rs1(l_rs1[i]), .rs2(l_rs2[i]), .alu_y(l_alu[i]), .cmp(l_cmp[i]), .res(l_res[i]),
+            .ld_cap(ld_cap[i]), .ld_value,
+            .we(l_we[i]), .rd(ex_rd), .is_load(ex_is_load), .wdata(l_wdata[i])
+        );
+
+        assign nonzero[i]   = (l_rs1[i] != 32'd0);
+        assign l_we[i]      = wb_en && (mask[i] || ex_uniform_wr);
+        assign l_addr_lo[i] = l_alu[i][1:0];
     end
 
-    alu #(.W(32)) u_alu (.a(alu_a), .b(alu_b), .op(ex_alu_ctrl), .result(alu_y));
+    // ------------------------------------------------------------------
+    // EX: scalar lane, branch, mask
+    // ------------------------------------------------------------------
+    logic [LW-1:0] sl;           // scalar lane: lowest active, 0 when M = 0
+    logic [31:0]   target;
+    logic          take;
 
-    // BEQ/BNE compare the XOR against 0, BLT/BGE/BLTU/BGEU take the SLT bit;
-    // funct3[0] inverts.
-    assign cmp    = ex_funct3[2] ? alu_y[0] : (alu_y == 32'd0);
-    assign take   = ex_is_jal || ex_is_jalr || (ex_is_branch && (cmp ^ ex_funct3[0]));
-    assign target = ex_is_jalr ? ((ex_rs1 + ex_imm) & ~32'd1) : (pc + ex_imm);
+    always_comb begin
+        sl = '0;
+        for (int i = LANES - 1; i >= 0; i--)
+            if (mask[i]) sl = LW'(i);
+    end
 
-    mul u_mul (
-        .clk, .en(state == S_EX), .op(ex_funct3[1:0]),
-        .a(ex_rs1), .b(ex_rs2), .result(mul_y)
-    );
-
-    // Lane control: the active mask and the custom-0 results
-    logic [LANES-1:0] mask, mask_d;
-    logic [LANES-1:0] nonzero;     // per lane: rs1 != 0
-    logic             mask_we;
-    logic             active;      // lane 0 is active
-    logic [31:0]      lane_y;
-
-    assign active  = mask[0];
-    assign nonzero = LANES'(ex_rs1 != 32'd0);
+    // funct3[0] inverts the comparator (BNE, BGE, BGEU).
+    assign take   = ex_is_jal || ex_is_jalr || (ex_is_branch && (l_cmp[sl] ^ ex_funct3[0]));
+    assign target = ex_is_jalr ? ((l_rs1[sl] + ex_imm) & ~32'd1) : (pc + ex_imm);
 
     always_comb begin
         lane_y  = 32'd0;
@@ -194,14 +210,14 @@ module core
                 F3_BALLOT:  lane_y = {{(32-LANES){1'b0}}, mask & nonzero};
                 F3_MASKGET: lane_y = {{(32-LANES){1'b0}}, mask};
                 F3_MASKSET: begin
-                    mask_d  = ex_rs1[LANES-1:0];
+                    mask_d  = l_rs1[sl][LANES-1:0];
                     mask_we = 1'b1;
                 end
                 F3_MASKALL: begin
                     mask_d  = '1;
                     mask_we = 1'b1;
                 end
-                default: lane_y = 32'd0;   // LANEID: lane 0
+                default: ;   // LANEID: each lane returns its own index
             endcase
         end
     end
@@ -211,49 +227,33 @@ module core
         else if (state == S_EX && mask_we)     mask <= mask_d;
     end
 
-    // EX -> MEM/WB registers
-    logic [31:0] res;        // rd value (ALU, LUI immediate, link, product) or bus address
     logic [31:0] next_pc;
-    logic [2:0]  ld_funct3;
-    logic [1:0]  ld_addr_lo;
-
-    lsu u_lsu (
-        .funct3(ex_funct3), .addr_lo(alu_y[1:0]), .rs2(ex_rs2),
-        .be(st_be), .wdata(st_wdata), .misaligned(misaligned),
-        .ld_funct3(ld_funct3), .ld_addr_lo(ld_addr_lo), .rdata(bus_rdata),
-        .ld_value(ld_value)
-    );
 
     always_ff @(posedge clk) begin
-        if (state == S_EX) begin
-            res        <= ex_res_imm ? ex_imm : (ex_is_lane ? lane_y : alu_y);
-            next_pc    <= take ? target : pc + 32'd4;
-            bus_be     <= st_be;
-            bus_wdata  <= st_wdata;
-            ld_funct3  <= ex_funct3;
-            ld_addr_lo <= alu_y[1:0];
-        end else if (state == S_MUL) begin
-            res <= mul_y;
-        end
+        if (state == S_EX) next_pc <= take ? target : pc + 32'd4;
     end
 
-    assign bus_req  = (state == S_MEM);
-    assign bus_we   = ex_is_store;
-    assign bus_addr = res;
+    // ------------------------------------------------------------------
+    // MEM: lane-serial LSU
+    // ------------------------------------------------------------------
+    logic ex_mem, ex_fault, lsu_done;
 
-    // ------------------------------------------------------------------
-    // WB
-    // ------------------------------------------------------------------
-    assign rf_we    = (state == S_WB) && ex_r_we && (active || ex_uniform_wr);
-    assign rf_wdata = ex_is_load ? ld_value : res;
+    assign ex_mem   = (ex_is_load || ex_is_store) && (mask != '0);
+    assign ex_fault = ex_mem && ((mis & mask) != '0);
+
+    lsu #(.LANES(LANES)) u_lsu (
+        .clk, .rst,
+        .start((state == S_EX) && ex_mem && !ex_fault), .active(mask),
+        .go(state == S_MEM), .is_store(ex_is_store), .funct3(ex_funct3),
+        .addr(l_res), .rs2(l_rs2), .done(lsu_done),
+        .ex_addr_lo(l_addr_lo), .misaligned(mis),
+        .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,
+        .ld_cap, .ld_value
+    );
 
     // ------------------------------------------------------------------
     // FSM, PC and errors
     // ------------------------------------------------------------------
-    logic ex_mem, ex_fault;
-    assign ex_mem   = (ex_is_load || ex_is_store) && active;
-    assign ex_fault = ex_mem && misaligned;
-
     always_ff @(posedge clk) begin
         if (rst) begin
             state <= S_IF;
@@ -270,7 +270,7 @@ module core
                 end
                 S_MUL: state <= S_WB;
                 S_MEM: begin
-                    if (bus_ready) begin
+                    if (lsu_done) begin
                         if (ex_is_store) begin
                             state <= S_IF;
                             pc    <= next_pc;
@@ -300,8 +300,10 @@ module core
     // ------------------------------------------------------------------
     // Retire observation wires for Verilator harnesses and traces (not used
     // by any logic). One retire per instruction: stores in the cycle the bus
-    // accepts them, everything else in WB. A halting instruction never
-    // retires. retire_mask is the active mask at retirement.
+    // accepts the last lane, everything else in WB. A halting instruction
+    // never retires. retire_mask is the active mask at retirement. The
+    // retire_rd_* wires are lane 0's write; retire_lane_we/wdata carry every
+    // lane's (rd is retire_rd_addr in all of them).
     // ------------------------------------------------------------------
     /* verilator lint_off UNUSEDSIGNAL */
     logic             retire_valid;
@@ -311,14 +313,18 @@ module core
     logic [4:0]       retire_rd_addr;
     logic [31:0]      retire_rd_wdata;
     logic [LANES-1:0] retire_mask;
+    logic [LANES-1:0] retire_lane_we;
+    logic [31:0]      retire_lane_wdata [LANES];
     /* verilator lint_on UNUSEDSIGNAL */
 
-    assign retire_valid    = (state == S_WB) || ((state == S_MEM) && bus_ready && ex_is_store);
-    assign retire_pc       = pc;
-    assign retire_inst     = ir;
-    assign retire_rd_we    = rf_we;
-    assign retire_rd_addr  = ex_rd;
-    assign retire_rd_wdata = rf_wdata;
-    assign retire_mask     = mask;
+    assign retire_valid      = (state == S_WB) || ((state == S_MEM) && lsu_done && ex_is_store);
+    assign retire_pc         = pc;
+    assign retire_inst       = ir;
+    assign retire_rd_we      = l_we[0];
+    assign retire_rd_addr    = ex_rd;
+    assign retire_rd_wdata   = l_wdata[0];
+    assign retire_mask       = mask;
+    assign retire_lane_we    = l_we;
+    assign retire_lane_wdata = l_wdata;
 
 endmodule

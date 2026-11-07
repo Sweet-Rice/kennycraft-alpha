@@ -6,6 +6,12 @@
 // UART receiver on uart_tx and sender on uart_rx, a retirement trace
 // (+trace), and memory and register peek helpers. The world port is unused
 // (EXT_WORLD = 0, internal stub).
+//
+// LANES (-GLANES=n) sizes the core. lane_x[l][n] is lane l's register n.
+
+parameter int LANES = 1;
+
+`define KC_RF(l) dut.u_core.g_lane[l].u_lane.u_rf
 
 localparam int CLK_NS   = 20;    // 50 MHz core clock
 localparam int BIT_CLKS = 50;    // 1 Mbaud: 50 clocks per bit
@@ -37,6 +43,7 @@ always #(CLK_NS / 2) clk = ~clk;
 
 /* verilator lint_off PINCONNECTEMPTY */
 kc_soc #(
+    .LANES(LANES),
     .IMEM_HEX(IMEM_HEX),
     .DMEM_HEX(DMEM_HEX)
 ) dut (
@@ -112,8 +119,20 @@ task automatic dmem_wr(input logic [31:0] addr, input logic [31:0] value);
     dut.u_dmem.mem[addr[14:2]] = value;
 endtask
 
+logic [31:0] lane_x [LANES][32];
+
+for (genvar l = 0; l < LANES; l++) begin : g_peek
+    for (genvar n = 0; n < 32; n++) begin : g_reg
+        if (n == 0) begin : g_x0
+            assign lane_x[l][n] = 32'd0;
+        end else begin : g_xn
+            assign lane_x[l][n] = `KC_RF(l).regs[n];
+        end
+    end
+end
+
 function automatic logic [31:0] xreg(input int n);
-    return (n == 0) ? 32'd0 : dut.u_core.u_rf.regs[n];
+    return lane_x[0][n];
 endfunction
 
 task automatic do_reset();

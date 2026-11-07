@@ -49,7 +49,7 @@ module t_lanectl_tb;
         expect32("MASKALL after MASKSET(2)", dmem_rd(RES + 60), 32'd1);
         expect32("MASKSET(2) cleared the lane", dmem_rd(RES + 64), 32'h5A);
         expect32("LMASK(3) keeps the lane", dmem_rd(RES + 68), 32'd1);
-        expect32("mask at the end", {31'b0, dut.u_core.mask}, 32'd1);
+        expect32("mask at the end", 32'(dut.u_core.mask), 32'd1);
 
         if (errors != 0) $fatal(1, "FAIL: t_lanectl, %0d mismatches", errors);
         $display("PASS: t_lanectl (wiki crt0 prologue + custom-0 at LANES = 1)");

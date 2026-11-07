@@ -8,6 +8,7 @@
 #                           programs in tb/core/sw/*.S, assembled with the
 #                           RISC-V GCC, loaded as kc_imem/kc_dmem images
 #   lint-core               verilator -Wall over rtl/core, rtl/mem, rtl/soc
+#                           at LANES = 1 and LANES = 8
 #
 # `make tb-core-t_cpi` prints the measured CPI of every instruction class.
 # Add PLUSARGS=+trace for a per-instruction retirement trace.
@@ -58,3 +59,4 @@ $(addprefix tb-core-,$(CORE_PROG)): tb-core-%: $(CORE_SW_OBJ)/%_imem.hex $(CORE_
 
 lint-core:
 	$(VERILATOR) $(VL_LINT) --top-module kc_soc $(CORE_RTL)
+	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=8 $(CORE_RTL)
