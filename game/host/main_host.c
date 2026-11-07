@@ -175,6 +175,23 @@ static int cmd_play(void) {
     kc_me.pitch = Q16(-110.0);                         // look at the ground a couple of blocks ahead
     step_frames(1);
     check(kc_me.aim_hit, "aiming at the ground ahead");
+    {   // selection box: same pose with and without an aimed block must differ only by the box
+        static uint8_t with_box[320 * 240];
+        shot("p1_aim");
+        memcpy(with_box, host_front_buffer(), sizeof with_box);
+        kc_me.aim_hit = 0;
+        shot("p1_noaim");
+        kc_me.aim_hit = 1;
+        const uint8_t *no_box = host_front_buffer();
+        int32_t w = KC_RP->width, h = KC_RP->height, drawn = 0, other = 0;
+        for (int32_t y = 0; y < h; y++)
+            for (int32_t x = 0; x < w; x++) {
+                int32_t i = y * FB_STRIDE + x;
+                if (with_box[i] != no_box[i]) { if (with_box[i] == PIX(COLOR_BLACK, 0, 0)) drawn++; else other++; }
+            }
+        printf("  selection box: %d px\n", drawn);
+        check(drawn > 20 && other == 0, "selection box outlines the aimed block (black pixels only)");
+    }
     {
         int32_t px = kc_me.place[0], py = kc_me.place[1], pz = kc_me.place[2];
         key(KEY_PLACE, 1); key(KEY_PLACE, 0); step_frames(1);

@@ -233,12 +233,68 @@ void write_camera(void) {
 
 static void put(int32_t x, int32_t y, uint8_t v) { hal_fb_put((uint32_t)(y * FB_STRIDE + x), v); }
 
+// ---------------------------------------------------------------- selection box ----------
+// Alpha-style wire box around the aimed block, drawn by lane 0 after the frame (no kernel
+// cost). Only faces turned toward the eye AND open to air are drawn, so edges buried in the
+// ground stay hidden without a depth test. No divide: Bresenham lines, qrcp for projection.
+static void line(int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t W, int32_t H, uint8_t c) {
+    int32_t dx = iabs(x1 - x0), dy = -iabs(y1 - y0), ex = x0 < x1 ? 1 : -1, ey = y0 < y1 ? 1 : -1;
+    int32_t err = dx + dy;
+    for (int32_t n = 0; n < 4096; n++) {                  // bounded: corners are clamped to +-2048
+        if ((uint32_t)x0 < (uint32_t)W && (uint32_t)y0 < (uint32_t)H) put(x0, y0, c);
+        if (x0 == x1 && y0 == y1) break;
+        int32_t e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += ex; }
+        if (e2 <= dx) { err += dx; y0 += ey; }
+    }
+}
+
+static void draw_aim_box(int32_t W, int32_t H, uint8_t c) {
+    const kc_camera *cam = KC_CAM;
+    const kc_rparams *p = KC_RP;
+    int32_t sx[8], sy[8], front[8];
+    for (int32_t k = 0; k < 8; k++) {                     // corner k: bit a set = far side on axis a
+        q16 r[3];
+        for (int32_t a = 0; a < 3; a++) {
+            int32_t hi = (k >> a) & 1;
+            // 1/64 block outside the faces so the box isn't hidden by them
+            r[a] = Q16_INT(kc_me.aim[a] + hi) + (hi ? 1024 : -1024) - cam->origin[a];
+        }
+        q16 x = qmul(r[0], p->right[0]) + qmul(r[1], p->right[1]) + qmul(r[2], p->right[2]);
+        q16 y = qmul(r[0], p->up[0]) + qmul(r[1], p->up[1]) + qmul(r[2], p->up[2]);
+        q16 z = qmul(r[0], cam->forward[0]) + qmul(r[1], cam->forward[1]) + qmul(r[2], cam->forward[2]);
+        front[k] = z > Q16(0.25);                         // corners right at the eye: skip their edges
+        q16 iz = qrcp(imax(z, Q16(0.25)));
+        sx[k] = (W >> 1) + iclamp(qmul(qmul(x, p->focal), iz) >> 16, -2048, 2048);
+        sy[k] = (KC_RP->height >> 1) - iclamp(qmul(qmul(y, p->focal), iz) >> 16, -2048, 2048);
+    }
+    for (int32_t a = 0; a < 3; a++) {
+        int32_t side;
+        if (cam->origin[a] < Q16_INT(kc_me.aim[a])) side = 0;
+        else if (cam->origin[a] > Q16_INT(kc_me.aim[a] + 1)) side = 1;
+        else continue;                                    // eye inside this slab: face edge-on
+        int32_t n[3] = { kc_me.aim[0], kc_me.aim[1], kc_me.aim[2] };
+        n[a] += side ? 1 : -1;
+        if (world_get(n[0], n[1], n[2]) != B_AIR) continue;   // face is buried
+        int32_t b = a == 2 ? 0 : a + 1, d = a == 0 ? 2 : a - 1;
+        int32_t q[4] = { 0, 1 << b, (1 << b) | (1 << d), 1 << d };
+        for (int32_t i = 0; i < 4; i++) {
+            int32_t u = q[i] | (side << a), v = q[(i + 1) & 3] | (side << a);
+            if (front[u] & front[v]) line(sx[u], sy[u], sx[v], sy[v], W, H, c);
+        }
+    }
+}
+
 void game_draw_overlay(void) {
     int32_t W = KC_RP->width, H = KC_RP->height;
     uint8_t white = PIX(COLOR_WHITE, 0, 0), black = PIX(COLOR_BLACK, 0, 0);
 
-    // Crosshair
+    if (kc_me.aim_hit) draw_aim_box(W, H - (W >> 4) - 3, black);   // stop above the hotbar
+
+    // Crosshair: white plus with a 1 px black outline so it reads on sky and snow
     int32_t cx = W >> 1, cy = H >> 1;
+    for (int32_t i = -4; i <= 4; i++)
+        for (int32_t d = -1; d <= 1; d++) { put(cx + i, cy + d, black); put(cx + d, cy + i, black); }
     for (int32_t i = -3; i <= 3; i++) { put(cx + i, cy, white); put(cx, cy + i, white); }
 
     // Hotbar: 9 slots of the block's top texture
