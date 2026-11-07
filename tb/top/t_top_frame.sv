@@ -74,6 +74,7 @@ module t_top_frame #(
             if (!uart_rxd_out) $fatal(1, "UART framing error");
             if (b == 8'h0A) begin
                 $display("uart: %s", line);
+                $fflush();   // progress shows up even when stdout is a pipe
                 line = "";
             end else if (b != 8'h0D) begin
                 line = {line, string'(b)};
@@ -162,6 +163,7 @@ module t_top_frame #(
             $display("t_top_frame: FB_SWAP %0d at core cycle %0d, %0d cycles after FB_SWAP %0d",
                      swaps, dut.u_soc.u_mmio.cycles, dut.u_soc.u_mmio.cycles - last_swap, swaps - 1);
         last_swap = dut.u_soc.u_mmio.cycles;
+        $fflush();
     end
 
     // Optional retire trace (+trace_lo / +trace_hi), from the core's retire wires.
@@ -196,6 +198,7 @@ module t_top_frame #(
             write_frames(n);
             $display("t_top_frame: frame %0d captured from the VGA pins -> %s/frame%0d.ppm",
                      n, outdir, n);
+            $fflush();
         end
         wait (swaps >= min_swaps);
         $display("t_top_frame: PASS");
