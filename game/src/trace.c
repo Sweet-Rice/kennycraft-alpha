@@ -8,15 +8,23 @@
 uint32_t kc_soft_mask = 1;
 #endif
 
+#define TDELTA_INF 0x7FFFFFFF
+
+// a + b for a, b in [0, 0x7FFF_FFFF], saturating at 0x7FFF_FFFF. Branch-free.
+static inline q16 sat_add(q16 a, q16 b) {
+    uint32_t s = (uint32_t)a + (uint32_t)b;           // fits in 32 unsigned bits
+    return sel((int32_t)(s >> 31), TDELTA_INF, (q16)s);
+}
+
 void ray_setup(kc_ray *r, const q16 o[3], const q16 d[3]) {
     uint32_t signs = 0;
     for (int i = 0; i < 3; i++) {                     // unrolled by -O2; uniform trip count
         int32_t neg = (int32_t)((uint32_t)d[i] >> 31);
         q16 ad = sel(neg, -d[i], d[i]);
-        q16 td = qrcp(ad);                            // tDelta = 1/|d|
+        q16 td = sel(ad == 0, TDELTA_INF, qrcp(ad)); // tDelta = 1/|d|; a zero component never steps
         q16 fr = qfrac(o[i]);
         fr = sel(neg, fr, Q16_ONE - fr);              // distance to the first boundary
-        r->f[1 + i] = (uint32_t)qmul(fr, td);         // tMax
+        r->f[1 + i] = (uint32_t)qmul(fr, td);         // tMax (fr <= 1.0, so <= TDELTA_INF)
         r->f[4 + i] = (uint32_t)td;
         signs |= (uint32_t)neg << i;
     }
@@ -33,16 +41,20 @@ void vtrace_ref(const kc_ray *r, int32_t max_steps, kc_hit *h) {
 
     int32_t steps = 0, ax = 0, neg = 0, typ = 0, hit = 0;
     q16 t = 0;
+    if (max_steps <= 0) return;                     // cap 0: done at once, results unchanged
     uint32_t saved = mask_get();
     for (;;) {
-        int32_t cx = (tmx <= tmy) & (tmx <= tmz);
-        int32_t cy = (cx ^ 1) & (tmy <= tmz);
+        // Wiki (Tai, VTRACE "One step"): strict compares, so ties go to z, then y.
+        int32_t cx = (tmx < tmy) & (tmx < tmz);
+        int32_t cy = (cx ^ 1) & (tmy < tmz);
         int32_t cz = (cx | cy) ^ 1;
         t   = sel(cx, tmx, sel(cy, tmy, tmz));
         ax  = sel(cy, 1, sel(cz, 2, 0));
         neg = sel(cx, nx, sel(cy, ny, nz));
         x += sel(cx, sx, 0);  y += sel(cy, sy, 0);  z += sel(cz, sz, 0);
-        tmx += sel(cx, tdx, 0); tmy += sel(cy, tdy, 0); tmz += sel(cz, tdz, 0);
+        tmx = sel(cx, sat_add(tmx, tdx), tmx);       // saturate at 0x7FFF_FFFF
+        tmy = sel(cy, sat_add(tmy, tdy), tmy);
+        tmz = sel(cz, sat_add(tmz, tdz), tmz);
         steps++;
 
         int32_t oob = ((uint32_t)x > 63u) | ((uint32_t)y > 31u) | ((uint32_t)z > 63u);
