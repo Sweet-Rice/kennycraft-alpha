@@ -51,6 +51,7 @@ arena-host: | out
 VERILATOR ?= verilator
 RUN_ARGS ?=
 STAGE ?= 0
+DDR ?= 1
 LANES ?= $(if $(filter 1 2,$(STAGE)),8,1)
 CHIP_TOP ?= bench_chip
 PAL_HEX ?=
@@ -97,7 +98,11 @@ TESTS_0 = t_zmmul t_uart t_illegal_div t_illegal_ecall t_illegal_csr \
 TESTS_1 = t_laneid t_mask t_ballot t_maskgetset t_lsu_order t_branch_uniform \
 	t_divstack t_divskip t_mask_zero t_mmio_lanes t_jalr_uniform t_div_nested_lmask \
 	t_divstack_overflow
+TESTS_DDR = t_chunk_roundtrip t_slot_valid t_ring
 TESTS = $(TESTS_0)
+ifeq ($(DDR),1)
+TESTS += $(TESTS_DDR)
+endif
 ifneq ($(filter 1 2,$(STAGE)),)
 TESTS += $(TESTS_1)
 endif
@@ -106,6 +111,9 @@ TEST_ARGS = --stage $(STAGE) --cc "$(CC)" --objcopy "$(OBJCOPY)" --nm "$(CROSS)n
 .PHONY: test-stage0 test-images
 test-stage0: vl-build
 	$(PYTHON) scripts/run_tests.py $(TEST_ARGS) $(TESTS_0)
+.PHONY: test-ddr
+test-ddr: vl-build
+	$(PYTHON) scripts/run_tests.py $(TEST_ARGS) $(TESTS_DDR)
 test-images:
 	$(PYTHON) scripts/run_tests.py $(TEST_ARGS) --build-only $(TESTS)
 .PHONY: test-stage1-build
