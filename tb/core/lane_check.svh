@@ -36,6 +36,11 @@ task automatic expect_masked(input int n, input logic [7:0] on, input logic [31:
     for (int l = 0; l < ALANES; l++) expect_reg(l, n, on[l] ? v_on : v_off, what);
 endtask
 
+// Every lane that can be active kept its preset: x[n] = v
+task automatic expect_kept(input int n, input logic [31:0] v, input string what);
+    expect_masked(n, 8'h00, 32'h0, v, what);
+endtask
+
 // Every lane (active or not, all LANES): x[n] = v
 task automatic expect_uniform(input int n, input logic [31:0] v, input string what);
     for (int l = 0; l < LANES; l++) expect_reg(l, n, v, what);

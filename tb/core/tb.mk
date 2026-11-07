@@ -36,9 +36,10 @@ CORE_RTL      := rtl/kc_isa_pkg.sv $(CORE_RTL_CORE) $(CORE_RTL_REST)
 CORE_TBS  := datapath_tb program_mem_tb
 CORE_RUNG5 := t_mask t_ballot t_maskgetset t_mask_zero
 CORE_RUNG6 := t_branch_uniform t_jalr_uniform
+CORE_RUNG7 := t_divstack t_divskip t_div_nested_lmask t_divstack_overflow
 CORE_PROG := t_zmmul t_uart t_illegal t_mmio t_lanectl t_cpi t_laneid t_lsu_order t_mmio_lanes \
-             $(CORE_RUNG5) $(CORE_RUNG6)
-CORE_L8   := t_laneid t_lsu_order t_mmio_lanes $(CORE_RUNG5) $(CORE_RUNG6)
+             $(CORE_RUNG5) $(CORE_RUNG6) $(CORE_RUNG7)
+CORE_L8   := t_laneid t_lsu_order t_mmio_lanes $(CORE_RUNG5) $(CORE_RUNG6) $(CORE_RUNG7)
 CORE_ALL  := $(CORE_TBS) $(CORE_PROG)
 PLUSARGS  ?=
 
@@ -64,6 +65,8 @@ CORE_HEX_program_mem_tb := -GIMEM_HEX='"$(CURDIR)/tb/core/program.mem"'
 $(foreach t,$(CORE_PROG),$(eval CORE_HEX_$(t)_tb := \
     -GIMEM_HEX='"$(CURDIR)/$(CORE_SW_OBJ)/$(t)_imem.hex"' \
     -GDMEM_HEX='"$(CURDIR)/$(CORE_SW_OBJ)/$(t)_dmem.hex"'))
+# custom-2 tests build the core with the divergence stack
+$(foreach t,$(CORE_RUNG7),$(eval CORE_HEX_$(t)_tb += -GHAS_DIV_STACK="1'b1"))
 
 # Testbench module of a test name (t_zmmul -> t_zmmul_tb, datapath_tb as is)
 core_tb = $(if $(filter %_tb,$(1)),$(1),$(1)_tb)
@@ -102,9 +105,12 @@ $(foreach t,$(CORE_L8),$(eval $(call CORE_L8_RULES,$(t))))
 CORE_BASE_REF ?= 16bccea
 CORE_BASE_DIR := $(OBJ)/core_base_rtl
 
-tracediff-base-core: $(addprefix tracediff-base-core-,$(CORE_ALL))
+# The Stage 0 core has no divergence stack, so the custom-2 tests are left out.
+CORE_BASE_ALL := $(filter-out $(CORE_RUNG7),$(CORE_ALL))
 
-$(addprefix tracediff-base-core-,$(CORE_ALL)): tracediff-base-core-%: tb-core-%
+tracediff-base-core: $(addprefix tracediff-base-core-,$(CORE_BASE_ALL))
+
+$(addprefix tracediff-base-core-,$(CORE_BASE_ALL)): tracediff-base-core-%: tb-core-%
 	@rm -rf $(CORE_BASE_DIR)_$* && mkdir -p $(CORE_BASE_DIR)_$*
 	git archive $(CORE_BASE_REF) rtl/core | tar -x -C $(CORE_BASE_DIR)_$*
 	$(call CORE_VL,$(call core_tb,$*),_base,+define+KC_BASE_CORE, \
@@ -112,7 +118,7 @@ $(addprefix tracediff-base-core-,$(CORE_ALL)): tracediff-base-core-%: tb-core-%
 	python3 tb/core/tracediff.py $*@base $(call core_bin,$(call core_tb,$*),_base) \
 	    $(call core_bin,$(call core_tb,$*))
 
-.PHONY: tracediff-base-core $(addprefix tracediff-base-core-,$(CORE_ALL))
+.PHONY: tracediff-base-core $(addprefix tracediff-base-core-,$(CORE_BASE_ALL))
 
 lint-core:
 	$(VERILATOR) $(VL_LINT) --top-module kc_soc $(CORE_RTL)
