@@ -14,13 +14,12 @@
 //   lane_mask before the real start), then per lane f0..f7, result, hit_cell,
 //   t_hit. Lanes outside lane_mask carry random fields that must be ignored.
 //
-// The expected values come from model() with the wiki VTRACE rule (Tai page,
-// One step): strict-< tie-break, tMax += tDelta saturating at 0x7FFF_FFFF.
-// trace.c differs on ties (<=) and wraps on overflow (kc-p6-vtrace question
-// on the thread). So that the expected values are still tied to Kennedy's
-// code, every ray is also run through model() with trace.c's rule, which must
-// equal vtrace_ref() bit for bit; the two model() runs can then differ only
-// through a tie or a saturation, which is counted and printed.
+// The expected values come from Kennedy's vtrace_ref(), which follows the
+// wiki VTRACE rule (Tai page, One step): strict-< tie-break, tMax += tDelta
+// saturating at 0x7FFF_FFFF, max_steps = 0 leaves the result untouched. Every
+// ray is also run through model(), an independent C model of the same rule,
+// and the two must agree bit for bit on result, hit_cell and t_hit (misses
+// included), and both must leave the result untouched for max_steps = 0.
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,32 +37,21 @@ static uint32_t rnd(void) { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
 static uint32_t rnd_n(uint32_t n) { return (uint32_t)(((uint64_t)rnd() * n) >> 32); }
 
 // ---------------------------------------------------------------- DDA model ----
-enum { RULE_WIKI, RULE_TRACEC };
-typedef struct { int tie, sat; } flags_t;
-
-static void model(const kc_ray *r, int ms, int rule, kc_hit *h, flags_t *fl) {
+static void model(const kc_ray *r, int ms, kc_hit *h) {
+    if (ms <= 0) return;
     int32_t c[3] = { CELL_X(r->f[0]), CELL_Y(r->f[0]), CELL_Z(r->f[0]) };
     int32_t tm[3] = { (int32_t)r->f[1], (int32_t)r->f[2], (int32_t)r->f[3] };
     int32_t td[3] = { (int32_t)r->f[4], (int32_t)r->f[5], (int32_t)r->f[6] };
     int steps = 0, a = 0, hit = 0, typ = 0, oob = 0;
     int32_t t = 0;
     do {
-        int sx, sy;
-        if (rule == RULE_WIKI) { sx = tm[0] < tm[1] && tm[0] < tm[2]; sy = !sx && tm[1] < tm[2]; }
-        else                   { sx = tm[0] <= tm[1] && tm[0] <= tm[2]; sy = !sx && tm[1] <= tm[2]; }
+        int sx = tm[0] < tm[1] && tm[0] < tm[2];
+        int sy = !sx && tm[1] < tm[2];
         a = sx ? 0 : sy ? 1 : 2;
-        int32_t mn = tm[0] < tm[1] ? tm[0] : tm[1];
-        mn = mn < tm[2] ? mn : tm[2];
-        if ((tm[0] == mn) + (tm[1] == mn) + (tm[2] == mn) > 1) fl->tie = 1;
         t = tm[a];
         c[a] += (r->f[7] >> a) & 1 ? -1 : 1;
         int64_t sum = (int64_t)tm[a] + td[a];
-        if (sum > INT32_MAX) {
-            fl->sat = 1;
-            tm[a] = rule == RULE_WIKI ? INT32_MAX : (int32_t)(uint32_t)sum;
-        } else {
-            tm[a] = (int32_t)(uint32_t)sum;   // the RTL wraps below INT32_MIN, like int32
-        }
+        tm[a] = sum > INT32_MAX ? INT32_MAX : (int32_t)(uint32_t)sum;   // the RTL wraps below INT32_MIN
         steps++;
         oob = c[0] < 0 || c[0] > 63 || c[1] < 0 || c[1] > 31 || c[2] < 0 || c[2] > 63;
         typ = oob ? 0 : hal_win_get(c[0], c[1], c[2]);
@@ -80,7 +68,7 @@ typedef struct { kc_ray r; int ms; const char *name; } ray_case;
 typedef struct { uint32_t mask, ms, flags; kc_ray r[8]; kc_hit h[8]; } group_t;
 
 static struct {
-    int rays, hits, exits, caps, differ, differ_tie, differ_sat;
+    int rays, hits, exits, caps;
     int steps_max; long steps_sum;
 } st;
 
@@ -96,29 +84,25 @@ static int same(const kc_hit *a, const kc_hit *b) {
     return a->res == b->res && a->cell == b->cell && a->t == b->t;
 }
 
-// Expected result for one ray, cross-checked against vtrace_ref.
+// Expected result for one ray: vtrace_ref, checked against model().
 static kc_hit expect(const kc_ray *r, int ms) {
-    kc_hit ref, mt, mw;
-    flags_t ft = {0, 0}, fw = {0, 0};
+    static const kc_hit sentinel = { 0xDEADBEEFu, 0xFEEDF00Du, (q16)0x5A5A5A5A };
+    kc_hit ref, mw, z0 = sentinel, z1 = sentinel;
     vtrace_ref(r, ms, &ref);
-    model(r, ms, RULE_TRACEC, &mt, &ft);
-    if (!same(&ref, &mt)) fail("model(trace.c rule) != vtrace_ref", r, ms, &mt, &ref);
-    model(r, ms, RULE_WIKI, &mw, &fw);
-    if (!same(&mw, &ref)) {
-        if (!fw.tie && !fw.sat && !ft.tie && !ft.sat)
-            fail("wiki rule != trace.c rule without a tie or saturation", r, ms, &mw, &ref);
-        st.differ++;
-        if (fw.sat || ft.sat) st.differ_sat++;
-        else st.differ_tie++;
-    }
+    model(r, ms, &mw);
+    if (!same(&mw, &ref)) fail("model != vtrace_ref", r, ms, &mw, &ref);
+    vtrace_ref(r, 0, &z0);
+    model(r, 0, &z1);
+    if (!same(&z0, &sentinel)) fail("vtrace_ref wrote the result for max_steps = 0", r, 0, &z0, &sentinel);
+    if (!same(&z1, &sentinel)) fail("model wrote the result for max_steps = 0", r, 0, &z1, &sentinel);
     st.rays++;
-    int steps = HIT_STEPS(mw.res);
-    if (HIT_HIT(mw.res)) st.hits++;
+    int steps = HIT_STEPS(ref.res);
+    if (HIT_HIT(ref.res)) st.hits++;
     else if (steps == ms) st.caps++;
     else st.exits++;
     st.steps_sum += steps;
     if (steps > st.steps_max) st.steps_max = steps;
-    return mw;
+    return ref;
 }
 
 static void write_world(const char *dir, const char *name) {
@@ -148,9 +132,9 @@ static void write_groups(const char *dir, const char *name, const group_t *g, in
 
 static void print_stats(const char *set) {
     printf("golden: %s: %d rays, %d hit, %d left the world, %d stopped by the cap, "
-           "steps avg %.1f max %d; wiki rule != vtrace_ref on %d (%d tie only, %d saturation)\n",
+           "steps avg %.1f max %d; vtrace_ref == wiki model on all %d (and untouched at max_steps = 0)\n",
            set, st.rays, st.hits, st.exits, st.caps, st.rays ? (double)st.steps_sum / st.rays : 0.0,
-           st.steps_max, st.differ, st.differ_tie, st.differ_sat);
+           st.steps_max, st.rays);
     memset(&st, 0, sizeof st);
 }
 
