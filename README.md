@@ -24,7 +24,6 @@ An 8-lane SIMD TPU (Tai Processing Unit) grown from a multi-cycle RV32I core, ru
 Frames from the laptop build of the same C code the chip runs, at 160×120 and scaled up 4x.
 
 | Result | |
-
 | --- | --- |
 | Frame rate, pipelined core at 100 MHz (Verilator) | 405 fps at 160×120, 106 fps at 320×240 |
 | On the board | 59.4 new frames/s while turning: the 60 Hz display is the limit |
