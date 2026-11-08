@@ -44,6 +44,9 @@ void entity_clear(void);
 int32_t entity_count(void);
 // Lane 0. Walk entity id toward (tx, tz) at its kind's speed; -1 for a bad id.
 int32_t entity_move(int32_t id, q16 tx, q16 tz);
+// Lane 0. Put entity id at (x, z) at once (the contractor hopping between the blocks he places);
+// its feet snap to the ground next tick. -1 for a bad id.
+int32_t entity_teleport(int32_t id, q16 x, q16 z);
 void entity_get(int32_t id, q16 pos[3], int32_t *facing);
 // Lane 0, once per frame: step every entity toward its target and onto the ground.
 void entity_tick(q16 dt);

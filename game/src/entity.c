@@ -82,6 +82,13 @@ int32_t entity_move(int32_t id, q16 tx, q16 tz) {
     return 0;
 }
 
+int32_t entity_teleport(int32_t id, q16 x, q16 z) {
+    if ((uint32_t)id >= (uint32_t)nents) return -1;
+    ents[id].pos[0] = ents[id].tgt[0] = x;
+    ents[id].pos[2] = ents[id].tgt[1] = z;
+    return 0;
+}
+
 void entity_get(int32_t id, q16 pos[3], int32_t *facing) {
     for (int32_t a = 0; a < 3; a++) pos[a] = ents[id].pos[a];
     *facing = ents[id].facing;

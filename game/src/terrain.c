@@ -24,9 +24,23 @@ static q16 vnoise(int32_t ax, int32_t az, int32_t shift, uint32_t seed) {
 uint32_t terrain_height_calls;
 #endif
 
+#if KC_DEMO
+// Demo world (make KC_DEMO=1): flat grass at one height. Trees stay for scenery and to bound
+// the view distance, but none within DEMO_CLEAR blocks of spawn (2048, 2048), so the villagers'
+// spot and the build site east of the player are open ground.
+#define DEMO_H     14
+#define DEMO_CLEAR 20
+static int32_t demo_clear(int32_t ax, int32_t az) {
+    return iabs(ax - 2048) <= DEMO_CLEAR && iabs(az - 2048) <= DEMO_CLEAR;
+}
+#endif
+
 int32_t terrain_height(int32_t ax, int32_t az) {
 #ifdef KC_HOST
     terrain_height_calls++;
+#endif
+#if KC_DEMO
+    return DEMO_H;
 #endif
     q16 n1 = vnoise(ax, az, 5, WORLD_SEED);          // 32-block hills
     q16 n2 = vnoise(ax, az, 3, WORLD_SEED ^ 0x55AAu); // 8-block bumps
@@ -35,6 +49,9 @@ int32_t terrain_height(int32_t ax, int32_t az) {
 
 int32_t terrain_tree_at(int32_t ax, int32_t az) {
     if ((hash2(ax, az, WORLD_SEED ^ 0x7EEu) & 127u) != 0) return 0;
+#if KC_DEMO
+    if (demo_clear(ax, az)) return 0;
+#endif
     int32_t h = terrain_height(ax, az);
     return h > 12 && h <= 21;
 }
@@ -131,6 +148,9 @@ void terrain_gen_chunk(int32_t cx, int32_t cz, int32_t win_x0, int32_t win_z0, v
             q16 n1 = g->a1[lx] + qmul(g->d1[lx], sz1);
             q16 n2 = g->a2[lx] + qmul(g->d2[lx], sz2);
             int32_t h = 10 + ((n1 * 12) >> 16) + ((n2 * 4) >> 16);   // = terrain_height, 10..25
+#if KC_DEMO
+            h = DEMO_H;
+#endif
             int32_t x = WX(lx), y = 0;
             // Column layers: bedrock, stone to h - 4, then 4 of sand (low ground) or dirt + grass.
             hal_win_set(x, y++, z, B_BEDROCK);
@@ -149,6 +169,9 @@ void terrain_gen_chunk(int32_t cx, int32_t cz, int32_t win_x0, int32_t win_z0, v
     for (int32_t az = az0 - 2; az < az0 + CHUNK_W + 2; az++)
         for (int32_t ax = ax0 - 2; ax < ax0 + CHUNK_W + 2; ax++) {
             if ((hash2(ax, az, WORLD_SEED ^ 0x7EEu) & 127u) != 0) continue;
+#if KC_DEMO
+            if (demo_clear(ax, az)) continue;
+#endif
             int32_t h = terrain_height(ax, az);           // = terrain_tree_at, height once
             if (h <= 12 || h > 21) continue;
             for (int32_t dy = 3; dy <= 6; dy++) {
