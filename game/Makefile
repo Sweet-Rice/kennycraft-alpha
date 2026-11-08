@@ -9,7 +9,7 @@
 #   make chip8      same with KC_LANES=8 (Stage 1 kernel)
 #   make chip-raster  tile rasterizer builds (1 and 8 lanes) + lane lint + stack check
 #   make compare    ray tracer vs rasterizer on the golden poses (out/cmp)
-SRC      := src/kc_libc.c src/arena.c src/fixed.c src/trace.c src/render.c src/terrain.c src/chunks.c src/game.c src/kc_main.c
+SRC      := src/kc_libc.c src/arena.c src/fixed.c src/trace.c src/render.c src/entity.c src/terrain.c src/chunks.c src/game.c src/kc_main.c
 RASTER   := src/mesh.c src/raster.c
 HOST_SRC := host/hal_host.c host/png.c host/main_host.c
 GEN      := gen/kc_tables.h gen/kc_assets.h gen/textures.hex gen/palette.hex

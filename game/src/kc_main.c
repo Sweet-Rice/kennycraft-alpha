@@ -6,6 +6,7 @@
 #include "fixed.h"
 #include "chunks.h"
 #include "arena.h"
+#include "entity.h"
 #include "kc_lanes.h"
 #if KC_RASTER
 #include "mesh.h"
@@ -58,6 +59,7 @@ void kc_init(void) {
 
 // Draw the world: game-side preparation on lane 0, then the kernel on all lanes.
 void kc_draw_world(void) {
+    entity_prepare();
 #if KC_RASTER
     if (kc_use_raster) {
         mesh_update();            // remesh chunks that changed (lane 0, arena scratch)

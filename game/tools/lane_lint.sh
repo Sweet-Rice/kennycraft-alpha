@@ -5,7 +5,7 @@
 # and the BALLOT loop exit.
 ELF=$1
 bad=0
-for f in qrcp ray_setup kc_shade_pixel vtrace_ref shade_px; do
+for f in qrcp ray_setup kc_shade_pixel ent_box_hit vtrace_ref shade_px; do
     llvm-nm "$ELF" | grep -q " $f\$" || continue
     n=$(llvm-objdump -d --no-show-raw-insn --disassemble-symbols=$f "$ELF" \
         | grep -cE '\s(beq|bne|blt|bge|bltu|bgeu|beqz|bnez|bltz|bgez|blez|bgtz|j)\s')
