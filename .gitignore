@@ -9,3 +9,9 @@ clockInfo.txt
 __pycache__/
 /out/
 prompts/
+
+# banking (docs/banking-solana.md)
+keys/
+kcn.json
+*.db
+.env
