@@ -217,6 +217,15 @@ void pick_and_edit(void) {
     kc_me.want_break = kc_me.want_place = 0;
 }
 
+// The hotbar's pixels, [x0, x1) x [y0, y1): 9 opaque slots of S x S drawn by
+// game_draw_overlay over every frame. write_camera hands the same rectangle to the kernel
+// (kc_rparams hud_*), which skips the blocks inside it.
+static void hotbar_rect(int32_t W, int32_t H, int32_t *x0, int32_t *x1, int32_t *y0, int32_t *y1) {
+    int32_t S = W >> 4;                               // 10 px at 160, 20 at 320
+    *x0 = (W - 9 * S) >> 1; *x1 = *x0 + 9 * S;
+    *y0 = H - S - 2;        *y1 = *y0 + S;
+}
+
 void write_camera(void) {
     q16 fwd[3], right[3], up[3], e[3];
     view_vectors(fwd, right, up);
@@ -237,6 +246,7 @@ void write_camera(void) {
         p->up[i] = up[i];
     }
     p->focal = KC_RP->width == 160 ? FOCAL_160 : FOCAL_320;
+    hotbar_rect(p->width, p->height, &p->hud_x0, &p->hud_x1, &p->hud_y0, &p->hud_y1);
 }
 
 static void put(int32_t x, int32_t y, uint8_t v) { hal_fb_put((uint32_t)(y * FB_STRIDE + x), v); }
@@ -305,9 +315,10 @@ void game_draw_overlay(void) {
         for (int32_t d = -1; d <= 1; d++) { put(cx + i, cy + d, black); put(cx + d, cy + i, black); }
     for (int32_t i = -3; i <= 3; i++) { put(cx + i, cy, white); put(cx, cy + i, white); }
 
-    // Hotbar: 9 slots, each a flat swatch of the block's top color
-    int32_t S = W >> 4;                               // 10 px at 160, 20 at 320
-    int32_t x0 = (W - 9 * S) >> 1, y0 = H - S - 2;
+    // Hotbar: 9 slots, each a flat swatch of the block's top color. Every pixel of
+    // hotbar_rect is written: the kernel does not trace the blocks inside it.
+    int32_t S = W >> 4, x0, x1, y0, y1;
+    hotbar_rect(W, H, &x0, &x1, &y0, &y1);
     for (int32_t i = 0; i < 9; i++) {
         int32_t sx = x0 + i * S, sel_i = i == kc_me.selected;
         uint8_t border = sel_i ? white : black;

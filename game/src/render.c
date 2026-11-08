@@ -75,6 +75,11 @@ static inline __attribute__((always_inline)) void frame(int32_t with_ents) {
     q16 f0 = p->fog_d[0] - 1, f1 = p->fog_d[1] - 1, f2 = p->fog_d[2] - 1;
     __asm__("" : "+r"(f0), "+r"(f1), "+r"(f2));
     q16 r4x = 4 * c->right_step[0], r4z = 4 * c->right_step[2];
+    // 4x2 blocks entirely under the hotbar (kc_rparams hud_*) are overwritten by the overlay
+    // every frame, so they are not traced: block columns [skip_x0, skip_x1) of the block rows
+    // inside [hud_y0, hud_y1). The skip test is uniform (all lanes share the block).
+    int32_t skip_x0 = (p->hud_x0 + 3) & ~3, skip_x1 = p->hud_x1 & ~3;
+    int32_t hud_y0 = p->hud_y0, hud_y1 = p->hud_y1;
 
     // 4x2 blocks in rows: this lane's pixel is (bx + lx, by + ly).
     for (int32_t by = 0; by < H; by += 2) {
@@ -93,8 +98,19 @@ static inline __attribute__((always_inline)) void frame(int32_t with_ents) {
         int32_t sky = (COLOR_SKY << 4) | sel(sky_i > 15, 15, sky_i);
         uint32_t fb = (uint32_t)(py * FB_STRIDE + lx);
         q16 dx = d[0], dz = d[2];
+        // Covered rows run the block loop over two ranges, [0, skip_x0) and [skip_x1, W),
+        // others over [0, W) and an empty second range: no per-block test.
+        int32_t row_skip = (by >= hud_y0) & (by + 2 <= hud_y1) & (skip_x0 < skip_x1);
+        int32_t end0 = sel(row_skip, skip_x0, W), start1 = sel(row_skip, skip_x1, W);
 
-        for (int32_t bx = 0; bx < W; bx += 4) {
+        for (int32_t bx = 0, end = end0; ; bx += 4) {
+            if (bx >= end) {                              // uniform; at most twice per row
+                if (end == W) break;
+                int32_t n = start1 - bx;                  // a multiple of 4: d stays exact
+                bx = start1; end = W; fb += (uint32_t)n;
+                dx += c->right_step[0] * n; dz += c->right_step[2] * n;
+                if (bx >= W) break;
+            }
             kc_axis ax = axis_setup(fx, dx), az = axis_setup(fz, dz);
             kc_ray r = { { cell, ax.tmax, ay.tmax, az.tmax, ax.td, ay.td, az.td,
                            ((uint32_t)dx >> 31) | ysign | (((uint32_t)dz >> 31) << 2) } };
