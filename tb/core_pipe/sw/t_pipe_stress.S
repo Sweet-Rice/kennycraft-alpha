@@ -61,7 +61,10 @@
    restored, so later walks see the same world), and MMIO stores and loads
    in lane order (SLOT_VALID, a plain register in the testbench's
    chunk-engine model), a loaded MMIO value used right after as store
-   data. */
+   data.
+   Fetch stage F2 (the registered imem read), slot 73: ID, F2 and IF wait together
+   with three different instructions through one load-use wait, two back
+   to back, and QRCP's eight MEM cycles followed by a load-use wait. */
 #include "kc_test.h"
 #include "kc_lanes.h"
 #define VSET(f, rs)    .insn r 0x2B, 0, f, x0, rs, x0
@@ -651,6 +654,30 @@ fast_jal_link:
     add   t3, t3, s0
     sw    t2, RES2(71)(gp)
     sw    t3, RES2(72)(gp)
+    /* F2 and ID wait together: while ID waits, ID, F2 and IF hold three
+       different instructions, released in order; a load-use wait of one
+       cycle, two back to back, then QRCP's eight MEM cycles (the next
+       instructions wait in EX, ID, F2 and IF) and a load-use wait right
+       after them */
+    addi  t0, s0, 0x31
+    sw    t0, RES2(73)(gp)
+    lw    t1, RES2(73)(gp)
+    addi  t2, t1, 7             /* load-use: waits in ID */
+    xori  t3, t2, 0x55          /* waits in F2 */
+    add   t4, t3, t1            /* waits in IF */
+    lw    t5, RES2(73)(gp)
+    sub   t5, t5, t4            /* load-use */
+    lw    a0, RES2(73)(gp)
+    add   a0, a0, t5            /* load-use right after one */
+    QRCP(a1, t2)
+    slli  a2, a0, 3
+    xor   a2, a2, t3
+    lw    a3, RES2(73)(gp)
+    add   a3, a3, a2            /* load-use after the long wait */
+    add   a0, a0, a1
+    add   a0, a0, a3
+    add   a0, a0, t4
+    sw    a0, RES2(73)(gp)
 
     /* ---------------- slow pass ---------------- */
     li    s9, 0
@@ -1281,6 +1308,32 @@ fast_jal_link:
     SLOW
     CHECK2(71, t2)
     CHECK2(72, t3)
+    addi  t1, s0, 0x31
+    SLOW
+    addi  t2, t1, 7
+    SLOW
+    xori  t3, t2, 0x55
+    SLOW
+    add   t4, t3, t1
+    SLOW
+    sub   t5, t1, t4
+    SLOW
+    add   a0, t1, t5
+    QRCP(a1, t2)
+    SLOW
+    slli  a2, a0, 3
+    SLOW
+    xor   a2, a2, t3
+    SLOW
+    add   a3, t1, a2
+    SLOW
+    add   a0, a0, a1
+    SLOW
+    add   a0, a0, a3
+    SLOW
+    add   a0, a0, t4
+    SLOW
+    CHECK2(73, a0)
 
     li    t1, 1
     MASKSET(t1)
