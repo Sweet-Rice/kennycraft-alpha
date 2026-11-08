@@ -15,7 +15,9 @@
 // tracediff against the pre-lanes RTL. HAS_RAY_UNIT = 1 builds the core with
 // custom-1 and connects rtl/vtrace/vtrace.sv (WORLD_LATENCY = 2) to it, with
 // an all-air world: every ray walks until it leaves the world or hits its cap.
-// HAS_QRCP = 1 builds the core with QRCP (D22).
+// HAS_QRCP = 1 builds the core with QRCP (D22). PIPELINED = 1 builds the
+// 5-stage core_pipe instead of the multi-cycle core; `KC_CORE is the core
+// instance either way.
 
 parameter int LANES      = 1;
 parameter bit LANE0_ONLY = 1'b0;
@@ -23,11 +25,14 @@ localparam int ALANES    = LANE0_ONLY ? 1 : LANES;   // lanes that can be active
 parameter bit HAS_DIV_STACK = 1'b0;   // custom-2 in the core, see below
 parameter bit HAS_RAY_UNIT  = 1'b0;   // custom-1 and the ray unit
 parameter bit HAS_QRCP      = 1'b0;   // QRCP (custom-0 funct3 010)
+parameter bit PIPELINED     = 1'b0;   // core_pipe (P8)
+
+`define KC_CORE dut.g_core.u_core
 
 `ifdef KC_BASE_CORE
-`define KC_RF(l) dut.u_core.u_rf
+`define KC_RF(l) `KC_CORE.u_rf
 `else
-`define KC_RF(l) dut.u_core.g_lane[l].u_lane.u_rf
+`define KC_RF(l) `KC_CORE.g_lane[l].u_lane.u_rf
 `endif
 
 localparam int CLK_NS   = 20;    // 50 MHz core clock
@@ -98,6 +103,7 @@ kc_soc #(
     .HAS_DIV_STACK(HAS_DIV_STACK),
     .HAS_RAY_UNIT(HAS_RAY_UNIT),
     .HAS_QRCP(HAS_QRCP),
+    .PIPELINED(PIPELINED),
     .IMEM_HEX(IMEM_HEX),
     .DMEM_HEX(DMEM_HEX)
 ) dut (
@@ -193,10 +199,10 @@ endfunction
 
 // The core only updates the mask on a rising edge and only samples it on the
 // next one, so clearing bits LANES-1..1 at every falling edge pins them to 0
-// for every observable cycle. (A force on dut.u_core.mask does not take
+// for every observable cycle. (A force on the core's mask does not take
 // effect in Verilator 5.020.)
 if (LANE0_ONLY && LANES > 1) begin : g_lane0_only
-    always @(negedge clk) dut.u_core.mask <= LANES'(dut.u_core.mask[0]);
+    always @(negedge clk) `KC_CORE.mask <= LANES'(`KC_CORE.mask[0]);
 end
 
 task automatic do_reset();
@@ -212,7 +218,7 @@ task automatic run_until_done(input int max_cycles);
         @(posedge clk);
         if (dmem_rd(32'h1000_00FC) != 0 || err_led) return;
     end
-    $fatal(1, "FAIL: timeout after %0d cycles at pc=%08h", max_cycles, dut.u_core.pc);
+    $fatal(1, "FAIL: timeout after %0d cycles at pc=%08h", max_cycles, `KC_CORE.pc);
 endtask
 
 // ---------------------------------------------------------------------
@@ -226,23 +232,23 @@ initial trace_on = $test$plusargs("trace");
 
 always @(posedge clk) begin
     if (trace_on && !rst) begin
-        if (dut.u_core.retire_valid) begin
-            if (dut.u_core.retire_rd_we)
+        if (`KC_CORE.retire_valid) begin
+            if (`KC_CORE.retire_rd_we)
                 $display("trace %0d pc=%08h inst=%08h m=%0h x%0d=%08h", cycle,
-                         dut.u_core.retire_pc, dut.u_core.retire_inst, dut.u_core.retire_mask,
-                         dut.u_core.retire_rd_addr, dut.u_core.retire_rd_wdata);
+                         `KC_CORE.retire_pc, `KC_CORE.retire_inst, `KC_CORE.retire_mask,
+                         `KC_CORE.retire_rd_addr, `KC_CORE.retire_rd_wdata);
             else
-                $display("trace %0d pc=%08h inst=%08h m=%0h", cycle, dut.u_core.retire_pc,
-                         dut.u_core.retire_inst, dut.u_core.retire_mask);
+                $display("trace %0d pc=%08h inst=%08h m=%0h", cycle, `KC_CORE.retire_pc,
+                         `KC_CORE.retire_inst, `KC_CORE.retire_mask);
 `ifndef KC_BASE_CORE
             for (int l = 1; l < LANES; l++)
-                if (dut.u_core.retire_lane_we[l])
+                if (`KC_CORE.retire_lane_we[l])
                     $display("trace %0d   lane%0d x%0d=%08h", cycle, l,
-                             dut.u_core.retire_rd_addr, dut.u_core.retire_lane_wdata[l]);
+                             `KC_CORE.retire_rd_addr, `KC_CORE.retire_lane_wdata[l]);
 `endif
         end
-        if (dut.u_core.err_set != 0)
-            $display("trace %0d pc=%08h halt err=%b", cycle, dut.u_core.err_pc, dut.u_core.err_set);
+        if (`KC_CORE.err_set != 0)
+            $display("trace %0d pc=%08h halt err=%b", cycle, `KC_CORE.err_pc, `KC_CORE.err_set);
     end
 end
 

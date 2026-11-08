@@ -47,7 +47,8 @@ module t_top_frame #(
     parameter string PAL_HEX  = "palette.hex",
     parameter bit    HAS_RAY_UNIT  = 1'b0,
     parameter bit    HAS_QRCP      = 1'b0,
-    parameter int    FB_COUNT      = 2
+    parameter int    FB_COUNT      = 2,
+    parameter bit    PIPELINED     = 1'b0   // core_pipe instead of core (P8)
 ) (
     input logic clk,
     input logic ck_rst,
@@ -69,7 +70,8 @@ module t_top_frame #(
 
     top #(.LANES(LANES), .HAS_DIV_STACK(HAS_DIV_STACK),
           .IMEM_HEX(IMEM_HEX), .DMEM_HEX(DMEM_HEX), .TEX_HEX(TEX_HEX), .PAL_HEX(PAL_HEX),
-          .HAS_RAY_UNIT(HAS_RAY_UNIT), .HAS_QRCP(HAS_QRCP), .FB_COUNT(FB_COUNT)) dut (
+          .HAS_RAY_UNIT(HAS_RAY_UNIT), .HAS_QRCP(HAS_QRCP), .FB_COUNT(FB_COUNT),
+          .PIPELINED(PIPELINED)) dut (
         .clk, .ck_rst, .uart_rxd_out, .uart_txd_in(1'b1), .led,
         .vga_r, .vga_g, .vga_b, .vga_hs, .vga_vs,
         .ddr3_addr, .ddr3_ba, .ddr3_cas_n, .ddr3_ck_n, .ddr3_ck_p, .ddr3_cke,
@@ -205,13 +207,13 @@ module t_top_frame #(
         void'($value$plusargs("trace_hi=%h", trace_hi));
     end
     always @(posedge dut.clk_core)
-        if (dut.u_soc.u_core.retire_valid && traced < 64 &&
-            dut.u_soc.u_core.retire_pc >= trace_lo && dut.u_soc.u_core.retire_pc <= trace_hi) begin
+        if (dut.u_soc.g_core.u_core.retire_valid && traced < 64 &&
+            dut.u_soc.g_core.u_core.retire_pc >= trace_lo && dut.u_soc.g_core.u_core.retire_pc <= trace_hi) begin
             traced++;
             $display("t_top_frame: retire pc %08h inst %08h mask %02h rd x%0d lanes written %02h",
-                     dut.u_soc.u_core.retire_pc, dut.u_soc.u_core.retire_inst,
-                     8'(dut.u_soc.u_core.retire_mask), dut.u_soc.u_core.retire_rd_addr,
-                     8'(dut.u_soc.u_core.retire_lane_we));
+                     dut.u_soc.g_core.u_core.retire_pc, dut.u_soc.g_core.u_core.retire_inst,
+                     8'(dut.u_soc.g_core.u_core.retire_mask), dut.u_soc.g_core.u_core.retire_rd_addr,
+                     8'(dut.u_soc.g_core.u_core.retire_lane_we));
         end
 
     // Optional per-PC profile (+prof) and world-load log (+wlog), for frame
@@ -239,16 +241,16 @@ module t_top_frame #(
     end
     always @(posedge dut.clk_core) begin
         int i;
-        i = int'(dut.u_soc.u_core.pc[14:2]);
+        i = int'(dut.u_soc.g_core.u_core.pc[14:2]);
         if (prof_fd != 0 && swaps == prof_swap) begin
             prof_cyc[i]++;
-            if (dut.u_soc.u_core.retire_valid) begin
+            if (dut.u_soc.g_core.u_core.retire_valid) begin
                 prof_ret[i]++;
-                prof_lanes[i] += longint'($countones(dut.u_soc.u_core.retire_mask));
+                prof_lanes[i] += longint'($countones(dut.u_soc.g_core.u_core.retire_mask));
             end
-            if (dut.u_soc.u_core.u_lsu.go) begin
+            if (dut.u_soc.g_core.u_core.u_lsu.go) begin
                 prof_mem[i]++;
-                prof_region[i] = dut.u_soc.u_core.bus_addr[31:28];
+                prof_region[i] = dut.u_soc.g_core.u_core.bus_addr[31:28];
             end
         end else if (prof_fd != 0 && swaps > prof_swap) begin
             for (int p = 0; p < PROF_WORDS; p++)
@@ -261,18 +263,18 @@ module t_top_frame #(
         end
         if (wlog_fd != 0) begin
             if (wq) $fwrite(wlog_fd, "%0d %08h %0d %05h %0d\n", wq_cyc, wq_pc, wq_lane, wq_addr[16:0],
-                            dut.u_soc.u_core.ld_value);
+                            dut.u_soc.g_core.u_core.ld_value);
             wq = 0;
             if (swaps > wlog_swap) begin
                 $fclose(wlog_fd);
                 wlog_fd = 0;
-            end else if (swaps == wlog_swap && dut.u_soc.u_core.bus_req && dut.u_soc.u_core.bus_ready &&
-                         !dut.u_soc.u_core.bus_we && dut.u_soc.u_core.bus_addr[31:28] == 4'h2) begin
+            end else if (swaps == wlog_swap && dut.u_soc.g_core.u_core.bus_req && dut.u_soc.g_core.u_core.bus_ready &&
+                         !dut.u_soc.g_core.u_core.bus_we && dut.u_soc.g_core.u_core.bus_addr[31:28] == 4'h2) begin
                 wq      = 1;
                 wq_cyc  = dut.u_soc.u_mmio.cycles;
-                wq_pc   = dut.u_soc.u_core.pc;
-                wq_lane = int'(dut.u_soc.u_core.u_lsu.cur);
-                wq_addr = dut.u_soc.u_core.bus_addr;
+                wq_pc   = dut.u_soc.g_core.u_core.pc;
+                wq_lane = int'(dut.u_soc.g_core.u_core.u_lsu.cur);
+                wq_addr = dut.u_soc.g_core.u_core.bus_addr;
             end
         end
     end
@@ -287,11 +289,11 @@ module t_top_frame #(
     int          ring_n = 0, boots = 0;
     logic [31:0] lane_ra [LANES], lane_sp [LANES];
     for (genvar g = 0; g < LANES; g++) begin : g_peek
-        assign lane_ra[g] = dut.u_soc.u_core.g_lane[g].u_lane.u_rf.regs[1];
-        assign lane_sp[g] = dut.u_soc.u_core.g_lane[g].u_lane.u_rf.regs[2];
+        assign lane_ra[g] = dut.u_soc.g_core.u_core.g_lane[g].u_lane.u_rf.regs[1];
+        assign lane_sp[g] = dut.u_soc.g_core.u_core.g_lane[g].u_lane.u_rf.regs[2];
     end
-    always @(posedge dut.clk_core) if (dut.u_soc.u_core.retire_valid) begin
-        if (dut.u_soc.u_core.retire_pc == 32'h0) begin
+    always @(posedge dut.clk_core) if (dut.u_soc.g_core.u_core.retire_valid) begin
+        if (dut.u_soc.g_core.u_core.retire_pc == 32'h0) begin
             boots++;
             if (boots > 1) begin
                 $display("t_top_frame: PC 0 retired again at core cycle %0d (rst_core %b); last %0d retires:",
@@ -306,12 +308,12 @@ module t_top_frame #(
                 $fatal(1, "core jumped back to address 0");
             end
         end
-        ring_pc[ring_n % RING]    = dut.u_soc.u_core.retire_pc;
-        ring_inst[ring_n % RING]  = dut.u_soc.u_core.retire_inst;
-        ring_mask[ring_n % RING]  = 8'(dut.u_soc.u_core.retire_mask);
-        ring_rd[ring_n % RING]    = dut.u_soc.u_core.retire_rd_addr;
-        ring_we[ring_n % RING]    = 8'(dut.u_soc.u_core.retire_lane_we);
-        ring_wdata[ring_n % RING] = dut.u_soc.u_core.retire_rd_wdata;
+        ring_pc[ring_n % RING]    = dut.u_soc.g_core.u_core.retire_pc;
+        ring_inst[ring_n % RING]  = dut.u_soc.g_core.u_core.retire_inst;
+        ring_mask[ring_n % RING]  = 8'(dut.u_soc.g_core.u_core.retire_mask);
+        ring_rd[ring_n % RING]    = dut.u_soc.g_core.u_core.retire_rd_addr;
+        ring_we[ring_n % RING]    = 8'(dut.u_soc.g_core.u_core.retire_lane_we);
+        ring_wdata[ring_n % RING] = dut.u_soc.g_core.u_core.retire_rd_wdata;
         ring_n++;
     end
     always @(posedge dut.rst_core)

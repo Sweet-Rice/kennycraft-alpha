@@ -40,17 +40,17 @@ module t_divstack_overflow_tb;
         repeat (10) @(posedge clk);
         expect_no_halt("case 0");
         expect_uniform(A0, 32'(FULL), "case 0: MASKGET after 8 DIF / 8 DENDIF");
-        expect32("case 0: stack empty", 32'(dut.u_core.g_divstack.u_divstack.sp), 32'd0);
+        expect32("case 0: stack empty", 32'(`KC_CORE.g_divstack.u_divstack.sp), 32'd0);
         $display("  case  0  control: 8 nested DIF/DENDIF, DIF falling through past a misaligned label");
 
         for (int k = 1; k <= NCASES; k++) begin
             run_case(k, 2000);
             expect_halt(case_name(k), case_err(k), case_pc(k));
             expect32({case_name(k), ": stack pointer"},
-                     32'(dut.u_core.g_divstack.u_divstack.sp), 32'(case_sp(k)));
-            expect32({case_name(k), ": mask"}, 32'(dut.u_core.mask), 32'(FULL));
+                     32'(`KC_CORE.g_divstack.u_divstack.sp), 32'(case_sp(k)));
+            expect32({case_name(k), ": mask"}, 32'(`KC_CORE.mask), 32'(FULL));
             $display("  case %2d  %-34s ERR=%0d ERR_PC=%08h sp=%0d", k, case_name(k),
-                     dut.u_mmio.err, dut.u_mmio.err_pc, dut.u_core.g_divstack.u_divstack.sp);
+                     dut.u_mmio.err, dut.u_mmio.err_pc, `KC_CORE.g_divstack.u_divstack.sp);
         end
         finish_test("t_divstack_overflow");
     end

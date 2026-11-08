@@ -88,6 +88,47 @@ open. Both post `taking-board` and `releasing-board` on issue #1 as `BOARD_AGENT
 (default `kc-bench`). `kc.mmi` has no palette BRAM, so a `PAL_HEX` change
 needs a Vivado rebuild.
 
+## Pipelined core (P8)
+
+`rtl/core_pipe/` is a 5-stage version of the core (IF, ID, EX, MEM, WB) with
+the same ports and parameters as `rtl/core/core.sv`, built from its leaf
+modules. `PIPELINED = 1` (the last parameter of `rtl/top.sv` and
+`rtl/soc/kc_soc.sv`) selects it, and the core sits at `g_core.u_core`
+whichever core is built. It retires the same instructions, masks and
+register writes as the multi-cycle core. Only CPI changes:
+
+| Class | Cycles |
+| --- | --- |
+| ALU, LUI, AUIPC, FENCE, MASKGET, BALLOT, LANEID, not-taken branch | 1 |
+| MUL family | 2 |
+| Taken branch, JAL, JALR, LMASK, MASKSET, MASKALL, DIF, DELSE, DENDIF (flush 2) | 3 |
+| Load or store, N active lanes | N + 1 (+3 per lane for world LW/SW and texture LW) |
+| QRCP | 6 after the previous retirement (8 after a flush) |
+| Load-use | +1 bubble |
+| VTRACE | start until done, plus 1 |
+
+Branches, JALR and the uniform check (ERR.DIVERGE) resolve in EX. The mask
+and divergence stack are written in EX, and every mask writer flushes behind
+it. ERR halts report the faulting instruction's own PC.
+
+```sh
+make tb-core-pipe-<t>          # any tb/core test on the pipelined core
+make tracediff-core-pipe-<t>   # its retire trace against the multi-cycle core
+make check-bench PIPELINED=1   # bench at Stages 0, 1 and 2 (models in out/vl-pipe)
+make tb-top-t_top_frame PIPELINED=1 TOP_ELF=kc_chip8_vtrace TOP_SWAPS=4
+make tracediff STAGE=2 PIPELINED=1 REF=<dir|ref> POLLS=1 KEYS=<file> IMAGES=<dir>
+```
+
+`make check` runs every tb/core test at `PIPELINED=1` and its tracediff.
+Where a test polls MMIO or reads `CYCLES`, `tb/core_pipe/tracediff_pipe.py`
+collapses each listed poll loop and masks each listed `CYCLES` value, and
+prints both with their iteration counts and values for each core. `POLLS=1` does the
+same for bench traces (`scripts/tracecollapse.py`). For a replay that matches
+on both cores, build the game with `KC_FIXED_DT=1 KC_TAG_PERSIST=1`.
+
+The Stage 2 bitstream on the pipelined core is `KC_TARGET=top_s2p`
+(`fpga/top_s2p/`), which is `top_s2` with `PIPELINED=1`.
+
 ## Credits
 
 The Stage 0 CPU core is inspired by Tai's [RISC-V-Core-progression](https://github.com/Sweet-Rice/RISC-V-Core-progression) multicycle RV32I core (D11).

@@ -33,7 +33,8 @@ module bench_chip #(
     parameter string IMEM_HEX = "out/kc_imem.hex",
     parameter string DMEM_HEX = "out/kc_dmem.hex",
     parameter string PAL_HEX  = "",
-    parameter string TEX_HEX  = ""
+    parameter string TEX_HEX  = "",
+    parameter bit    PIPELINED = 1'b0
 ) (
     input  logic        clk,            // harness clk = clk_core (stub clk_gen)
     input  logic        ck_rst,         // C2,  active low
@@ -179,7 +180,8 @@ module bench_chip #(
         .DMEM_HEX  (DMEM_HEX),
         .TEX_HEX   (TEX_HEX),
         .EXT_WORLD (1'b1),
-        .HAS_DIV_STACK (HAS_DIV_STACK)
+        .HAS_DIV_STACK (HAS_DIV_STACK),
+        .PIPELINED     (PIPELINED)
     ) u_soc (
         .clk           (clk_core),
         .rst           (rst_core),

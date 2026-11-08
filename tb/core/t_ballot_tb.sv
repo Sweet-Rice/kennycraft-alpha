@@ -21,7 +21,7 @@ module t_ballot_tb;
         expect_uniform(A3, 32'd0, "BALLOT(x0)");
         expect_uniform(A4, 32'd0, "BALLOT under M = 0");
         expect_uniform(A5, 32'd1, "BALLOT(1), M = 1");
-        expect32("mask at the end", 32'(dut.u_core.mask), 32'd1);
+        expect32("mask at the end", 32'(`KC_CORE.mask), 32'd1);
         finish_test("t_ballot");
     end
 endmodule

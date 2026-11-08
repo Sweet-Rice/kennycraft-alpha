@@ -24,8 +24,8 @@ module program_mem_tb;
                     $fatal(1, "FAIL: UART_TX written while TX busy");
                 start_count <= start_count + 1;
             end
-            if (previous_pc == LOOP_JAL && dut.u_core.pc == 32'h0000_0004) saw_loop_jump <= 1'b1;
-            previous_pc <= dut.u_core.pc;
+            if (previous_pc == LOOP_JAL && `KC_CORE.pc == 32'h0000_0004) saw_loop_jump <= 1'b1;
+            previous_pc <= `KC_CORE.pc;
         end
     end
 
@@ -46,6 +46,6 @@ module program_mem_tb;
 
     initial begin
         #1_000_000;
-        $fatal(1, "FAIL: timeout after 1 ms (received=%0d, pc=0x%08h)", uart_rx_q.size(), dut.u_core.pc);
+        $fatal(1, "FAIL: timeout after 1 ms (received=%0d, pc=0x%08h)", uart_rx_q.size(), `KC_CORE.pc);
     end
 endmodule

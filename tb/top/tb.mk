@@ -34,23 +34,28 @@
 #                    t_top_frame.sv);
 #                    TOP_HEX=dir runs other images (e.g. ones patched in with
 #                    fpga/patch_bit.sh), TOP_OUT=dir puts the frames elsewhere.
+#                    PIPELINED=1 builds the top on the pipelined core
+#                    (rtl/core_pipe), with its own model directory
+#                    (..._pipe) and default TOP_OUT ($(OBJ)/top_pipe).
 #                    Built without --timing: tb/top/t_top_frame.cpp drives the
 #                    clocks, tb/ddr/unisim_sim.sv takes them with KC_EXT_CLOCKS.
 #   lint-top         verilator -Wall over the whole top at Stage 2 (with and
-#                    without QRCP; QRCP with FB_COUNT = 3), Stage 1 and
-#                    Stage 0 (sim models for the
-#                    MMCM, BUFG, MIG and XPM, as in tb/ddr)
+#                    without QRCP; QRCP with FB_COUNT = 3, on both cores:
+#                    PIPELINED = 1 is top_s2p), Stage 1 and Stage 0 (sim
+#                    models for the MMCM, BUFG, MIG and XPM, as in tb/ddr)
 
 TOP_ELFS      := kc_chip kc_chip8 kc_chip8_vtrace
 TOP_ELF       ?= kc_chip
 TOP_GEN       := $(OBJ)/top_hex
 TOP_HEX       ?= $(TOP_GEN)/$(TOP_ELF)
-TOP_OUT       ?= $(OBJ)/top
+PIPELINED     ?= 0
+TOP_SUFFIX    := $(if $(filter 1,$(PIPELINED)),_pipe)
+TOP_OUT       ?= $(OBJ)/top$(TOP_SUFFIX)
 TOP_FRAMES    ?= 1
 TOP_SWAPS     ?= 0
 TOP_TIMEOUT   ?= 20
 TOP_ARGS      ?=
-TOP_RTL    := rtl/kc_isa_pkg.sv $(wildcard rtl/core/*.sv) $(wildcard rtl/mem/*.sv) \
+TOP_RTL    := rtl/kc_isa_pkg.sv $(wildcard rtl/core/*.sv) $(wildcard rtl/core_pipe/*.sv) $(wildcard rtl/mem/*.sv) \
               $(wildcard rtl/soc/*.sv) $(wildcard rtl/display/*.sv) \
               rtl/ddr/chunk_engine.sv rtl/ddr/ddr_bridge.sv rtl/ddr/world_remap.sv \
               rtl/ddr/ddr_model.sv rtl/ddr/ddr_clk.sv tb/ddr/xpm_sim.sv tb/ddr/unisim_sim.sv \
@@ -106,16 +111,17 @@ endef
 $(foreach e,$(TOP_ELFS),$(eval $(call TOP_IMAGE_RULES,$(e))))
 
 # $(call top_run,<build>,<hex dir>,<out dir>,<frames>): Verilate t_top_frame for
-# the build's core configuration (one model directory per build) and run it.
+# the build's core configuration (one model directory per build and core) and
+# run it.
 define top_run
 	@mkdir -p $(3)
-	$(VERILATOR) $(VL_EXE) -O3 --timescale 1ns/1ps --top-module t_top_frame -Mdir $(OBJ)/top_t_top_frame_$(1) \
+	$(VERILATOR) $(VL_EXE) -O3 --timescale 1ns/1ps --top-module t_top_frame -Mdir $(OBJ)/top_t_top_frame_$(1)$(TOP_SUFFIX) \
 	  -o Vt_top_frame -GLANES=$(call top_lanes,$(1)) -GHAS_DIV_STACK=$(call top_div,$(1)) -GHAS_RAY_UNIT="1'b$(call top_ray,$(1))" \
-	  -GHAS_QRCP="1'b$(call top_qrcp,$(1))" -GFB_COUNT=$(call top_fb,$(1)) \
+	  -GHAS_QRCP="1'b$(call top_qrcp,$(1))" -GFB_COUNT=$(call top_fb,$(1)) $(if $(TOP_SUFFIX),-GPIPELINED="1'b1") \
 	  -GIMEM_HEX='"$(2)/kc_imem.hex"' -GDMEM_HEX='"$(2)/kc_dmem.hex"' \
 	  -GTEX_HEX='"$(2)/textures.hex"' -GPAL_HEX='"$(2)/palette.hex"' \
 	  $(TOP_SIM) tb/top/t_top_frame.sv $(CURDIR)/tb/top/t_top_frame.cpp
-	$(OBJ)/top_t_top_frame_$(1)/Vt_top_frame +outdir=$(3) +frames=$(4) +swaps=$(TOP_SWAPS) +timeout_s=$(TOP_TIMEOUT) $(TOP_ARGS)
+	$(OBJ)/top_t_top_frame_$(1)$(TOP_SUFFIX)/Vt_top_frame +outdir=$(3) +frames=$(4) +swaps=$(TOP_SWAPS) +timeout_s=$(TOP_TIMEOUT) $(TOP_ARGS)
 endef
 
 tb-top-t_top_frame: $(addprefix $(TOP_HEX)/,$(TOP_IMAGES))
@@ -125,6 +131,7 @@ lint-top:
 	$(VERILATOR) $(VL_LINT) --timing --top-module top $(TOP_RTL)
 	$(VERILATOR) $(VL_LINT) --timing --top-module top -GHAS_RAY_UNIT="1'b1" $(TOP_RTL)
 	$(VERILATOR) $(VL_LINT) --timing --top-module top -GHAS_RAY_UNIT="1'b1" -GHAS_QRCP="1'b1" -GFB_COUNT=3 $(TOP_RTL)
+	$(VERILATOR) $(VL_LINT) --timing --top-module top -GHAS_RAY_UNIT="1'b1" -GHAS_QRCP="1'b1" -GFB_COUNT=3 -GPIPELINED="1'b1" $(TOP_RTL)
 	$(VERILATOR) $(VL_LINT) --timing --top-module top -GLANES=1 -GHAS_DIV_STACK=0 $(TOP_RTL)
 	$(VERILATOR) $(VL_LINT) --timing --top-module top -GLANES=1 -GHAS_DIV_STACK=0 -GHAS_RAY_UNIT="1'b1" $(TOP_RTL)
 	$(VERILATOR) $(VL_LINT) --top-module world_mem rtl/mem/world_mem.sv

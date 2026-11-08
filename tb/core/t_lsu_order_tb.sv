@@ -38,33 +38,33 @@ module t_lsu_order_tb;
 
     always @(posedge clk) begin
         if (!rst) begin
-            if (dut.u_core.state == 3'd4) mem_cycles <= mem_cycles + 1;
-            if (dut.u_core.bus_req && dut.u_core.bus_ready) begin
-                acc_lane.push_back(int'(dut.u_core.u_lsu.cur));
-                acc_addr.push_back(dut.u_core.bus_addr);
+            if (`KC_CORE.state == 3'd4) mem_cycles <= mem_cycles + 1;
+            if (`KC_CORE.bus_req && `KC_CORE.bus_ready) begin
+                acc_lane.push_back(int'(`KC_CORE.u_lsu.cur));
+                acc_addr.push_back(`KC_CORE.bus_addr);
             end
-            if (dut.u_core.retire_valid || dut.u_core.err_set != 0) begin
+            if (`KC_CORE.retire_valid || `KC_CORE.err_set != 0) begin
                 logic [6:0] opc;
                 int         n, k, cyc;
                 logic       is_ld;
-                opc   = dut.u_core.retire_inst[6:0];
+                opc   = `KC_CORE.retire_inst[6:0];
                 is_ld = (opc == 7'h03);
-                if (dut.u_core.err_set != 0) begin
+                if (`KC_CORE.err_set != 0) begin
                     if (acc_lane.size() != 0) begin
                         $display("  FAIL halting instruction reached the bus");
                         errors++;
                     end
                 end else if (is_ld || opc == 7'h23) begin
-                    n = $countones(dut.u_core.retire_mask);
+                    n = $countones(`KC_CORE.retire_mask);
                     k = 0;
                     for (int l = 0; l < LANES; l++) begin
-                        if (dut.u_core.retire_mask[l]) begin
+                        if (`KC_CORE.retire_mask[l]) begin
                             if (k >= acc_lane.size() || acc_lane[k] != l) begin
-                                $display("  FAIL pc %08h access %0d is not lane %0d", dut.u_core.retire_pc, k, l);
+                                $display("  FAIL pc %08h access %0d is not lane %0d", `KC_CORE.retire_pc, k, l);
                                 errors++;
-                            end else if (acc_addr[k] != dut.u_core.l_res[l]) begin
+                            end else if (acc_addr[k] != `KC_CORE.l_res[l]) begin
                                 $display("  FAIL pc %08h lane %0d address %08h, lane computed %08h",
-                                         dut.u_core.retire_pc, l, acc_addr[k], dut.u_core.l_res[l]);
+                                         `KC_CORE.retire_pc, l, acc_addr[k], `KC_CORE.l_res[l]);
                                 errors++;
                             end
                             k++;
@@ -72,7 +72,7 @@ module t_lsu_order_tb;
                     end
                     if (acc_lane.size() != n) begin
                         $display("  FAIL pc %08h made %0d bus accesses for %0d active lanes",
-                                 dut.u_core.retire_pc, acc_lane.size(), n);
+                                 `KC_CORE.retire_pc, acc_lane.size(), n);
                         errors++;
                     end
                     // Stores retire in their last MEM cycle (not yet counted

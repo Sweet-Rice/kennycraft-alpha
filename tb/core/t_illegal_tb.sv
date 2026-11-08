@@ -98,7 +98,7 @@ module t_illegal_tb;
             end
 
             // Halted: let it sit and make sure nothing moves.
-            pc_halt = dut.u_core.pc;
+            pc_halt = `KC_CORE.pc;
             repeat (100) @(posedge clk);
             expect32($sformatf("%s: error LED", case_name(k)), {31'b0, err_led}, 32'd1);
             // With the divergence stack, DENDIF on the empty stack halts with
@@ -106,7 +106,7 @@ module t_illegal_tb;
             expect32($sformatf("%s: ERR", case_name(k)), {29'b0, dut.u_mmio.err},
                      (k == 14 && HAS_DIV_STACK) ? 32'd2 : 32'd4);
             expect32($sformatf("%s: ERR_PC", case_name(k)), dut.u_mmio.err_pc, case_pc(k));
-            expect32($sformatf("%s: PC frozen", case_name(k)), dut.u_core.pc, pc_halt);
+            expect32($sformatf("%s: PC frozen", case_name(k)), `KC_CORE.pc, pc_halt);
             expect32($sformatf("%s: rd not written", case_name(k)), xreg(12), 32'h55);
             expect32($sformatf("%s: next instr not run", case_name(k)), dmem_rd(TB_MARK), 32'd0);
             $display("  case %2d  %-22s ERR=%0d ERR_PC=%08h", k, case_name(k),
