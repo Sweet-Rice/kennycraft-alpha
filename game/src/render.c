@@ -33,15 +33,18 @@ static inline uint32_t lane_mask_of(int32_t c) {
 
 // One axis of ray_setup_frac, in registers: tMax and tDelta for direction component d and
 // origin fraction frac << 15. Bit-exact with trace.h.
+// tDelta = 1/|d| for |d| = ad, 0x7FFF_FFFF for ad = 0. qrcp(0) is Q16_BIG = 0x4000_0000
+// (fixed.c, and QRCP is bit-exact with it), so OR-ing in 0x3FFF_FFFF gives exactly TDELTA_INF.
+static inline __attribute__((always_inline)) uint32_t axis_td(q16 ad) {
+    return (uint32_t)qrcp(ad) | (lane_mask_of(ad == 0) >> 2);
+}
 typedef struct { uint32_t tmax, td; } kc_axis;
 static inline __attribute__((always_inline)) kc_axis axis_setup(uint32_t frac15, q16 d) {
     int32_t  m  = d >> 31;                            // all ones when stepping negative
     uint32_t p  = ~(uint32_t)m;                       // all ones when stepping positive
     q16      ad = (d ^ m) - m;                        // |d|
     kc_axis  a;
-    // tDelta = 1/|d|, 0x7FFF_FFFF for |d| = 0. qrcp(0) is Q16_BIG = 0x4000_0000 (fixed.c,
-    // and QRCP is bit-exact with it), so OR-ing in 0x3FFF_FFFF gives exactly TDELTA_INF.
-    a.td = (uint32_t)qrcp(ad) | (lane_mask_of(ad == 0) >> 2);
+    a.td = axis_td(ad);
     // Distance to the first boundary << 15: frac for d < 0, 1 - frac for d >= 0.
     // (x ^ 0x7FFF_FFFF) + 1 = 2^31 - x, i.e. (1.0 - frac) << 15.
     uint32_t f15 = (frac15 ^ (p >> 1)) - p;
@@ -87,7 +90,7 @@ static inline uint32_t ray_result(kc_inflight *q, q16 *t) { *t = q->h.t; return 
 // with_ents is a compile-time constant: 0 is the plain world loop, 1 adds the entity models
 // on 4x2 blocks that an entity's screen rect overlaps. All lanes share a block, so that test
 // is uniform.
-static inline __attribute__((always_inline)) void frame(int32_t with_ents) {
+static inline __attribute__((always_inline)) void frame(int32_t with_ents, int32_t by0, int32_t by1) {
     const kc_camera *c = KC_CAM;
     const kc_rparams *p = KC_RP;
 #if KC_LANES == 8
@@ -116,8 +119,11 @@ static inline __attribute__((always_inline)) void frame(int32_t with_ents) {
     int32_t hud_y0 = p->hud_y0, hud_y1 = p->hud_y1;
 
     // 4x2 blocks in rows: this lane's pixel is (bx + lx, by + ly).
-    for (int32_t by = 0; by < H; by += 2) {
+    for (int32_t by = by0; by < by1; by += 2) {
         int32_t py = by + ly;
+        // Columns some entity covers in this block row (entity_prepare): one load per row,
+        // then a register compare per block.
+        int32_t ex0 = with_ents ? ent_span[by >> 1][0] : 0, ex1 = with_ents ? ent_span[by >> 1][1] : -1;
         // Ray through the pixel center: forward + (x+0.5-W/2)*right_step - (y+0.5-H/2)*up_step.
         // Moving 4 pixels right adds exactly 4 * right_step (sx grows by 8, an even multiple).
         int32_t sx = 2 * lx + 1 - W, sy = 2 * py + 1 - H;
@@ -152,7 +158,11 @@ static inline __attribute__((always_inline)) void frame(int32_t with_ents) {
             // Next block in row order, jumping over the hotbar's blocks. Uniform.
             int32_t nbx = bx + 4;
             uint32_t nfb = fb + 4u;
-            q16 ndx = dx + r4x, ndz = dz + r4z;
+            // With entities, the loop's call leaves too few registers: read these per block
+            // (the call may write memory, so they stay in the loop) with one uniform load
+            // instead of a per-lane spill reload.
+            q16 ndx = dx + (with_ents ? 4 * c->right_step[0] : r4x);
+            q16 ndz = dz + (with_ents ? 4 * c->right_step[2] : r4z);
             if (nbx >= end) {
                 if (end == W) break;
                 int32_t n = start1 - nbx;                 // a multiple of 4: d stays exact
@@ -165,20 +175,43 @@ static inline __attribute__((always_inline)) void frame(int32_t with_ents) {
             ray_set(&q, &rn);
             ray_start(&q, cap);                           // block nbx walks from here
             int32_t hit = (int32_t)(res & 1u);
-            int32_t fog = (f0 < t) + (f1 < t) + (f2 < t);
+            q16 g0 = f0, g1 = f1, g2 = f2;
+            if (with_ents) {
+                g0 = p->fog_d[0] - 1; g1 = p->fog_d[1] - 1; g2 = p->fog_d[2] - 1;
+                __asm__("" : "+r"(g0), "+r"(g1), "+r"(g2));
+            }
+            int32_t fog = (g0 < t) + (g1 < t) + (g2 < t);
             int32_t col = sel(hit, face_pix[res & 255u] | fog, sky);
-            if (with_ents && ent_block(bx, by))
-                col = ent_composite(bx + lx, py, o, &r, sel(hit, t, 0x7FFFFFFF), (uint8_t)col);
+            if (with_ents && (bx + 3 >= ex0) & (bx <= ex1) &&
+                ((ent_bits[by >> 1][bx >> 7] >> ((bx >> 2) & 31)) & 1u) &&
+                ballot(sel(hit, t, 0x7FFFFFFF) > (q16)ent_bits[by >> 1][3])) {
+                // Recomputed here rather than kept from the VSET: keeping the ray alive across
+                // the loop spills the rest of it on every block, entity or not.
+                // Only the tDeltas and step signs, in registers (no kc_ray through memory).
+                q16 mx = dx >> 31, mz = dz >> 31;
+                uint32_t sg = ((uint32_t)dx >> 31) | ysign | (((uint32_t)dz >> 31) << 2);
+                col = ent_composite(bx, by, (q16)axis_td((dx ^ mx) - mx), (q16)ay.td,
+                                    (q16)axis_td((dz ^ mz) - mz), sg, sel(hit, t, 0x7FFFFFFF), (uint8_t)col);
+            }
             hal_fb_put(fb, (uint8_t)col);
-            bx = nbx; fb = nfb; dx = ndx; dz = ndz; r = rn;
+            bx = nbx; fb = nfb; dx = ndx; dz = ndz;
         }
         res = ray_result(&q, &t);                         // the row's last block
         {
             int32_t hit = (int32_t)(res & 1u);
             int32_t fog = (f0 < t) + (f1 < t) + (f2 < t);
             int32_t col = sel(hit, face_pix[res & 255u] | fog, sky);
-            if (with_ents && ent_block(bx, by))
-                col = ent_composite(bx + lx, py, o, &r, sel(hit, t, 0x7FFFFFFF), (uint8_t)col);
+            if (with_ents && (bx + 3 >= ex0) & (bx <= ex1) &&
+                ((ent_bits[by >> 1][bx >> 7] >> ((bx >> 2) & 31)) & 1u) &&
+                ballot(sel(hit, t, 0x7FFFFFFF) > (q16)ent_bits[by >> 1][3])) {
+                // Recomputed here rather than kept from the VSET: keeping the ray alive across
+                // the loop spills the rest of it on every block, entity or not.
+                // Only the tDeltas and step signs, in registers (no kc_ray through memory).
+                q16 mx = dx >> 31, mz = dz >> 31;
+                uint32_t sg = ((uint32_t)dx >> 31) | ysign | (((uint32_t)dz >> 31) << 2);
+                col = ent_composite(bx, by, (q16)axis_td((dx ^ mx) - mx), (q16)ay.td,
+                                    (q16)axis_td((dz ^ mz) - mz), sg, sel(hit, t, 0x7FFFFFFF), (uint8_t)col);
+            }
             hal_fb_put(fb, (uint8_t)col);
         }
     }
@@ -187,6 +220,19 @@ static inline __attribute__((always_inline)) void frame(int32_t with_ents) {
 #endif
 }
 
+// Separate functions, so the plain loop gets its own register allocation: inlined into one
+// function, the entity loop's extra live values made clang spill 9 values per block in the
+// plain loop too (+28% frame time with no entities on screen).
+// Pixel rows [by0, by1), even.
+__attribute__((noinline)) static void frame_plain(int32_t by0, int32_t by1) { frame(0, by0, by1); }
+__attribute__((noinline)) static void frame_ents(int32_t by0, int32_t by1)  { frame(1, by0, by1); }
+
+// Only the block rows some entity box covers run the entity loop. Uniform: every lane reads
+// the same rows.
 void kc_render_frame(void) {
-    if (ent_nrects) frame(1); else frame(0);    // uniform: every lane reads the same count
+    int32_t H = KC_RP->height, r0 = ent_row0 * 2, r1 = ent_row1 * 2;
+    if (r0 >= r1) { frame_plain(0, H); return; }
+    if (r0 > 0) frame_plain(0, r0);
+    frame_ents(r0, r1);
+    if (r1 < H) frame_plain(r1, H);
 }
