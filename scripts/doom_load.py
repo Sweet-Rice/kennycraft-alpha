@@ -10,6 +10,7 @@ import argparse
 import struct
 import sys
 from pathlib import Path
+import termios
 
 import serial
 
@@ -56,6 +57,12 @@ def main():
     end = struct.unpack('<4I', header[0][1][:16])[2]
 
     with serial.Serial(a.port, a.baud, timeout=10) as port:
+        # The Arty resets the design on a DTR edge, and Linux drops DTR on close (HUPCL).
+        # A reset re-runs MIG calibration, which overwrites the header at DDR3 0, so the
+        # booted image would be lost: keep DTR up after we close (as kc_live.py does).
+        attrs = termios.tcgetattr(port.fileno())
+        attrs[2] &= ~termios.HUPCL
+        termios.tcsetattr(port.fileno(), termios.TCSANOW, attrs)
         port.reset_input_buffer()      # the bootloader's start-up log
         pos = IMG_START
         for addr, blob in body + [(end, b'')]:
