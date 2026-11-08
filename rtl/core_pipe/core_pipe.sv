@@ -36,8 +36,9 @@
 //
 // Halts. EX detects them (an ID fault: ILLEGAL; else DIVERGE, DIVSTACK,
 // ILLEGAL, as in core.sv), runs no side effect, flushes ID and IF and stops
-// fetching. The halt marker pulses err_set in MEM, after every older
-// instruction has retired, with err_pc = the faulting instruction's PC.
+// fetching (pc_f freezes). The halt marker pulses err_set in MEM, after every
+// older instruction has retired. err_pc is pc, as in core.sv: then the
+// faulting instruction's PC, and it stays there while halted.
 //
 // state is an observation for the testbenches only: 4 (the multi-cycle
 // S_MEM code) while MEM walks the lane-serial LSU, 6 (S_HALT) after a halt,
@@ -127,7 +128,7 @@ module core_pipe
             d_hold_v <= 1'b0;
             if (e_halt) stop <= 1'b1;
         end else if (d_ready) begin
-            pc_f     <= pc_f + 32'd4;
+            if (!stop) pc_f <= pc_f + 32'd4;
             d_pc     <= pc_f;
             d_valid  <= !stop;
             d_hold_v <= 1'b0;
@@ -535,7 +536,7 @@ module core_pipe
     end
 
     assign err_set = (m_valid && m_halt) ? m_err : '0;
-    assign err_pc  = m_pc;
+    assign err_pc  = pc;
 
     /* verilator lint_off UNUSEDSIGNAL */
     logic [3:0]       state;
