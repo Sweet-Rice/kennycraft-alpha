@@ -273,9 +273,22 @@ a replug resets the board. It runs on Linux only (`fcntl`, `termios`, v4l2).
 `scripts/kenny_keys.py` is the input half of `kc_live.py` for Windows (it also
 runs on Linux and macOS): a small window that sends keys and mouse to the UART
 (`--port COM5`) with the same key bytes and controls, without video, the
-hardware lock or issue #1 posts. It needs pygame-ce and pyserial. Windows raises
+hardware lock or issue #1 posts. It needs pygame and pyserial. Windows raises
 DTR on open and drops it on close, so opening or closing the port may reset the
 game.
+
+To play on the board with the villager agents, run one script:
+
+```
+python scripts/kenny_play.py            # --port COM5, --no-demo for a game built without KC_DEMO
+```
+
+It starts Nemotron Nano (`llama-server`) if it isn't running, kc-host on the
+UART in the demo village (dashboard, Nemotron agents, villagers), opens the
+dashboard, and opens the keys window with `--kchost`, so input goes through
+kc-host. Press E on a villager to chat with it in the keys window; yes or no
+answers a builder's quote, and a click goes back to the game. Quitting the keys
+window stops everything it started.
 
 ## Pipelined core (P8)
 

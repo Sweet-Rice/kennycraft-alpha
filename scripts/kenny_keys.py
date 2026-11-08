@@ -189,7 +189,8 @@ def main():
         grabbed = on
         pygame.event.set_grab(on)
         pygame.mouse.set_visible(not on)
-        pygame.mouse.set_relative_mode(on)
+        if hasattr(pygame.mouse, 'set_relative_mode'):   # pygame-ce; plain pygame goes relative on grab + hide
+            pygame.mouse.set_relative_mode(on)
         pygame.mouse.get_rel()   # drop the jump from before the grab
         acc[0] = acc[1] = 0.0
         draw()
