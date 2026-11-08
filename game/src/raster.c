@@ -21,6 +21,12 @@
 #define TAN_Y  34418               // half-height / focal (4:3)
 #define MAX_TILES 300              // 20 x 15 at 320x240
 #define MAX_POLY 12
+// Lane-0 per-chunk helpers: built for size (clang minsize), they run 16 times a frame, not per pixel.
+#if defined(__clang__)
+#define LANE0_SMALL __attribute__((minsize, noinline))
+#else
+#define LANE0_SMALL __attribute__((noinline))
+#endif
 #define EDGE_GROW 2                // subpixels; 2 closes every T-junction crack in the golden shots
 
 
@@ -52,12 +58,12 @@ static uint16_t *tile_fill;
 #define DEPTH_MAX 0xFFFu
 static uint32_t tile_px[TILE * TILE + 1];          // 1 KB + 1 scratch word
 
-// One polygon vertex, two stages in the same five words: view space + texture coords (blocks)
-// while clipping, then the screen vertex project() writes over it in place. Sharing the buffer
-// keeps quad_to_screen off a second MAX_POLY array: the kernel runs it on every lane's 1 KB stack.
+// One polygon vertex, two stages in the same three words: view space while clipping, then the
+// screen vertex project() writes over it in place. Sharing the buffer keeps quad_to_screen off a
+// second MAX_POLY array: the kernel runs it on every lane's 1 KB stack. Vertex colors: no u, v.
 typedef union {
-    struct { q16 x, y, z, u, v; };                 // pvert: view space
-    struct { int32_t X, Y; q16 iz, uz, vz; };      // svert: Q4 subpixels, clamped; 1/z, u/z, v/z
+    struct { q16 x, y, z; };                       // pvert: view space
+    struct { int32_t X, Y; q16 iz; };              // svert: Q4 subpixels, clamped; 1/z
 } vert;
 typedef vert pvert;
 typedef vert svert;
@@ -72,8 +78,6 @@ typedef struct {
 static void quad_verts(const view_t *vw, int32_t page, int32_t q, pvert out[4], int32_t *mat) {
     const mesh_page *pg = &mesh_pool[page];
     int32_t m = pg->mat[q];
-    int32_t a = (m & 7) >> 1;
-    int32_t ua = a == 0 ? 2 : 0, va = a == 1 ? 2 : 1;
     // Polygon order from the shared index buffer (base vertex q * 4): triangles (i0 i1 i2)
     // and (i3 i4 i5) share i0 and i2, so the quad outline is i0 i1 i2 i5.
     const uint16_t *ix = mesh_quad_index;
@@ -86,8 +90,6 @@ static void quad_verts(const view_t *vw, int32_t page, int32_t q, pvert out[4], 
         out[i].x = qmul(r[0], vw->right[0]) + qmul(r[1], vw->right[1]) + qmul(r[2], vw->right[2]);
         out[i].y = qmul(r[0], vw->up[0])    + qmul(r[1], vw->up[1])    + qmul(r[2], vw->up[2]);
         out[i].z = qmul(r[0], vw->fwd[0])   + qmul(r[1], vw->fwd[1])   + qmul(r[2], vw->fwd[2]);
-        out[i].u = w[ua];
-        out[i].v = w[va];
     }
     *mat = m;
 }
@@ -119,8 +121,6 @@ static int32_t clip_poly(pvert *poly, int32_t n) {
                 o->x = a->x + qmul(b->x - a->x, t);
                 o->y = a->y + qmul(b->y - a->y, t);
                 o->z = a->z + qmul(b->z - a->z, t);
-                o->u = a->u + qmul(b->u - a->u, t);
-                o->v = a->v + qmul(b->v - a->v, t);
             }
         }
         for (int32_t i = 0; i < m; i++) poly[i] = tmp[i];
@@ -135,12 +135,9 @@ static void project(const view_t *vw, vert *p) {
     q16 iz = qrcp(z);
     q16 sx = qmul(qmul(p->x, vw->focal), iz);        // pixels from center, Q16
     q16 sy = qmul(qmul(p->y, vw->focal), iz);
-    q16 uz = qmul(p->u, iz), vz = qmul(p->v, iz);    // every read before the first write
     p->X = iclamp(vw->W * 8 + (sx >> 12), 0, vw->W * 16);
     p->Y = iclamp(vw->H * 8 - (sy >> 12), 0, vw->H * 16);
     p->iz = iz;
-    p->uz = uz;
-    p->vz = vz;
 }
 
 // Transform + cull + clip one quad into a screen polygon in poly[MAX_POLY]. Returns the count.
@@ -178,6 +175,25 @@ static void view_set_slot(view_t *vw, int32_t slot) {
 }
 
 // ---------------------------------------------------------------- 1. binning (lane 0) ----
+// Chunk box (16 x 32 x 16 at the slot's offset) against the 5 frustum planes: cull when all
+// 8 corners are outside one plane. Conservative, so it only drops quads the quad test drops.
+LANE0_SMALL static int32_t chunk_in_frustum(const view_t *vw) {
+    pvert c[8];
+    for (int32_t i = 0; i < 8; i++) {
+        q16 r[3] = { Q16_INT(vw->ox + (i & 1) * CHUNK_W) - vw->eye[0], Q16_INT(((i >> 1) & 1) * 32) - vw->eye[1],
+                     Q16_INT(vw->oz + (i >> 2) * CHUNK_W) - vw->eye[2] };
+        c[i].x = qmul(r[0], vw->right[0]) + qmul(r[1], vw->right[1]) + qmul(r[2], vw->right[2]);
+        c[i].y = qmul(r[0], vw->up[0])    + qmul(r[1], vw->up[1])    + qmul(r[2], vw->up[2]);
+        c[i].z = qmul(r[0], vw->fwd[0])   + qmul(r[1], vw->fwd[1])   + qmul(r[2], vw->fwd[2]);
+    }
+    for (int32_t k = 0; k < 5; k++) {
+        int32_t out_n = 0;
+        for (int32_t i = 0; i < 8; i++) out_n += plane_d(&c[i], k) < 0;
+        if (out_n == 8) return 0;
+    }
+    return 1;
+}
+
 static int32_t bin_frame(const view_t *vw0, int32_t tiles_x, int32_t tiles_y) {
     view_t vw = *vw0;
     int32_t nvis = 0, ntiles = tiles_x * tiles_y;
@@ -187,6 +203,8 @@ static int32_t bin_frame(const view_t *vw0, int32_t tiles_x, int32_t tiles_y) {
     for (int32_t s = 0; s < 16; s++) {
         if (mesh_cmds[s].cx < 0) continue;
         view_set_slot(&vw, s);
+        if (!chunk_in_frustum(&vw)) { STAT(raster_stats.chunks_frustum_culled++); STAT(raster_stats.quads_skipped += mesh_cmds[s].quads); continue; }
+        STAT(raster_stats.chunks_drawn++);
         for (uint8_t pg = mesh_cmds[s].first_page; pg != MESH_NONE; pg = mesh_page_next[pg]) {
             const mesh_page *P = &mesh_pool[pg];
             for (int32_t q = 0; q < mesh_page_quads[pg]; q++) {
@@ -195,11 +213,11 @@ static int32_t bin_frame(const view_t *vw0, int32_t tiles_x, int32_t tiles_y) {
                 uint16_t v0 = P->vtx[q * 4];
                 int32_t plane = a == 0 ? VTX_X(v0) + vw.ox : a == 1 ? VTX_Y(v0) : VTX_Z(v0) + vw.oz;
                 q16 e = vw.eye[a], pl = Q16_INT(plane);
-                if ((face & 1) ? e >= pl : e <= pl) { STAT(raster_stats.quads_culled++); continue; }
+                if ((face & 1) ? e >= pl : e <= pl) { STAT(raster_stats.quads_culled++); STAT(raster_stats.quads_backface++); continue; }
 
                 svert sv[MAX_POLY];
                 int32_t mat, n = quad_to_screen(&vw, pg, q, sv, &mat);
-                if (n < 3) { STAT(raster_stats.quads_culled++); continue; }
+                if (n < 3) { STAT(raster_stats.quads_culled++); STAT(raster_stats.quads_clipped++); continue; }
                 int32_t x0 = sv[0].X, x1 = sv[0].X, y0 = sv[0].Y, y1 = sv[0].Y;
                 for (int32_t i = 1; i < n; i++) {
                     x0 = imin(x0, sv[i].X); x1 = imax(x1, sv[i].X);
@@ -244,7 +262,7 @@ static int32_t bin_frame(const view_t *vw0, int32_t tiles_x, int32_t tiles_y) {
 typedef struct {
     int32_t A[3], B[3], C[3];       // edge i: E = A*X + B*Y + C >= 0 inside (X, Y in Q4)
     int32_t X0, Y0;
-    q16 a0[3], gx[3], gy[3];        // attribute planes (iz, uz, vz): value per pixel step
+    q16 a0, gx, gy;                 // 1/z plane: value at (X0, Y0), change per pixel step
     int32_t px0, px1, py0, py1;     // pixel bbox clipped to the tile
 } tri_t;
 
@@ -264,15 +282,10 @@ static int32_t tri_setup(tri_t *t, const svert *v0, const svert *v1, const svert
     }
     t->X0 = v0->X; t->Y0 = v0->Y;
     int32_t dx1 = v1->X - v0->X, dy1 = v1->Y - v0->Y, dx2 = v2->X - v0->X, dy2 = v2->Y - v0->Y;
-    for (int32_t k = 0; k < 3; k++) {
-        q16 A0 = k == 0 ? v0->iz : k == 1 ? v0->uz : v0->vz;
-        q16 A1 = k == 0 ? v1->iz : k == 1 ? v1->uz : v1->vz;
-        q16 A2 = k == 0 ? v2->iz : k == 1 ? v2->uz : v2->vz;
-        int64_t d1 = A1 - A0, d2 = A2 - A0;
-        t->a0[k] = A0;                                         // gradients per pixel (x16 per Q4 unit)
-        t->gx[k] = idiv((d1 * dy2 - d2 * dy1) * 16, area);
-        t->gy[k] = idiv((d2 * dx1 - d1 * dx2) * 16, area);
-    }
+    int64_t d1 = v1->iz - v0->iz, d2 = v2->iz - v0->iz;
+    t->a0 = v0->iz;                                            // gradients per pixel (x16 per Q4 unit)
+    t->gx = idiv((d1 * dy2 - d2 * dy1) * 16, area);
+    t->gy = idiv((d2 * dx1 - d1 * dx2) * 16, area);
     int32_t xmin = imin(v0->X, imin(v1->X, v2->X)), xmax = imax(v0->X, imax(v1->X, v2->X));
     int32_t ymin = imin(v0->Y, imin(v1->Y, v2->Y)), ymax = imax(v0->Y, imax(v1->Y, v2->Y));
     t->px0 = imax(xmin >> 4, tx0); t->px1 = imin(xmax >> 4, tx0 + TILE - 1);
@@ -291,64 +304,82 @@ static inline int32_t covers(const tri_t *t, int32_t px, int32_t py, int32_t val
     return ((e0 | e1 | e2) >= 0) & valid;
 }
 
-// Depth test + texture + shade + masked write. Only run for groups where some lane is inside.
-__attribute__((noinline)) static void shade_px(const tri_t *t, int32_t px, int32_t py, int32_t inside,
-                            int32_t tx0, int32_t ty0, int32_t mat, const kc_rparams *p) {
+// The pixel work, split in two branch-free halves. depth_px: interpolate 1/z, depth, test.
+// color_px: flat face color, shade, fog, masked write; the caller runs it only when BALLOT says
+// some lane of the group passed (a uniform branch). Vertex colors: no texture, no reciprocal.
+// Depth is stored as 1/z (larger = nearer), flipped so the tile's "smaller wins" test holds.
+#define IZ_SHIFT 4                  // 12-bit depth = 4094 - min(iz >> 4, 4094); saturates under 1 block
+typedef struct { q16 iz; int32_t idx, dep, pass; uint32_t old; } zpx_t;
+
+static q16 fog_iz[3];               // 1/fog_d: fog thresholds in 1/z space
+
+__attribute__((noinline)) static void depth_px(const tri_t *t, int32_t px, int32_t py, int32_t inside,
+                                               int32_t tx0, int32_t ty0, zpx_t *o) {
     int32_t X = px * 16 + 8, Y = py * 16 + 8;
-
     int64_t dX = X - t->X0, dY = Y - t->Y0;
-    q16 iz = t->a0[0] + (q16)(((int64_t)t->gx[0] * dX + (int64_t)t->gy[0] * dY) >> 4);
-    q16 uz = t->a0[1] + (q16)(((int64_t)t->gx[1] * dX + (int64_t)t->gy[1] * dY) >> 4);
-    q16 vz = t->a0[2] + (q16)(((int64_t)t->gx[2] * dX + (int64_t)t->gy[2] * dY) >> 4);
+    q16 iz = t->a0 + (q16)(((int64_t)t->gx * dX + (int64_t)t->gy * dY) >> 4);
     iz = sel(iz < 64, 64, iz);
-    q16 z = qrcp(iz);                                  // perspective-correct
-    q16 u = qmul(uz, z), v = qmul(vz, z);
-
-    int32_t dep = z >> 10;                             // 12-bit linear depth, 1/64 block
-    dep = sel(dep > (int32_t)DEPTH_MAX - 1, (int32_t)DEPTH_MAX - 1, dep);
+    int32_t dep = iz >> IZ_SHIFT;
+    dep = (int32_t)DEPTH_MAX - 1 - sel(dep > (int32_t)DEPTH_MAX - 1, (int32_t)DEPTH_MAX - 1, dep);
     int32_t idx = sel(inside, (py - ty0) * TILE + (px - tx0), TILE * TILE);
     uint32_t old = tile_px[idx];
-    int32_t pass = inside & (dep < (int32_t)PX_DEPTH(old));
+    o->iz = iz; o->idx = idx; o->dep = dep; o->old = old;
+    o->pass = inside & (dep < (int32_t)PX_DEPTH(old));
+}
 
+__attribute__((noinline)) static void color_px(const zpx_t *o, int32_t mat) {
     int32_t face = mat & 7, a = face >> 1, type = mat >> 3;
-    int32_t tu = (qfrac(u) >> 12) & 15, tv = (qfrac(v) >> 12) & 15;
-    tv = sel(a == 1, tv, 15 - tv);
     int32_t tface = sel(a == 1, sel(face & 1, 2, 0), 1);
-    int32_t texel = hal_tex_get(TEX_INDEX(type, tface, tu, tv)) & 15;
     int32_t shade = sel(a == 1, sel(face & 1, 3, 0), sel(a == 0, 1, 2));
-    int32_t fog = (z >= p->fog_d[0]) + (z >= p->fog_d[1]) + (z >= p->fog_d[2]);
-    int32_t col = PIX(texel, shade, fog);
-
+    q16 iz = o->iz;
+    int32_t color = kc_face_color[type * 3 + tface];
+    int32_t fog = (iz <= fog_iz[0]) + (iz <= fog_iz[1]) + (iz <= fog_iz[2]);
+    int32_t col = PIX(color, shade, fog);
+    int32_t pass = o->pass, idx = o->idx;
     STAT(raster_stats.pixels_written += pass);
 #if KC_LANES == 8
     uint32_t m = mask_get();
     lmask((uint32_t)pass);                             // masked stores: only winning lanes write
-    tile_px[idx] = PX_PACK(col, dep, PX_STENCIL(old));
+    tile_px[idx] = PX_PACK(col, o->dep, PX_STENCIL(o->old));
     mask_set(m);
 #else
-    if (pass) tile_px[idx] = PX_PACK(col, dep, PX_STENCIL(old));
+    if (pass) tile_px[idx] = PX_PACK(col, o->dep, PX_STENCIL(o->old));
 #endif
 }
 
 static void raster_tri(const tri_t *t, int32_t tx0, int32_t ty0, int32_t mat, int32_t lane0) {
-    const kc_rparams *p = KC_RP;
     for (int32_t py = t->py0; py <= t->py1; py++)
         for (int32_t gx = t->px0; gx <= t->px1; gx += 8) {
 #if KC_LANES == 1
+            // One lane plays all 8 in turn; the "ballots" are ORs over the group.
+            zpx_t z8[8];
+            int32_t any_in = 0, any_pass = 0, n_in = 0;
             for (int32_t lane = 0; lane < 8; lane++) {
-#else
-            int32_t lane = lane0;
-#endif
                 int32_t px = gx + lane;
                 int32_t in = covers(t, px, py, px <= t->px1);
                 STAT(raster_stats.pixels_tested++);
-#if KC_LANES == 1
                 STAT(raster_stats.pixels_covered += in);
-                if (in) shade_px(t, px, py, in, tx0, ty0, mat, p);
+                z8[lane].pass = 0;
+                if (in) { depth_px(t, px, py, in, tx0, ty0, &z8[lane]); any_pass |= z8[lane].pass; }
+                any_in |= in; n_in += in;
             }
+            STAT(raster_stats.groups_covered += any_in);
+            STAT(raster_stats.groups_shaded += any_pass);
+            if (any_pass) {
+                STAT(raster_stats.pixels_in_shaded_groups += n_in);
+                for (int32_t lane = 0; lane < 8; lane++)
+                    if (z8[lane].pass) color_px(&z8[lane], mat);
+            }
+            (void)n_in; (void)any_in;
 #else
-                if (ballot((uint32_t)in) != 0)            // uniform: skip groups no lane covers
-                    shade_px(t, px, py, in, tx0, ty0, mat, p);
+            int32_t px = gx + lane0;
+            int32_t in = covers(t, px, py, px <= t->px1);
+            if (ballot((uint32_t)in) != 0) {              // uniform: skip groups no lane covers
+                zpx_t zp;
+                depth_px(t, px, py, in, tx0, ty0, &zp);
+                if (ballot((uint32_t)zp.pass) != 0)       // uniform: skip groups no lane wins
+                    color_px(&zp, mat);
+            }
 #endif
         }
 }
@@ -409,6 +440,11 @@ static void tile_flush(int32_t tx0, int32_t ty0, int32_t H, int32_t lane0) {
 
 static int32_t frame_tiles_x, frame_tiles_y;
 
+// Lane 0, every frame: fog thresholds in 1/z space (the fog distance can change).
+LANE0_SMALL static void fog_frame(void) {
+    for (int32_t k = 0; k < 3; k++) fog_iz[k] = qrcp(KC_RP->fog_d[k]);
+}
+
 // Game side, lane 0: build this frame's per-tile command lists.
 void raster_bin(void) {
     view_t vw;
@@ -418,6 +454,7 @@ void raster_bin(void) {
 #ifdef KC_HOST
     raster_stats = (raster_stats_t){0};
 #endif
+    fog_frame();
     bin_frame(&vw, frame_tiles_x, frame_tiles_y);
 }
 

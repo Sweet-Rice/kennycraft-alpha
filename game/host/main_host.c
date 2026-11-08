@@ -169,15 +169,32 @@ static int cmd_compare(void) {
         // Edge growth (1/8 px, closes T-junction cracks) fattens silhouettes: 98-99% is expected.
         if (geo_pct < 97.5 || holes) { printf("  FAIL  %s: geometry below 97.5%% or sky holes\n", s[i].name); failures++; }
         raster_stats_t *r = &raster_stats;
-        // Instruction estimates from the rv32 disassembly: covers ~25, shade_px+qrcp ~310,
-        // triangle setup ~450, bin per quad ~40 (culled) / ~250 (visible); ray: 52 per DDA step + ~200 per pixel.
-        double ras_mi = (r->pixels_tested * 25.0 + r->pixels_covered * 310.0 + r->tri_setups * 450.0
-                       + r->quads_culled * 40.0 + r->quads_visible * 250.0 + r->bin_entries * 300.0) / 1e6;
+        // Instruction estimates from the rv32 disassembly: covers ~25, triangle setup ~450 (kept
+        // from the textured kernel, so conservative: only 1/z is set up now), bin per quad ~40 (culled) / ~250 (visible), chunk frustum test ~800 per chunk;
+        // pixels: depth half ~75 per covered pixel, color half ~78 per covered pixel in a group where
+        // some lane passed (vertex colors: no qrcp, no texture). Ray: 52 per DDA step + ~200 per pixel.
+        const double CD = 75, CC = 78;
+        double px_cost = r->pixels_covered * CD + r->pixels_in_shaded_groups * CC;
+        double chunk_cost = (r->chunks_drawn + r->chunks_frustum_culled) * 800.0;
+        double ras_mi = (r->pixels_tested * 25.0 + px_cost + r->tri_setups * 450.0
+                       + r->quads_culled * 40.0 + r->quads_visible * 250.0 + r->bin_entries * 300.0 + chunk_cost) / 1e6;
         printf("  %-13s same %5.1f%% | quads vis %4u culled %4u, tile entries %4u, tri setups %4u, px tested %6u "
                "covered %6u written %6u | est. %.1f M instr%s\n",
                s[i].name, 100.0 * same / (w * h), r->quads_visible, r->quads_culled,
                r->bin_entries, r->tri_setups, r->pixels_tested, r->pixels_covered, r->pixels_written, ras_mi,
                r->vis_overflow || r->bin_overflow ? "  OVERFLOW" : "");
+        printf("  %-13s chunks drawn %2u frustum-culled %2u, quads skipped %4u, backface %4u clipped %4u"
+               " | groups covered %5u shaded %5u, px in shaded groups %6u\n",
+               s[i].name, r->chunks_drawn, r->chunks_frustum_culled, r->quads_skipped,
+               r->quads_backface, r->quads_clipped, r->groups_covered, r->groups_shaded, r->pixels_in_shaded_groups);
+        // Stage 1 frame time (8 lanes): binning runs on lane 0 alone, the kernel runs 8 pixels per
+        // instruction but every lane repeats the per-quad work (quad_to_screen per tile entry, setup).
+        // A frustum-rejected quad pays the transform + plane tests, ~200 (the stock model says 40).
+        double bin0 = r->quads_backface * 40.0 + r->quads_clipped * 200.0 + r->quads_visible * 250.0 + chunk_cost;
+        double kern = r->bin_entries * 300.0 + r->tri_setups * 450.0 + r->pixels_tested / 8.0 * 25.0
+                    + r->groups_covered * CD + r->groups_shaded * CC;
+        printf("  %-13s 8-lane est. %.2f M cycles (lane-0 bin %.2f + kernel %.2f)\n", s[i].name,
+               (bin0 + kern) / 1e6, bin0 / 1e6, kern / 1e6);
     }
     kc_set_resolution(160);
     printf("%s\n", failures ? "SOME CHECKS FAILED" : "all checks passed");

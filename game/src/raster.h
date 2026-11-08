@@ -22,10 +22,16 @@
 typedef struct {
     uint32_t quads_visible, quads_culled, bin_entries, tri_setups, pixels_tested, pixels_covered, pixels_written;
     uint32_t vis_overflow, bin_overflow;
+    // Chunk frustum culling and the split pixel path (laptop stats only)
+    uint32_t chunks_drawn, chunks_frustum_culled, quads_skipped;
+    uint32_t quads_backface, quads_clipped;          // split of quads_culled
+    uint32_t groups_covered, groups_shaded;          // 8-pixel groups with a covered / a passing lane
+    uint32_t pixels_in_shaded_groups;                // covered pixels that also ran the color half
 } raster_stats_t;
 extern raster_stats_t raster_stats;
 
 void raster_bin(void);           // game side, lane 0: per-tile command lists for this frame
 void kc_raster_kernel(void);     // kernel: call with all lanes active
+
 
 #endif
