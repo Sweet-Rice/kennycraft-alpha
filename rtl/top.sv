@@ -76,6 +76,11 @@ module top #(
 
     localparam int VT_LANES = 8;   // world_mem / world_remap serve 8 VTRACE lanes
 
+    // The pipelined core's builds read the framebuffer with a registered bank
+    // mux (3-cycle port A latency, the decoder waits for it), so its BRAM
+    // read fits the 10 ns core clock; the multi-cycle builds keep 1 cycle.
+    localparam int FB_RD_LAT = PIPELINED ? 3 : 1;
+
     // ------------------------------------------------------------------
     // Clocks and resets
     // ------------------------------------------------------------------
@@ -133,7 +138,8 @@ module top #(
         .HAS_DIV_STACK(HAS_DIV_STACK),
         .HAS_RAY_UNIT (HAS_RAY_UNIT),
         .HAS_QRCP     (HAS_QRCP),
-        .PIPELINED    (PIPELINED)
+        .PIPELINED    (PIPELINED),
+        .FB_RD_LAT    (FB_RD_LAT)
     ) u_soc (
         .clk(clk_core), .rst(rst_core),
         .uart_tx(uart_rxd_out), .uart_rx(uart_txd_in),
@@ -152,7 +158,7 @@ module top #(
     // ------------------------------------------------------------------
     // Display
     // ------------------------------------------------------------------
-    display #(.PAL_HEX(PAL_HEX), .FB_COUNT(FB_COUNT)) u_display (
+    display #(.PAL_HEX(PAL_HEX), .FB_COUNT(FB_COUNT), .FB_RD_LAT(FB_RD_LAT)) u_display (
         .clk_core, .rst_core, .clk_pix, .rst_pix,
         .fb_we, .fb_re, .fb_be, .fb_addr, .fb_wdata, .fb_rdata,
         .pal_we, .pal_addr, .pal_wdata,
