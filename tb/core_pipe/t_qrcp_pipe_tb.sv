@@ -1,20 +1,20 @@
 // t_qrcp_pipe: tb/core/t_qrcp_tb.sv for the pipelined core. Same program
 // (tb/core/sw/t_qrcp.S) and the same result checks; only the latency check
-// differs. The multi-cycle core retires every QRCP QRCP_CYCLES = 9 cycles
-// after the previous instruction (IF, ID, EX, 5 x QR, WB). core_pipe keeps
-// QRCP in MEM for its own six cycles (load, four steps, result), so the
+// differs. The multi-cycle core retires every QRCP QRCP_CYCLES = 7 cycles
+// after the previous instruction (ID, EX, 4 x QR, WB). core_pipe keeps
+// QRCP in MEM for its own five cycles (load, three steps, result), so the
 // distance to the previous retirement depends on what is in front of it:
-//   after a load, ALU op or QRCP (pipe full)        LAT_FULL  = 6
-//   after a mask writer (MASKSET/MASKALL flush 2)   LAT_FLUSH = 8
+//   after a load, ALU op or QRCP (pipe full)        LAT_FULL  = 5
+//   after a mask writer (MASKSET/MASKALL flush 2)   LAT_FLUSH = 7
 // LAT lists the expected distance of each of the program's QRCPs in order:
 // six back to back after `lw s7`, QRCP x0, then QRCP a1 after MASKSET and
-// QRCP s7 after MASKALL. The multi-cycle core passes with -GLAT_FULL=9
-// -GLAT_FLUSH=9. Every distance is printed.
+// QRCP s7 after MASKALL. The multi-cycle core passes with -GLAT_FULL=7
+// -GLAT_FLUSH=7. Every distance is printed.
 module t_qrcp_pipe_tb;
     parameter string IMEM_HEX = "";
     parameter string DMEM_HEX = "";
-    parameter int    LAT_FULL  = 6;
-    parameter int    LAT_FLUSH = 8;
+    parameter int    LAT_FULL  = 5;
+    parameter int    LAT_FLUSH = 7;
     `include "soc_harness.svh"
 
     localparam int NQRCP = 9;   // QRCP instructions in t_qrcp.S

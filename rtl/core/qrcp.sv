@@ -9,12 +9,13 @@
 //
 //   load        norm_shift: n = leading zeros of x | 2 (0..30); m = (x << n)
 //               [31:15] (17 bits); sh = 30 - n; lt4 = x < 4 (signed)
-//   en, ph 0    rcp_seed: r = SEED[m[15:8]] (16 bits)
-//   en, ph 1    p = m * r                       (e = p[32:16] = mulhu(m << 15, r << 1))
-//   en, ph 2    p = (2^17 - e) * r              (p[33:16] = mulhu(r << 16, 2^17 - e))
-//   en, ph 3    y = shift back and saturate at Q16_BIG; Q16_BIG when lt4
+//               rcp_seed: r = SEED[m[15:8]] (16 bits) is a ROM read of the
+//               registered m, combinational from here on (no step of its own)
+//   en, ph 0    p = m * r                       (e = p[32:16] = mulhu(m << 15, r << 1))
+//   en, ph 1    p = (2^17 - e) * r              (p[33:16] = mulhu(r << 16, 2^17 - e))
+//   en, ph 2    y = shift back and saturate at Q16_BIG; Q16_BIG when lt4
 //
-// so y is valid from the cycle after ph 3. Both products are at most 18 x 16
+// so y is valid from the cycle after ph 2. Both products are at most 18 x 16
 // bits unsigned and share one multiplier (one DSP48E1).
 //
 // SEED is rcp_seed() evaluated at elaboration: D = 2 (256 + i) + 1 =
@@ -75,7 +76,8 @@ module qrcp (
     logic [17:0] f, a;
 
     assign f = 18'h2_0000 - {1'b0, p[32:16]};
-    assign a = (ph == 3'd1) ? {1'b0, m} : f;
+    assign r = seed_rom[m[15:8]];
+    assign a = (ph == 3'd0) ? {1'b0, m} : f;
 
     // Shift back and saturate
     logic [46:0] wide;
@@ -92,9 +94,8 @@ module qrcp (
         end
         if (en) begin
             unique case (ph)
-                3'd0:       r <= seed_rom[m[15:8]];
-                3'd1, 3'd2: p <= 34'(a) * 34'(r);
-                3'd3:       y <= (lt4 || $signed(v) > $signed(Q16_BIG)) ? Q16_BIG : v;
+                3'd0, 3'd1: p <= 34'(a) * 34'(r);
+                3'd2:       y <= (lt4 || $signed(v) > $signed(Q16_BIG)) ? Q16_BIG : v;
                 default: ;
             endcase
         end

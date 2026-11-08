@@ -15,7 +15,7 @@
 //         lane control updates the mask                             1
 //   MUL   second EXECUTE cycle for MUL family (registered product) 1
 //   VT    VTRACE rd (rd != x0): wait for the ray unit's done pulse walk + 1
-//   QR    QRCP: step every lane's QRCP unit, latch the result      5
+//   QR    QRCP: step every lane's QRCP unit, latch the result      4
 //   MEM   LSU, one bus access per group of active lanes (lanes in the
 //         same dmem/framebuffer word coalesce, else one per lane),
 //         ascending order; stores retire on the last access        G + slave wait
@@ -69,9 +69,9 @@
 // steer its reads.
 //
 // QRCP (D22, HAS_QRCP = 1; illegal otherwise) runs rtl/core/qrcp.sv in every
-// lane: the unit latches its rs1 in EX, QR steps it through qr_ph 0..3 and
-// latches its result into res at qr_ph 4, and WB writes rd in active lanes
-// (rd = x0 never). Fixed latency: 8 cycles per QRCP (ID, EX, 5 x QR, WB; the fetch overlaps WB).
+// lane: the unit latches its rs1 in EX, QR steps it through qr_ph 0..2 and
+// latches its result into res at qr_ph 3, and WB writes rd in active lanes
+// (rd = x0 never). Fixed latency: 7 cycles per QRCP (ID, EX, 4 x QR, WB; the fetch overlaps WB).
 //
 // Errors (Tai_2 sections 1 and 2). An illegal instruction or a fetch outside
 // instruction memory (caught in ID), a taken branch, JAL, JALR, or a DIF or
@@ -227,7 +227,7 @@ module core
     logic [2:0]       qr_ph;                  // QRCP step in QR
     logic             qr_wr;                  // QR, last step: latch the result
 
-    assign qr_wr = HAS_QRCP && (state == S_QR) && (qr_ph == 3'd4);
+    assign qr_wr = HAS_QRCP && (state == S_QR) && (qr_ph == 3'd3);
 
     assign wb_en = (state == S_WB) && ex_r_we && !vt_nowr;
 
