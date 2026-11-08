@@ -118,6 +118,9 @@ static inline __attribute__((always_inline)) void frame(int32_t with_ents) {
     // 4x2 blocks in rows: this lane's pixel is (bx + lx, by + ly).
     for (int32_t by = 0; by < H; by += 2) {
         int32_t py = by + ly;
+        // Columns some entity covers in this block row (entity_prepare): one load per row,
+        // then a register compare per block instead of a call to ent_block.
+        int32_t ex0 = with_ents ? ent_span[by >> 1][0] : 0, ex1 = with_ents ? ent_span[by >> 1][1] : -1;
         // Ray through the pixel center: forward + (x+0.5-W/2)*right_step - (y+0.5-H/2)*up_step.
         // Moving 4 pixels right adds exactly 4 * right_step (sx grows by 8, an even multiple).
         int32_t sx = 2 * lx + 1 - W, sy = 2 * py + 1 - H;
@@ -167,18 +170,26 @@ static inline __attribute__((always_inline)) void frame(int32_t with_ents) {
             int32_t hit = (int32_t)(res & 1u);
             int32_t fog = (f0 < t) + (f1 < t) + (f2 < t);
             int32_t col = sel(hit, face_pix[res & 255u] | fog, sky);
-            if (with_ents && ent_block(bx, by))
-                col = ent_composite(bx + lx, py, o, &r, sel(hit, t, 0x7FFFFFFF), (uint8_t)col);
+            if (with_ents && (bx + 3 >= ex0) & (bx <= ex1)) {
+                // Rebuilt here rather than kept from the VSET: keeping the 8 fields alive across
+                // the loop spills the rest of it on every block, entity or not.
+                kc_ray re = block_ray(cell, fx, fz, ay, ysign, dx, dz);
+                col = ent_composite(bx + lx, py, o, &re, sel(hit, t, 0x7FFFFFFF), (uint8_t)col);
+            }
             hal_fb_put(fb, (uint8_t)col);
-            bx = nbx; fb = nfb; dx = ndx; dz = ndz; r = rn;
+            bx = nbx; fb = nfb; dx = ndx; dz = ndz;
         }
         res = ray_result(&q, &t);                         // the row's last block
         {
             int32_t hit = (int32_t)(res & 1u);
             int32_t fog = (f0 < t) + (f1 < t) + (f2 < t);
             int32_t col = sel(hit, face_pix[res & 255u] | fog, sky);
-            if (with_ents && ent_block(bx, by))
-                col = ent_composite(bx + lx, py, o, &r, sel(hit, t, 0x7FFFFFFF), (uint8_t)col);
+            if (with_ents && (bx + 3 >= ex0) & (bx <= ex1)) {
+                // Rebuilt here rather than kept from the VSET: keeping the 8 fields alive across
+                // the loop spills the rest of it on every block, entity or not.
+                kc_ray re = block_ray(cell, fx, fz, ay, ysign, dx, dz);
+                col = ent_composite(bx + lx, py, o, &re, sel(hit, t, 0x7FFFFFFF), (uint8_t)col);
+            }
             hal_fb_put(fb, (uint8_t)col);
         }
     }

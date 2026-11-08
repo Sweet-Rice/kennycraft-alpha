@@ -22,6 +22,12 @@ extern int32_t ent_nboxes;
 extern int32_t ent_nrects;  // entities with a screen rect this frame
 // 1 if any entity's screen rect overlaps the 4x2 block at (bx, by). Uniform across lanes.
 int32_t ent_block(int32_t bx, int32_t by);
+// Per block row (by / 2), the pixel columns [x0, x1] that some entity's screen rect covers in
+// that row (x0 > x1: none). Built by entity_prepare, so the kernel loads it once per row and
+// tests each block in registers: (bx + 3 >= x0) & (bx <= x1) is ent_block or a superset of
+// it (the span can bridge two entities; ent_composite then finds no box there).
+#define ENT_ROWS 120            // 240 / 2: block rows at 320 x 240
+extern int16_t ent_span[ENT_ROWS][2];
 
 // Lane 0. Absolute feet center. Facing: 0 +z, 1 +x, 2 -z, 3 -x.
 // Returns the entity index, or -1 for invalid kind/facing or a full table.
@@ -37,5 +43,4 @@ void entity_tick(q16 dt);
 void entity_prepare(void);
 // Per lane: composite over the world color and hit distance.
 uint8_t ent_composite(int32_t px, int32_t py, const q16 o[3], const kc_ray *r, q16 tw, uint8_t col);
-void ent_box_hit(const ent_box *b, const q16 o[3], const kc_ray *r, ent_hit *h);
 #endif
