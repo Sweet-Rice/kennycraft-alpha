@@ -38,6 +38,8 @@ foreach f {kc_imem.hex kc_dmem.hex textures.hex palette.hex} {
 
 read_verilog -sv rtl/kc_isa_pkg.sv
 read_verilog -sv [glob rtl/core/*.sv] [glob rtl/mem/*.sv] [glob rtl/soc/*.sv] [glob rtl/display/*.sv]
+set kc_core_pipe [glob -nocomplain rtl/core_pipe/*.sv]
+if {[llength $kc_core_pipe]} { read_verilog -sv $kc_core_pipe }
 read_verilog -sv {
     rtl/ddr/ddr_clk.sv
     rtl/ddr/ddr_bridge.sv
