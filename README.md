@@ -11,9 +11,9 @@ design history; decision numbers such as D22 refer to it.
 | Path | What |
 | --- | --- |
 | `rtl/core/` | Multi-cycle core (`core.sv`) and its leaf modules: lane datapath, ALU, register file, decoder, LSU, MUL, QRCP, divergence stack |
-| `rtl/core_pipe/` | 5-stage pipelined core (`core_pipe.sv`, `lane_pipe.sv`) built from `rtl/core`'s leaf modules |
+| `rtl/core_pipe/` | Pipelined core, IF, F2, ID, EX, MEM, WB (`core_pipe.sv`, `lane_pipe.sv`), with its BTB (`btb.sv`), LSU (`lsu_pipe.sv`), MUL (`mul_pipe.sv`), QRCP (`qrcp_pipe.sv`) and dmem-window port (`win_lsu.sv`); otherwise built from `rtl/core`'s leaf modules |
 | `rtl/soc/` | `kc_soc.sv` (core, imem, dmem, textures), address decoder, MMIO, UART, byte bridge for the byte-wide regions |
-| `rtl/mem/` | `memory_arr.sv`, `world_mem.sv` |
+| `rtl/mem/` | `memory_arr.sv`, `world_mem.sv`, `dmem_win.sv` (the pipelined core's dmem window) |
 | `rtl/display/` | Framebuffers, palette, VGA timing, clock generator |
 | `rtl/ddr/` | DDR3 chunk store: chunk engine, DDR bridge, world remap, `ddr_clk.sv`, `ddr_model.sv` (simulation MIG), MIG project files in `mig/` |
 | `rtl/vtrace/` | VTRACE ray unit |
@@ -80,17 +80,22 @@ vivado -mode batch -source fpga/build.tcl      # KC_TARGET=<name> picks fpga/<na
 | `top_s0` | Stage 0: `LANES=1`, no divergence stack | `kc_chip` |
 | `top_s2` | Stage 2: Stage 1 plus `HAS_RAY_UNIT=1`, `HAS_QRCP=1`, `FB_COUNT=3` | `kc_chip8_vtrace` |
 | `top_s2p` | `top_s2` with `PIPELINED=1` | `kc_chip8_vtrace` |
+| `top_s2p100` | `top_s2p` with a 100 MHz core clock (`CORE_MHZ=100`) and timing-driven directives | `kc_chip8_vtrace` |
 | `ddr_test` | Standalone DDR3 chunk store test (`fpga/ddr_test/`) | none |
 | `display_test` | Standalone display pattern (`fpga/display_test/`) | none |
 
 Outputs go to `FPGA_BUILD_OUT` (default `build/out/<target>`): `top.bit`,
-timing and utilization reports, `routed.dcp`, `top.mmi`, and for the
+timing and utilization reports (`timing.rpt`, `utilization.rpt` and its
+`_hier` version, and the core clock's worst setup paths in `paths.rpt` and
+`paths_summary.rpt`), `routed.dcp`, `top.mmi`, and for the
 `rtl/top.sv` targets `kc.mmi` (imem, dmem and texture BRAMs; the RAMB18
-palette is left out). `fpga/patch_bit.sh <build_dir> <hex_dir> <out_dir> [program]`
+palette is left out). Builds use at most 14 threads. `fpga/patch_bit.sh <build_dir> <hex_dir> <out_dir> [program]`
 patches new `kc_imem.hex`, `kc_dmem.hex` and `textures.hex` into a built
 `top.bit` with updatemem and, with `program`, programs it through
 `fpga/program.tcl` under the hardware lock in `FPGA_STATE` (required). A
-changed `palette.hex` needs a rebuild.
+changed `palette.hex` needs a rebuild, and so does, on the pipelined
+targets, a `kc_dmem.hex` that changes dmem 0x6000 to 0x7FFF (the dmem
+window, below); `patch_bit.sh` refuses such images.
 
 ## Bench
 
@@ -235,15 +240,26 @@ pipelined tops the framebuffer reads take 3 cycles and the chunk engine
 buffers its DDR3 beats. MMIO CYCLES counts 20 ns ticks at either clock, so
 software timing is unchanged.
 
-`top_s2p100`, build ff7f70: core clock WNS +0.100 ns at 10 ns, every clock
-met; 27,340 LUT, 14,971 FF, 111.5 BRAM36, 48 DSP. Frames in Verilator, with
-the shallower pipeline of the extreme-hardware-optimizations branch at
-50 MHz for comparison:
+`top_s2p100`, build `build_20261108_115553_1f9ddd` (main 7315b19's game):
+core clock WNS +0.100 ns at 10 ns, hold +0.030 ns, every clock met;
+27,340 LUT, 14,971 FF, 111.5 BRAM36, 48 DSP. The bitstream and its
+`kc.mmi` are the pre-release
+[top_s2p100-pr71-rc1](https://github.com/Sweet-Rice/kennycraft-alpha/releases/tag/top_s2p100-pr71-rc1).
 
-| Frame | Before: cycles at 50 MHz | Now: cycles at 100 MHz |
+Frames of the current game in Verilator (`t_top_frame` at the spawn pose,
+core cycles between FB_SWAPs; the two cores' 160×120 frames are
+byte-identical):
+
+| Frame | Multi-cycle core (`top_s2`, 50 MHz) | Pipelined core (`top_s2p100`, 100 MHz) |
 | --- | --- | --- |
-| 160×120 | 209,190 = 239.0 fps | 244,535 = 408.9 fps |
-| 320×240 | 804,185 = 62.2 fps | 938,057 = 106.6 fps |
+| 160×120 | 596,341 cycles = 83.8 fps | 246,643 cycles = 405.4 fps |
+| 320×240 | 2,296,081 cycles = 21.8 fps | 941,479 cycles = 106.2 fps |
+
+On the board (Arty A7-100T, 160×120 game): it boots (`kc: boot`,
+`kc: ddr3 chunk store ready` on the UART), the error LED stays off, the
+capture card sees 59.4 new frames/s while turning (the 60 Hz display is
+the limit), live play over the UART works, and a 60 s soak shows no blank
+or frozen frames.
 
 ```sh
 make tb-core-pipe-<t>          # any tb/core test on the pipelined core
@@ -263,7 +279,8 @@ same for bench traces (`scripts/tracecollapse.py`). For a replay that matches
 on both cores, build the game with `KC_FIXED_DT=1 KC_TAG_PERSIST=1`.
 
 The Stage 2 bitstream on the pipelined core is `KC_TARGET=top_s2p`
-(`fpga/top_s2p/`), which is `top_s2` with `PIPELINED=1`.
+(`fpga/top_s2p/`), which is `top_s2` with `PIPELINED=1`, at 50 MHz, and
+`KC_TARGET=top_s2p100` (`fpga/top_s2p100/`) at 100 MHz.
 
 ## Credits
 
