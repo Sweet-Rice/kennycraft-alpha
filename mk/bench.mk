@@ -56,14 +56,16 @@ STAGE ?= 0
 DDR ?= 1
 # CHIP_TOP=top builds rtl/top.sv, bench_chip (the default before Stage 2) the
 # same RTL without the board clocking and without the ray unit; both take
-# LANES and HAS_DIV_STACK, top also HAS_RAY_UNIT (Stage 2 runs on top). The
-# harness reads the lane count from the built core.
+# LANES and HAS_DIV_STACK, top also HAS_RAY_UNIT and HAS_QRCP (Stage 2 runs on
+# top, with QRCP like the Stage 2 bitstream). The harness reads the lane count
+# from the built core.
 LANES ?= $(if $(filter 1 2,$(STAGE)),8,1)
 HAS_DIV_STACK ?= $(if $(filter 1 2,$(STAGE)),1,0)
 HAS_RAY_UNIT ?= $(if $(filter 2,$(STAGE)),1,0)
+HAS_QRCP ?= $(if $(filter 2,$(STAGE)),1,0)
 CHIP_TOP ?= $(if $(filter 2,$(STAGE)),top,bench_chip)
 CHIP_PARAMS = -GLANES=$(LANES) -GHAS_DIV_STACK="1'b$(HAS_DIV_STACK)" \
-	$(if $(filter top,$(CHIP_TOP)),-GHAS_RAY_UNIT="1'b$(HAS_RAY_UNIT)")
+	$(if $(filter top,$(CHIP_TOP)),-GHAS_RAY_UNIT="1'b$(HAS_RAY_UNIT)" -GHAS_QRCP="1'b$(HAS_QRCP)")
 ifeq ($(STAGE)$(CHIP_TOP),2bench_chip)
 $(error STAGE=2 needs CHIP_TOP=top: bench_chip has no ray unit, so custom-1 would halt ERR.ILLEGAL)
 endif
