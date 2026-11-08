@@ -6,7 +6,9 @@
 // rtl/core's, unchanged; QRCP is rtl/core_pipe/qrcp_pipe.sv and the one-cycle
 // multiplier rtl/core_pipe/mul_pipe.sv.
 //
-//   IF   imem_addr = pc_f, a register (a redirect writes it: flush 2)
+//   IF   imem_addr = pc_f, a register (a redirect writes it: flush 2), and
+//        the branch target buffer lookup of pc_f (rtl/core_pipe/btb.sv)
+//        that picks the next pc_f
 //   ID   the BRAM output (or d_hold, latched in the first cycle ID waits,
 //        since the BRAM keeps reading pc_f), decode, every lane's register
 //        read with the WB bypass. Illegal words and fetches outside imem
@@ -25,11 +27,20 @@
 // lane's write enable, so an inactive lane sees its older value. A load or
 // MUL in EX whose rd ID reads holds ID for one cycle (load-use, mul-use):
 // neither result is forwarded from MEM, so the reader takes it from WB.
-// Branches, JAL and JALR resolve in EX (predict not taken) and flush ID and
-// IF; so do LMASK, MASKSET, MASKALL, DIF, DELSE and DENDIF, so the mask and
-// divergence stack that EX reads are always those of every older
-// instruction (Tai page, GPU Core, Pipelining notes: read in ID, written in
-// EX).
+// Branches, JAL and JALR resolve in EX and flush ID and IF; so do LMASK,
+// MASKSET, MASKALL, DIF, DELSE and DENDIF, so the mask and divergence stack
+// that EX reads are always those of every older instruction (Tai page, GPU
+// Core, Pipelining notes: read in ID, written in EX).
+//
+// Branch prediction. IF looks pc_f up in the BTB; on a hit with a counter
+// of 2 or 3 (predicted taken) the next pc_f is the entry's target, else
+// pc_f + 4. The prediction and target ride with the instruction; ID checks
+// the target against d_pc + d_imm into the e_pok flag. A conditional branch
+// or JAL in EX redirects (flush 2) only when the prediction was wrong: taken
+// without e_pok, or predicted taken and not taken. JALR, DIF/DELSE/DENDIF
+// and the mask writers are never predicted. The BTB is written the cycle
+// after EX (u_req), unless the branch halted (m_halt, a register). Only the
+// fetch path depends on it: pc, retire order and values do not.
 //
 // Asynchronous VTRACE (VTRACE x0) starts the walk in EX like VTRACE rd and
 // leaves MEM in one cycle. vt_pend is high from vt_start until vt_done; while
@@ -136,13 +147,21 @@ module core_pipe
     assign d_inst    = d_hold_v ? d_hold : imem_rdata;
     assign d_ready   = !d_valid || (adv && !lu);
 
-    // pc_f: a redirect writes it, otherwise it steps with ID until a halt
-    // stops fetching. A halt does not touch its select: after a halt pc_f
-    // is never decoded again.
+    // Branch target buffer: the prediction for pc_f (rtl/core_pipe/btb.sv)
+    logic        f_hit, f_pred, d_hit, d_pred, e_hit, e_pred, e_pok;
+    logic [1:0]  f_ctr, d_ctr, e_ctr;
+    logic [31:0] f_tgt, d_tgt;
+    logic        u_req, u_hit, u_taken;
+    logic [1:0]  u_ctr;
+    logic [31:0] u_tgt;
+
+    // pc_f: a redirect writes it, otherwise it steps with ID (to the
+    // predicted target or pc_f + 4) until a halt stops fetching. A halt does
+    // not touch its select: after a halt pc_f is never decoded again.
     always_ff @(posedge clk) begin
         if (rst)                     pc_f <= RESET_VEC;
         else if (e_go && e_redirect) pc_f <= e_next;
-        else if (d_ready && !stop)   pc_f <= pc_f + 32'd4;
+        else if (d_ready && !stop)   pc_f <= f_pred ? f_tgt : pc_f + 32'd4;
     end
 
     always_ff @(posedge clk) begin
@@ -156,6 +175,10 @@ module core_pipe
             if (e_halt) stop <= 1'b1;
         end else if (d_ready) begin
             d_pc     <= pc_f;
+            d_hit    <= f_hit;
+            d_pred   <= f_pred;
+            d_ctr    <= f_ctr;
+            d_tgt    <= f_tgt;
             d_valid  <= !stop;
             d_hold_v <= 1'b0;
         end else if (!d_hold_v) begin
@@ -236,6 +259,12 @@ module core_pipe
             e_rs1        <= d_rs1;
             e_rs2        <= d_rs2;
             e_imm        <= d_imm;
+            // Only conditional branches and JAL are predicted; e_pok: the
+            // predicted target is the real one (so EX needs no compare)
+            e_pred       <= d_pred && (d_is_branch || d_is_jal);
+            e_pok        <= d_pred && (d_is_branch || d_is_jal) && (d_pc + d_imm == d_tgt);
+            e_hit        <= d_hit;
+            e_ctr        <= d_ctr;
         end
     end
 
@@ -433,7 +462,12 @@ module core_pipe
         e_err[ERR_DIVSTACK] = !e_fault && e_divstack;
     end
 
-    assign e_redirect = take || mask_we;
+    // A branch or JAL redirects when its prediction was wrong (taken but not
+    // predicted to its target, or predicted taken and not taken). For JALR
+    // and custom-2 e_pred = e_pok = 0, so this is take || mask_we for them.
+    // e_pok and e_pred are registers, so take reaches flush through one LUT
+    // of (take, e_pok, e_pred, mask_we) where it used to be take || mask_we.
+    assign e_redirect = mask_we || (take ? !e_pok : e_pred);
 
     // Mask writers are lane control (halts only on e_fault) and custom-2
     // (e_div_halt), so the write skips the lane ALU / uniform-check cone.
@@ -555,6 +589,27 @@ module core_pipe
             if (vt_wr)         m_vt_tail <= 1'b1;
         end
     end
+
+    // BTB update, the cycle after a conditional branch or JAL leaves EX:
+    // m_halt (a register) is then its e_halt, so a halting one writes
+    // nothing and the write enable stays out of the halt cone. m_pc is its PC.
+    always_ff @(posedge clk) begin
+        if (rst) u_req <= 1'b0;
+        else     u_req <= e_go && (e_is_branch || e_is_jal);
+        if (e_go) begin
+            u_tgt   <= b_target;
+            u_hit   <= e_hit;
+            u_ctr   <= e_ctr;
+            u_taken <= take;
+        end
+    end
+
+    btb u_btb (
+        .clk, .rst,
+        .f_pc(pc_f), .f_hit, .f_taken(f_pred), .f_ctr, .f_target(f_tgt),
+        .u_we(u_req && !m_halt), .u_pc(m_pc), .u_target(u_tgt), .u_hit, .u_ctr,
+        .u_taken
+    );
 
     // QRCP: two steps (qrcp_pipe), then the result in the third cycle.
     assign qr_s0  = m_valid && m_qr && (m_cnt == 3'd0);

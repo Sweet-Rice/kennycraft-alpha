@@ -7,7 +7,7 @@ module t_cpi_tb;
     `include "soc_harness.svh"
 
     localparam int          N       = 32;
-    localparam int          NSLOTS  = 25;
+    localparam int          NSLOTS  = 27;
     localparam logic [31:0] RESULTS = 32'h1000_0100;
 
     function automatic string slot_name(input int k);
@@ -24,6 +24,7 @@ module t_cpi_tb;
             19: return "store SW world";      20: return "load LW textures";
             21: return "store SB framebuffer"; 22: return "FENCE";
             23: return "lane ctl (MASKGET)"; 24: return "lane ctl (MASKALL)";
+            25: return "loop pass, BNEZ";   26: return "loop pass, JAL+BNEZ";
             default: return "?";
         endcase
     endfunction
@@ -36,6 +37,15 @@ module t_cpi_tb;
             17, 20:               return 7;   // four byte reads
             19:                   return 6;   // four byte writes
             default:              return 3;
+        endcase
+    endfunction
+
+    // Slots 25 and 26 are loops: LI, then N passes of ADDI (+ JAL) + BNEZ
+    function automatic int expected_delta(input int k);
+        case (k)
+            25:      return 3 * (2 * N + 1);
+            26:      return 3 * (3 * N + 1);
+            default: return expected_cpi(k) * N;
         endcase
     endfunction
 
@@ -56,8 +66,8 @@ module t_cpi_tb;
             if (k == 9) delta -= auipc_cycles;   // AUIPC + JALR pairs
             cpi = real'(delta) / N;
             $display("  %-22s %0.2f", slot_name(k), cpi);
-            if (delta != expected_cpi(k) * N) begin
-                $display("  FAIL %s: expected CPI %0d", slot_name(k), expected_cpi(k));
+            if (delta != expected_delta(k)) begin
+                $display("  FAIL %s: expected %0d cycles", slot_name(k), expected_delta(k));
                 errors++;
             end
         end

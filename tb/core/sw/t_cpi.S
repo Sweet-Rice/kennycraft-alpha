@@ -2,7 +2,9 @@
    Each slot reads CYCLES, runs N copies of one instruction, reads CYCLES
    again and stores the difference to results[slot]. Slot 0 has an empty
    body, so CPI = (results[k] - results[0]) / N. Slot 9 times AUIPC + JALR
-   pairs; the testbench subtracts the AUIPC CPI. */
+   pairs; the testbench subtracts the AUIPC CPI. Slots 25 and 26 time a
+   loop instead (LI, then N passes of ADDI, the body and a BNEZ back edge
+   taken N - 1 times), so the same branch and JAL run again and again. */
 #include "kc_test.h"
 #define N 32
 
@@ -22,6 +24,17 @@
     \first
     \second
     .endr
+    lw    t1, MMIO_CYCLES(s0)
+    sub   t1, t1, t0
+    sw    t1, (\slot * 4)(s1)
+.endm
+
+.macro MEASURE_LOOP slot, body:vararg
+    lw    t0, MMIO_CYCLES(s0)
+    li    t2, N
+77: addi  t2, t2, -1
+    \body
+    bnez  t2, 77b
     lw    t1, MMIO_CYCLES(s0)
     sub   t1, t1, t0
     sw    t1, (\slot * 4)(s1)
@@ -62,6 +75,8 @@ _start:
     MEASURE 22, fence
     MEASURE 23, .insn r 0x0B, 5, 0, a0, x0, x0   /* MASKGET */
     MEASURE 24, .insn r 0x0B, 7, 0, x0, x0, x0   /* MASKALL */
+    MEASURE_LOOP 25
+    MEASURE_LOOP 26, jal zero, .+4
 
     li    t0, 1
     li    t1, TB_DONE
@@ -70,6 +85,6 @@ _start:
 
     .data
 results:
-    .space 4 * 25
+    .space 4 * 27
 scratch:
     .space 16
