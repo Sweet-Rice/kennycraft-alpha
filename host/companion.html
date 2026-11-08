@@ -72,6 +72,7 @@
       <div class="row">
         <button onclick="post('/api/interact',{role:'builder'})">Builder</button>
         <button onclick="post('/api/interact',{role:'banker'})">Banker</button>
+        <button onclick="post('/api/interact',{role:'trader'})">Trader</button>
       </div>
     </div>
     <div class="card" id="worldcard"><h2>World near the player</h2><canvas id="world" width="16" height="16"></canvas>
@@ -98,7 +99,9 @@
     </div>
     <div class="card"><h2>Contracts</h2><table id="contracts"></table></div>
     <div class="card"><h2>Wallets</h2><div id="wallets" class="row small"></div>
-      <p class="small">Nessie checking: <b id="usd">…</b></p></div>
+      <p class="small">Nessie checking: <b id="usd">…</b></p>
+      <p class="small">Your materials: <span id="items">none</span></p></div>
+    <div class="card"><h2>Villagers</h2><div id="speech" class="small"></div><div id="brains" class="dim small"></div></div>
     <div class="card"><h2>Host log</h2><div id="log" class="log"></div></div>
   </section>
 
@@ -126,8 +129,12 @@ function render(s) {
   state = s;
   $('mode').textContent = s.mode; $('mode').className = 'badge ' + s.mode;
   $('queued').textContent = s.queued ? `${s.queued} payment${s.queued>1?'s':''} waiting to settle` : 'all payments settled';
-  $('livebox').style.display = s.live ? '' : 'none';
-  $('sim').style.display = $('worldcard').style.display = s.live ? 'none' : '';
+  $('livebox').style.display = s.live || s.board ? '' : 'none';
+  $('sim').style.display = $('worldcard').style.display = s.live || s.board ? 'none' : '';
+  if (s.board) {                   // the board draws on its own monitor; this box only takes keys
+    $('livebox').querySelector('h2').textContent = 'KennyCraft (Arty board over UART)';
+    img.alt = 'Click here, then play on the board’s monitor'; img.style.minHeight = '120px';
+  }
   if (s.hud) {
     $('kcn').textContent = s.hud.kcn;
     $('quote').innerHTML = s.hud.quote[0] ? `Quote #${s.hud.quote[0]}: <b style="color:#e6e8eb">${s.hud.quote[1]} KCN</b>, Y/N?` : 'no quote';
@@ -138,8 +145,11 @@ function render(s) {
   }
   $('usd').textContent = usd(s.usd); $('usd2').textContent = usd(s.usd);
   $('talk').style.display = s.prompt ? '' : 'none';
-  $('talk-title').textContent = s.prompt === 'banker' ? 'Banker' : `Hire the ${s.prompt}`;
-  $('chat').style.display = s.prompt && s.prompt !== 'banker' ? '' : 'none';
+  $('talk-title').textContent = s.prompt === 'banker' ? 'Banker' : s.prompt === 'trader' ? 'Trader' : `Hire the ${s.prompt}`;
+  $('chat').style.display = s.prompt ? '' : 'none';           // the banker is a Nemotron agent too
+  $('text').placeholder = s.prompt === 'banker' ? 'turn $5 into coins and show me where my money went'
+                        : s.prompt === 'trader' ? 'I need 30 bricks for a roof, can you do a deal?'
+                                                : 'build me a small plank hut with a brick roof';
   $('bank').style.display = s.prompt === 'banker' ? '' : 'none';
   $('wallets').innerHTML = Object.entries(s.wallets).map(([w,v]) => `<span><span class="dim">${w}</span> <b>${v}</b></span>`).join(' · ');
   $('contracts').innerHTML = s.contracts.map(c => `<tr><td>#${c.id} ${c.kind}<div class="dim small">${esc(c.text)}</div>
@@ -154,6 +164,9 @@ function render(s) {
       <td>${e.sig ? `<a href="https://explorer.solana.com/tx/${e.sig}?cluster=devnet" target="_blank" rel="noopener">tx</a>` : ''}</td></tr>`).join('')
       || '<tr><td class="dim">No payments yet.</td></tr>';
   $('log').textContent = s.log.join('\n');
+  $('items').textContent = Object.entries((s.items || {}).player || {}).map(([k, n]) => `${n} ${k}`).join(', ') || 'none';
+  $('speech').innerHTML = Object.entries(s.speech || {}).map(([r, t]) => `<div><b>${r}</b>: "${esc(t)}"</div>`).join('') || '<span class="dim">…</span>';
+  $('brains').textContent = s.brains ? `decisions: ${s.brains.model} by Nemotron Nano, ${s.brains.rules} by rules (${s.brains.fallback} fallbacks), ${s.brains.moves} moves` : '';
   if (s.world) drawWorld(s.world);
 }
 

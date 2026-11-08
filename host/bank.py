@@ -27,7 +27,7 @@ from solders.transaction import Transaction
 ROOT = Path(__file__).resolve().parent.parent
 TOKEN = Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
 MEMO = Pubkey.from_string("Memo4c2pN8afCj432Lb7RMVKi9PbQnnW7ewFFaV3oAH")  # what spl-token --with-memo uses
-KINDS = {"exchange_in", "exchange_out", "fund", "release", "fee", "refund"}
+KINDS = {"exchange_in", "exchange_out", "fund", "release", "fee", "refund", "trade_buy", "trade_sell"}
 RATE = 10  # KCN per dollar (placeholder)
 
 # tx/lvbh hold the last signed attempt: it is rebroadcast until its blockhash
@@ -38,6 +38,9 @@ SCHEMA = """CREATE TABLE IF NOT EXISTS entries (
   contract_id INTEGER, status TEXT,
   sig TEXT, err TEXT, tries INTEGER DEFAULT 0,
   tx TEXT, lvbh INTEGER)"""
+# Building materials live on the laptop only (the chip has no inventory): the trader's
+# stock and the player's, moved in the same transaction as the KCN that pays for them.
+ITEMS = "CREATE TABLE IF NOT EXISTS items (owner TEXT, item TEXT, qty INTEGER, PRIMARY KEY (owner, item))"
 
 
 def kcn():
@@ -55,6 +58,7 @@ class Ledger:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute(SCHEMA)
+        self.db.execute(ITEMS)
 
     def balance(self, wallet, settled_only=False):
         q = ("SELECT COALESCE(SUM(CASE WHEN to_wallet = ?1 THEN amount ELSE -amount END), 0)"
@@ -63,8 +67,9 @@ class Ledger:
             q += " AND status = 'settled'"
         return self.db.execute(q, (wallet,)).fetchone()[0]
 
-    def post(self, kind, src, dst, amount, contract_id=None):
-        """Queue src -> dst and return the entry id. Never lets a balance go negative."""
+    def post(self, kind, src, dst, amount, contract_id=None, items=()):
+        """Queue src -> dst and return the entry id. Never lets a balance go negative.
+        items: (owner, item, change) moves made in the same transaction, for a trade."""
         if kind not in KINDS or src not in self.wallets or dst not in self.wallets or src == dst:
             raise ValueError(f"bad entry {kind} {src} -> {dst}")
         if type(amount) is not int or amount <= 0:
@@ -74,11 +79,34 @@ class Ledger:
             have = self.balance(src)
             if have < amount:
                 raise InsufficientFunds(f"{src} has {have} KCN, needs {amount}")
+            self._move_items(items)
             cur = self.db.execute(
                 "INSERT INTO entries (ts, kind, from_wallet, to_wallet, amount, contract_id, status)"
                 " VALUES (?, ?, ?, ?, ?, ?, 'queued')", (time.time(), kind, src, dst, amount, contract_id))
             self.db.execute("COMMIT")
             return cur.lastrowid
+        except BaseException:
+            self.db.execute("ROLLBACK")
+            raise
+
+    def stock(self, owner):
+        return {r["item"]: r["qty"] for r in self.db.execute(
+            "SELECT item, qty FROM items WHERE owner = ? AND qty > 0 ORDER BY item", (owner,))}
+
+    def _move_items(self, changes):
+        for owner, item, change in changes:
+            have = self.stock(owner).get(item, 0)
+            if have + change < 0:
+                raise InsufficientFunds(f"{owner} has {have} {item}, needs {-change}")
+            self.db.execute("INSERT INTO items (owner, item, qty) VALUES (?, ?, ?) ON CONFLICT (owner, item)"
+                            " DO UPDATE SET qty = qty + excluded.qty", (owner, item, change))
+
+    def move_items(self, changes):
+        """Items only (the builder using the player's materials): all or nothing."""
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            self._move_items(changes)
+            self.db.execute("COMMIT")
         except BaseException:
             self.db.execute("ROLLBACK")
             raise

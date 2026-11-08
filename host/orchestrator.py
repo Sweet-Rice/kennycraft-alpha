@@ -17,21 +17,27 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from kc_agents import builder                             # noqa: E402
+from kc_agents import banker, builder, trader             # noqa: E402
+from kc_agents.mobs import Mob, MobManager                # noqa: E402
 from kc_agents.bank import FEE                            # noqa: E402
 
 import cr6                                                # noqa: E402
+from bank import InsufficientFunds, exchange              # noqa: E402
+from nessie import NessieError                            # noqa: E402
 
 TYPES = ["builder", "miner", "farmer"]                      # contract type byte = index
 # Villagers the laptop spawns next to the player (CR6 SPAWN): role, entity kind
 # (game/src/entity.h: 0 trader, 1 contractor), offset from the player in blocks.
 # Beside the player (north and south, within E's 3-block reach), clear of the site to the
 # east and of the camera stepping back west to watch the build.
-VILLAGERS = [("banker", 0, -1, 3), ("builder", 1, -1, -3)]
+VILLAGERS = [("banker", 0, -1, 3), ("builder", 1, -1, -3), ("trader", 0, -4, 0)]   # trader: walk 1 west to talk
+STOCK = {"brick": 200, "planks": 300, "cobble": 300, "stone": 200, "log": 100, "sand": 100,
+         "dirt": 300, "grass": 100, "leaves": 100}                                      # the trader's first stock
 OPEN = ("SURVEY", "PLANNED", "FUNDED", "BUILT", "VERIFIED")
 HUD_STATE = {"FUNDED": 1, "BUILT": 2, "VERIFIED": 2, "PAID": 3}   # 2-bit state on the chip
 SITE = (6, 8, 6)        # x, y, z: east of the player, inside the chip's 16^3 zone around them
 RETRY = ("RATE", "BUSY")
+EXPLORER = "https://explorer.solana.com/tx/{}?cluster=devnet"
 
 
 def chat():
@@ -118,6 +124,16 @@ class Job:
         return res == "OK"
 
     # -- bank -----------------------------------------------------------------------------
+    def materials(self):
+        return self.sync(self._call(self.orch.ledger.stock, "player"))
+
+    def use_materials(self, used):
+        self.sync(self._call(self.orch.ledger.move_items, [("player", k, -n) for k, n in used.items()]))
+
+    @staticmethod
+    async def _call(fn, *args):             # sqlite stays on the loop's thread
+        return fn(*args)
+
     def balance(self, wallet="player"):
         return self.sync(self._read(wallet))
 
@@ -150,15 +166,160 @@ class Job:
         return sum(self.get(*c) == b for c, b in t.items()), len(t)
 
 
+class VisitJob:
+    """One conversation with a villager agent that isn't a contract (banker, trader)."""
+    contract, hud_v, cancel = None, None, False
+    sync = Job.sync
+
+    def __init__(self, orch, cid, text):
+        self.orch, self.id, self.text = orch, cid, text
+        self.note, self.answer, self.over, self.visit = "", None, False, None
+
+    @property
+    def state(self):
+        return "DONE" if self.over else "TALKING"
+
+    def progress(self):
+        return 0, 0
+
+    def ask(self, question, kcn):
+        self.orch.loop.call_soon_threadsafe(self.orch.say, f"{self.kind}: {question}")
+        return self.sync(self.orch.ask(self, kcn))
+
+
+class BankerJob(VisitJob):
+    """kc_agents/banker.py's bank methods on the ledger, Nessie and Solana devnet."""
+    kind, agent = "banker", banker
+
+    async def _accounts(self):
+        o = self.orch
+        mode, queued = o.settler.mode() if o.settler else ("OFFLINE", 0)
+        cents = await o.nessie.available_cents()
+        return {"kcn": o.ledger.balance("player"), "dollars_available": cents / 100,
+                "payments_waiting": queued, "chain": mode}
+
+    def accounts(self):
+        return self.sync(self._accounts())
+
+    async def _exchange(self, dollars, to_game):
+        try:
+            entry = await exchange(self.orch.ledger, self.orch.nessie, dollars, to_game)
+        except NessieError as x:
+            raise ValueError("not enough dollars in checking" if x.type == "insufficient_funds"
+                             else "the bank is closed (Nessie is down)")
+        except InsufficientFunds as x:
+            raise ValueError(str(x))
+        self.orch.say(f"banker: ${dollars} {'->' if to_game else '<-'} {dollars * 10} KCN")
+        await self.orch.hud()
+        return entry
+
+    def exchange(self, dollars, to_game):
+        return self.sync(self._exchange(dollars, to_game))
+
+    async def _history(self, n):
+        rows = self.orch.ledger.db.execute(
+            "SELECT id, kind, from_wallet, to_wallet, amount, contract_id, status, sig FROM entries"
+            " WHERE kind != 'mint' ORDER BY id DESC LIMIT ?", (n,)).fetchall()
+        return [{"entry_id": r["id"], "kind": r["kind"], "from": r["from_wallet"], "to": r["to_wallet"],
+                 "kcn": r["amount"], "contract": r["contract_id"], "status": r["status"],
+                 "explorer": r["sig"] and EXPLORER.format(r["sig"])} for r in rows]
+
+    def history(self, n):
+        return self.sync(self._history(n))
+
+    async def _dollar_history(self, n):
+        keep = ("type", "amount_cents", "status", "description", "created_at")
+        return [{k: t[k] for k in keep if k in t} for t in await self.orch.nessie.transactions(n)]
+
+    def dollar_history(self, n):
+        return self.sync(self._dollar_history(n))
+
+    async def _chain_lookup(self, entry_id):
+        r = self.orch.ledger.db.execute("SELECT kind, amount, status, sig FROM entries WHERE id = ?",
+                                        (entry_id,)).fetchone()
+        if not r:
+            return {"error": f"no ledger entry {entry_id}"}
+        if not r["sig"]:
+            return {"entry_id": entry_id, "status": "waiting to settle on chain"}
+        tx = await self.orch.settler.rpc("getTransaction", r["sig"], {
+            "encoding": "json", "commitment": "confirmed", "maxSupportedTransactionVersion": 0})
+        if not tx:
+            return {"entry_id": entry_id, "status": "not found on chain yet"}
+        meta = tx["meta"] or {}
+        memo = next((m.split("): ", 1)[-1].strip('"') for m in meta.get("logMessages") or [] if "Memo (len" in m), None)
+        return {"entry_id": entry_id, "kind": r["kind"], "kcn": r["amount"],
+                "status": "failed" if meta.get("err") else "confirmed", "slot": tx["slot"],
+                "block_time": tx.get("blockTime"), "fee_lamports": meta.get("fee"), "memo": memo,
+                "explorer": EXPLORER.format(r["sig"])}
+
+    def chain_lookup(self, entry_id):
+        return self.sync(self._chain_lookup(entry_id))
+
+
+class MobChip:
+    """The two chip calls kc_agents' MobManager makes (Q_ENTITY, MOVE), from its thread."""
+
+    def __init__(self, orch):
+        self.orch = orch
+
+    def sync(self, coro):
+        return asyncio.run_coroutine_threadsafe(coro, self.orch.loop).result()
+
+    def entity(self, eid):
+        res, p = self.sync(self.orch.send(cr6.Q_ENTITY, bytes([eid])))
+        if res != "OK" or not p:
+            raise KeyError(eid)
+        _, x, z, y, _ = struct.unpack("<BHHBB", p)
+        return x / 16, y / 8, z / 16
+
+    def move(self, eid, tx, tz):
+        res, _ = self.sync(self.orch.send(cr6.MOVE, struct.pack("<BHH", eid, round(tx * 16), round(tz * 16))))
+        return res == "OK"
+
+
+class TraderJob(VisitJob):
+    """kc_agents/trader.py's market: laptop-side materials, paid in KCN through the ledger."""
+    kind, agent = "trader", trader
+
+    async def _stock(self):
+        led = self.orch.ledger
+        return {"trader": led.stock("trader"), "player": led.stock("player"), "kcn": led.balance("player")}
+
+    def stock(self):
+        return self.sync(self._stock())
+
+    async def _trade(self, item, qty, kcn, buy):
+        moves = [("trader", item, -qty), ("player", item, qty)] if buy else [("player", item, -qty), ("trader", item, qty)]
+        try:
+            entry = (self.orch.ledger.post("trade_buy", "player", "treasury", kcn, items=moves) if buy else
+                     self.orch.ledger.post("trade_sell", "treasury", "player", kcn, items=moves))
+        except InsufficientFunds as x:
+            raise ValueError(str(x))
+        self.orch.say(f"trader: {'sold' if buy else 'bought'} {qty} {item} for {kcn} KCN")
+        await self.orch.hud()
+        return entry
+
+    def trade(self, item, qty, kcn, buy):
+        return self.sync(self._trade(item, qty, kcn, buy))
+
+
 class Orchestrator:
     def __init__(self, ledger, bridge, chat=chat, quote_s=30, stall_s=20, on_change=lambda: None, say=lambda t: None):
+        self.nessie = self.settler = None       # kc-host sets these; the banker agent needs them
         self.ledger, self.bridge, self.chat = ledger, bridge, chat
-        self.quote_s, self.stall_s, self.on_change, self.say = quote_s, stall_s, on_change, say
+        self.quote_s, self.stall_s, self.on_change = quote_s, stall_s, on_change
+        self._say = say
         self.jobs, self.prompt, self.roles, self.zone = {}, None, {}, None   # roles: entity id -> villager
         # Continue numbering after a restart so KC#<id> memos stay unique on chain.
         self.next_id = (ledger.db.execute("SELECT MAX(contract_id) FROM entries").fetchone()[0] or 0) + 1
         self.tasks = set()
         self.loop, self.hud_kcn = None, None
+        self.homes, self.speech, self.mobs = {}, {}, None       # villager brains (villagers())
+        self.recent = []                                        # what happened lately, for their context
+
+    def say(self, text):
+        self._say(text)
+        self.recent = (self.recent + [text[:120]])[-5:]
 
     def spawn(self, coro):
         t = asyncio.create_task(coro)
@@ -187,7 +348,7 @@ class Orchestrator:
         if kcn != self.hud_kcn:
             await self.send(cr6.SET_BALANCE, struct.pack("<H", kcn))
             self.hud_kcn = kcn
-        if job:
+        if job and job.kind in TYPES:
             done, total = job.progress()
             v = HUD_STATE.get(job.state, 0) << 6 | done * 63 // max(1, total)
             if v != job.hud_v:
@@ -207,6 +368,7 @@ class Orchestrator:
             # BAD_ENTITY here means the chip already has them (kc-host restarted, chip didn't).
             await self.send(cr6.SPAWN, struct.pack("<BHHB", i | kind << 4, x + dx * 16, z + dz * 16, y))
             self.roles[i] = role
+            self.homes[i] = (kind, x / 16 + dx, z / 16 + dz)
 
     async def resync(self):
         """After HELLO_ACK: a rebooted chip kept nothing, so send everything again."""
@@ -218,7 +380,7 @@ class Orchestrator:
             if j.state in OPEN:
                 await self.hud(j)
             if j.answer and not j.answer.done():
-                await self.send(cr6.SET_QUOTE, struct.pack("<BH", j.id & 0xFF, j.contract.offer))
+                await self.send(cr6.SET_QUOTE, struct.pack("<BH", j.id & 0xFF, (j.contract or j.visit).offer))
 
     async def mark_zone(self):
         """The chip marks its 16^3 contract zone around the player when E is pressed (cr6.c)."""
@@ -238,7 +400,16 @@ class Orchestrator:
                     self.confirm(j.id, bool(arg >> 8))
 
     async def request(self, kind, text):
-        """Hire a contractor; the agent surveys, plans and quotes in the background."""
+        """Hire a contractor or talk to the banker; the agent works in the background."""
+        self.loop = asyncio.get_running_loop()
+        if kind in ("banker", "trader"):
+            if any(j.kind == kind and not j.over for j in self.jobs.values()):
+                raise ValueError(f"the {kind} is still busy with you")
+            job = (BankerJob if kind == "banker" else TraderJob)(self, self.next_id, text)
+            self.next_id += 1
+            self.jobs[job.id] = job
+            self.spawn(self.run_visit(job))
+            return job
         if kind not in TYPES:
             raise ValueError(f"no contractor {kind!r}")
         if self.open(kind):
@@ -277,6 +448,52 @@ class Orchestrator:
         reply = builder.run(job.text, job.contract, self.chat(),
                             log=lambda t: print(time.strftime("%H:%M:%S"), f"#{job.id}", t, file=sys.stderr, flush=True))
         job.note = job.note or reply or ""      # "quote expired" beats the agent's sign-off
+
+    async def villagers(self, chat_json=None):
+        """Villager brains: kc_agents' MobManager (Nemotron Nano, rules on any failure) decides
+        twice a second; its moves go to the chip as CR6 MOVE. Villagers stand still while the
+        player talks to them or while they work a contract. Speech goes to the page only."""
+        self.loop = asyncio.get_running_loop()
+        self.mobs = MobManager(MobChip(self), chat_json, log=lambda t: None)
+        while True:
+            await asyncio.sleep(0.5)
+            for i, (kind, hx, hz) in self.homes.items():
+                if i not in self.mobs.mobs:
+                    self.mobs.mobs[i] = Mob(i, kind, (hx, hz))
+            if not self.mobs.mobs:
+                continue
+            busy = {i for i, r in self.roles.items() if r == self.prompt}
+            busy |= {i for i, r in self.roles.items() for j in self.jobs.values() if j.kind == r and not j.over}
+            self.mobs.busy = busy
+            role = {r: i for i, r in self.roles.items()}
+            self.mobs.context = (f"Game: #{role.get('banker', 0)} is the banker (swaps the player's dollars "
+                                 f"for KCN coins), #{role.get('builder', 1)} is the builder (builds for KCN). "
+                                 f"The player has {self.ledger.balance('player')} KCN. Just happened: "
+                                 f"{'; '.join(self.recent[-3:]) or 'nothing yet'}. Each villager speaks only for itself; react in 'say'.")
+            try:
+                px, pz, _ = await self.player()
+                done = await asyncio.to_thread(self.mobs.step, time.monotonic(), (px + 0.5, pz + 0.5))
+            except Exception as x:          # chip stall or a villager gone: try again next tick
+                print(time.strftime("%H:%M:%S"), "villagers:", type(x).__name__, x, file=sys.stderr, flush=True)
+                continue
+            for eid, act, say in done:
+                if say and eid in self.roles:
+                    self.speech[self.roles[eid]] = say
+                    self.on_change()
+
+    async def run_visit(self, job):
+        def agent():
+            job.visit = job.agent.Visit(job)
+            return job.agent.run(job.text, job.visit, self.chat(), log=lambda t: print(
+                time.strftime("%H:%M:%S"), f"{job.kind} #{job.id}", t, file=sys.stderr, flush=True))
+        self.on_change()
+        try:
+            job.note = job.note or await asyncio.to_thread(agent) or ""
+        except Exception as x:
+            job.note = f"{type(x).__name__}: {x}"
+        job.over = True
+        self.say(f"{job.kind}: {job.note}")
+        self.on_change()
 
     async def stop(self, job):
         """Refund whatever the agent left open: the builder keeps pay for the blocks placed."""
