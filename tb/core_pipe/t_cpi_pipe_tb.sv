@@ -12,7 +12,10 @@
 //   store                                               ST_BASE + bus
 //   store to dmem or the framebuffer                    ST_BASE + bus - ST_FAST
 // (core_pipe ends a store's MEM in the cycle the bus accepts its last group
-// when that group goes to an always-ready port: dmem or the framebuffer.)
+// when all its bus lanes go to always-ready ports: dmem or the framebuffer.
+// Its LSU registers the bus request, rtl/core_pipe/lsu_pipe.sv, so a load or
+// store spends one MEM cycle loading the first group before the bus sees
+// it: LD_BASE = ST_BASE = 2.)
 // Slots 8 and 10 run each copy once, so the BTB has no entry for it and the
 // taken branch or JAL flushes (CPI_TAKEN). Slots 25 and 26 time loops (LI,
 // N passes of ADDI (+ JAL) + BNEZ, the back edge taken N - 1 times): the
@@ -30,8 +33,8 @@ module t_cpi_pipe_tb;
     parameter int    CPI_TAKEN = 4;
     parameter int    CPI_PRED  = 1;   // predicted taken branch or JAL (BTB hit)
     parameter int    CPI_MASK  = 4;
-    parameter int    LD_BASE   = 1;   // load: M cycles beyond the bus cycles
-    parameter int    ST_BASE   = 1;   // store: same
+    parameter int    LD_BASE   = 2;   // load: M cycles beyond the bus cycles
+    parameter int    ST_BASE   = 2;   // store: same
     parameter int    ST_FAST   = 1;   // store to dmem / fb: cycles fewer
     `include "soc_harness.svh"
 
