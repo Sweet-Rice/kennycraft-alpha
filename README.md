@@ -16,6 +16,8 @@ An 8-lane SIMD TPU (Tai Processing Unit) grown from a multi-cycle RV32I core, ru
 
 On the board (Arty A7-100T, `top_s2p100` at 100 MHz, the 320×240 game, captured from its video output):
 
+![The demo village on the board: stalls around a plaza, the well ahead](docs/board/demo_village.png)
+
 | | |
 | --- | --- |
 | ![Trees and a dirt path on the board, with the overlay reading 98 FPS](docs/board/fps_overlay.png) | ![Two villagers and two chickens on the board](docs/board/villagers.png) |
