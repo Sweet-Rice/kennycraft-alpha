@@ -5,9 +5,10 @@
 // LUTRAM cannot reset); the RAM itself needs none.
 //
 // Lookup: asynchronous, of the fetch PC. taken = a valid entry whose tag
-// matches and whose counter is 2 or 3. The tag ignores pc[31:15]: imem is
+// matches and whose counter is 2 or 3. The tag ignores pc[31:IW] (IW = 15,
+// the imem bits; 28, the I-cache fetch space, with HAS_ICACHE): code is
 // read-only for the core, so an entry always describes the same
-// instruction, and a fetch outside imem halts in EX whatever it predicted.
+// instruction, and a fetch outside it halts in EX whatever it predicted.
 // hit and ctr go down the pipeline with the instruction for its update.
 //
 // Update: one write per resolved branch or JAL. A taken one allocates the
@@ -17,7 +18,9 @@
 // value; that only costs prediction quality.
 module btb
     import kc_isa_pkg::*;
-(
+#(
+    parameter bit HAS_ICACHE = 1'b0
+) (
     input  logic          clk,
     input  logic          rst,
 
@@ -34,7 +37,8 @@ module btb
     input  logic [1:0]    u_ctr,     // its counter
     input  logic          u_taken
 );
-    localparam int IW = $clog2(IMEM_BYTES);   // imem byte-address bits (15)
+    // fetch byte-address bits: imem (15), or the I-cache fetch space (28)
+    localparam int IW = HAS_ICACHE ? ICACHE_FETCH_BITS : $clog2(IMEM_BYTES);
     localparam int TW = IW - 8;               // tag bits
 
     typedef struct packed {
