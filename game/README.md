@@ -5,7 +5,7 @@ Plain C that builds for the laptop (`-DKC_HOST`) and for the chip (rv32i_zmmul) 
 ```
 make            # generate assets + laptop build (build/kc_host)
 make shots      # golden camera shots  -> out/shots/*.png + *.fb (raw 320x240 back buffer)
-make play       # scripted play-through (physics, place/break, edit log survives leaving and returning)
+make play       # scripted play-through (physics, place/break, chunk round trip, chunk tags, reset)
 make vectors    # VTRACE test vectors from the C reference -> out/vectors/{world.hex,rays.txt}
 make bench      # DDA steps per frame
 make chip       # rv32i_zmmul ELF (stand-in crt0/linker), fails on div/float/libcalls/ecall/csr
@@ -28,7 +28,7 @@ Every chip target also runs `tools/stack_check.sh`: the worst-case stack depth o
 | `src/kc_libc.c` | memcpy/memset for the freestanding chip build |
 | `src/kc_lanes.h` | LANEID/LMASK/BALLOT/MASKGET/MASKSET/MASKALL: software for 1 lane, `.insn` for 8 |
 | `src/terrain.[ch]` | Deterministic terrain + trees from absolute coordinates |
-| `src/chunks.[ch]` | Issue #2 memory API: world_update/get/set, chunk_load/store tickets, slot_valid, window_origin, 8 KB generated bitmap |
+| `src/chunks.[ch]` | Issue #2 memory API: world_update/get/set, chunk_load/store tickets, slot_valid, window_origin; tags inside the DDR3 chunks replace the 8 KB generated bitmap (`KC_GEN_BITMAP=1` brings it back) |
 | `src/arena.[ch]` | Bennett's 8 KB per-frame arena (bench/kc-bench), unchanged |
 | `chip/bench/` | Bennett's kc.ld, crt0.S, gpu.h, arena (copied from bench/kc-bench) |
 | `src/game.[ch]` | Keys, physics, picking, place/break, camera, crosshair, selection box + hotbar |
@@ -68,14 +68,19 @@ Every chip target also runs `tools/stack_check.sh`: the worst-case stack depth o
 
 ## Memory budget (data memory, 32 KB)
 
+Measured on `build/kc_chip.elf` (`llvm-nm -S`, symbol types b/B/d/D/r/R):
+
 | Item | Bytes |
 |---|---|
 | Camera block + render params | 64 |
 | 1/x and sine (computed, no tables) | 0 |
-| Edit log, 1,024 edits (.bss) | 5,120 |
-| Everything else (.data + .bss) | ~150 |
+| Per-frame arena (.bss) | 8,192 |
+| Chunk slot tables, dirty mask, tag key (.bss) | 118 |
+| Everything else (.rodata + .data + .bss) | 135 |
 | Lane stacks, 8 x 1 KB | 8,192 |
-| **Total** | **~13.5 KB of 32 KB** |
+| **Total** | **~16.3 KB of 32 KB** |
+
+The 8 KB "generated" bitmap from issue #2 is gone (chunk tags, below). `KC_GEN_BITMAP=1` puts it back: +8,192 bytes, ~24.3 KB.
 
 No malloc anywhere: every structure is a fixed-size static array, sized at compile time.
 
@@ -119,18 +124,22 @@ Each edge is grown by 2 subpixels (1/8 px) to close the hairline T-junction crac
 | Command lists: 1,024 visible quads + 4,096 tile entries (worst seen: 790 / 3,056) | 17.2 KB |
 | Tile buffer 16×16 × (2 B color + 2 B depth) | 1.0 KB |
 | Mesher scratch | 1.8 KB |
-| Chunk tables (stored-chunk set, fallback edit log, slots) | 3.3 KB |
-| **Total** | **151.8 KB of 192** |
-| + two 160×120 framebuffers, if they end up inside the budget | 189.3 KB |
+| Chunk slot tables + tag key | 0.1 KB |
+| **Total** | **148.6 KB of 192** |
+| + two 160×120 framebuffers, if they end up inside the budget | 186.1 KB |
 
 How the mesh got small enough:
 - **Shared index buffer.** Every quad is two triangles in the same order, so there's one 6-entry index buffer drawn with base vertex = quad × 4. That's 9 bytes per quad instead of 21.
 - **1 KB pages.** A page holds 113 quads. A chunk wastes at most one partly filled page, so 1 KB pages waste far less than 4 KB ones.
 
 Chunk storage:
-- An edited chunk is written through the memory API (CHUNK_CMD) when it leaves the window and read back when it returns.
-- Untouched chunks are regenerated from the seed, so storage never needs to be initialized.
-- If DDR_STATUS bit 0 is 0, a 256-entry edit log is used instead. Run `KC_NO_STORAGE=1 make play` to test that path.
+- Every generated or edited chunk is written through the memory API (CHUNK_CMD) when it leaves the window. Every incoming chunk is loaded.
+- DDR3 is random at power-on, so a stored chunk carries a 128-bit tag in 32 of its y = 0 bedrock cells (z = 0..1, x = 0..15). The tag is a hash of (seed, chunk id, format version, boot nonce). This replaces issue #2's 8 KB "generated" bitmap. `KC_GEN_BITMAP=1` brings the bitmap back.
+- Store: clear the slot's SLOT_VALID bit, write the tag cells, then chunk_store. Load: when the ticket is done, set SLOT_VALID only for the 32 tag reads (reads of an invalid slot return air), clear it, and on a match write bedrock back. Only then is the slot valid and S_READY. No match: the chunk is generated. Never-seen chunks cost one extra LOAD.
+- The boot nonce hashes a boot counter kept in DDR3 with CYCLES after the first loads, so a reset behaves like the bitmap even when boot timing repeats exactly: chunks from the previous boot don't match and are regenerated. The counter lives in chunk (0, 0)'s y = 0 row z = 2 (16 nibbles: count and a check hash). Every boot loads that chunk, bumps the count and stores it back before the window loads; storing chunk (0, 0) later rewrites the count, and loading it puts bedrock back, like the tag cells. Cost: one extra LOAD and STORE at boot, about 550 B of code. `KC_TAG_PERSIST=1` skips the counter and fixes the nonce at 0, so stored chunks survive a reset. The nonce is printed over UART at boot (`kc: chunk tag nonce ...`); check on the board that it changes across resets.
+- `make play` uses random power-on DDR3. `KC_DDR_FILL=zero|bedrock|ones make play` tests other fills.
+- If DDR_STATUS bit 0 is 0, every chunk is regenerated and edits are lost on leaving. Run `KC_NO_STORAGE=1 make play` to test that path.
+- Build options: `make <target> KC_GEN_BITMAP=1` or `KC_TAG_PERSIST=1`. Changing them rebuilds.
 
 The ray tracer's VTRACE plan (four world copies, 256 KB) does not fit in 192 KB. With one copy the ray tracer fits, and VTRACE would serve 2 lanes per cycle instead of 8.
 
