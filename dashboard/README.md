@@ -1,45 +1,46 @@
 # KennyCraft · KCN Live
 
-Read-only judge dashboard for the existing KennyCoin economy on **Solana devnet**. No signing, wallet creation, token minting, exchanges, or gameplay changes. This directory is independent of the game build.
+Read-only judge dashboard for the **existing kc-host backend API**. Run it on Kenny's machine alongside the backend. No dashboard wallet addresses, mint address, Solana RPC URL, signing keys, or Nessie credentials are needed.
 
-## Run locally
+## Run
 
-Use **Node 22.13+** (tested with 22.23.3) and npm. Older Node 22 releases cannot load the scaffold's current Tailwind dependencies. Ensure the compatible Node binary is first on `PATH`, including for subprocesses.
+Use Node **22.13+** and npm (verified with Node 22.23.3). Ensure the compatible Node binary is first on `PATH`, including subprocesses.
 
-```sh
-cd dashboard
-npm ci
-cp .env.example .env.local
-# Set KCN_MINT and at least player=<public address> in KCN_WALLETS.
-npm run dev -- --hostname 127.0.0.1
-```
+1. Start the existing, already-configured KennyCraft backend as usual. Its `host/kchost.py` serves `GET /events` at `http://127.0.0.1:8000`.
+2. In another terminal, from the repository root:
 
-Open http://127.0.0.1:3000. Without public addresses, the page shows setup instructions and `/api/kcn` returns 503, never an invented zero balance. Restart after changing environment values; configuration and activity caches are process-local.
+   ```sh
+   cd dashboard
+   npm ci
+   npm run dev -- --hostname 127.0.0.1
+   ```
 
-| Variable                              | Meaning                                                                                                                                                              |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `KCN_MINT`                            | Existing devnet SPL token mint; required                                                                                                                             |
-| `KCN_WALLETS`                         | Comma-separated `label=address`; `player` required. Optional `treasury`, `escrow`, `builder`, `miner`, `farmer`, `banker`. Addresses may be owners or individual token accounts. |
-| `SOLANA_RPC_URL`                      | Defaults to public devnet RPC; a provider URL remains server-side                                                                                                    |
-| `SOLANA_CLUSTER`                      | Unset or `devnet` only                                                                                                                                               |
-| `KCN_PER_USD`                         | Positive illustrative game-bank rate; defaults to 10 KCN per dollar                                                                                                  |
-| `NESSIE_API_KEY`, `NESSIE_ACCOUNT_ID` | Both required for the optional actual Nessie mock-account panel; never sent to the browser                                                                           |
+3. Open http://127.0.0.1:3000.
 
-Only public Solana addresses are needed. Never enter a seed phrase, private key, mint authority, or treasury secret. Duplicate labels/addresses, overlapping resolved token accounts, and token accounts for a different mint are configuration errors. Binary token data is a read failure, not a zero balance.
+**No `.env.local` is required.** If the backend uses a different port or host, optionally set `KCN_BACKEND_URL` in `dashboard/.env.local` and restart Next.js; see `.env.example`. This is the backend base URL, not its `/events` path. Remove old dashboard Solana/wallet/Nessie variables; they are no longer read.
 
-## Reading the display
+Backend wallet/mint configuration and Nessie credentials remain owned by kc-host. This dashboard does not start the settler, create replacement tokens, or perform any financial/game actions. Keep both applications on loopback; public deployment/authentication is out of scope.
 
-- Every Solana request asks for **confirmed** commitment, the level kc-host's settler waits for. Confirmation latency is separate from the ~5-second completion-based balance poll. Reads in a snapshot are not an atomic same-slot view.
-- Hero, supply, wallet table, and deltas retain exact decimal strings derived with `bigint`. Only chart geometry and the approximate fixed-rate dollar equivalent use floating point.
-- Chart points are observations collected during this browser session (newest 120), not reconstructed history. One initial point is a dot. Mint/player changes reset the session.
-- Activity refreshes at most once per 15 seconds, with one shared in-flight refresh. It examines up to 10 signatures per owner/token account, unions the newest 20, and keeps up to 100 finalized transaction results. Transaction reads are limited to two concurrently. Same-slot order is not a total chronology; this is not a complete ledger.
-- Activity is labeled from the memo kc-host's settler writes on every transfer (`KC#<contract> <kind> e<entry>`): exchanges, escrow funding, releases, fees, refunds and material trades. Transfers without that memo fall back to labels inferred from the configured roles.
-- Token accounts are looked up once a minute (public devnet allows 10 `getTokenAccountsByOwner` calls per 10 s); each poll reads every balance with one `getMultipleAccounts`. Untracked counterparties remain in deltas. Missing token metadata is omitted with a warning, not inferred as mint/burn. Failed transactions have no balance deltas.
-- Balance read failures retain the last successful snapshot with a stale banner and its real timestamp. Activity failures preserve previous activity independently. Hidden tabs pause both polls; returning fetches immediately. No overlapping interval requests.
-- The Nessie panel reads the v2 sandbox account (`v2-prod-api.nessieisreal.com`, Bearer key) and its recent transactions; a pending withdrawal lowers the available balance before the balance itself. kc-host's exchanges are described `KC exchange_in <n> KCN #…`, which ties a dollar movement to its KCN transfer. A failed transactions list keeps the account visible with a warning.
-- Remote descriptions and memos are rendered as escaped text. Explorer links explicitly select devnet.
+## One read-only stream
 
-`GET /api/kcn` returns the snapshot, 503 configuration errors, or a sanitized 502 RPC error. `GET /api/bank` returns `{configured:false}` without both optional keys, otherwise actual mock account data or a sanitized 502. Mutation methods return 405. Responses use `Cache-Control: no-store`. Keep this judge display on loopback; public hosting/authentication is out of scope.
+The browser connects to `GET /api/events`. Next.js proxies only the backend's `GET /events` server-sent events, without caching or buffering. No exchange, interaction, cancellation, or other mutation endpoint is proxied. There are no separate chain/bank polls and no direct Solana or Nessie integration in this app.
+
+The consumed snapshot fields match `Host.snapshot()` in `host/kchost.py`:
+
+| Field            | Display meaning                                                                                           |
+| ---------------- | --------------------------------------------------------------------------------------------------------- |
+| `wallets`        | Whole-KCN game-ledger balances, including queued entries                                                  |
+| `ledger`         | Recent backend entries: kind, from/to wallets, amount, contract ID, status, and optional Solana signature |
+| `mode`, `queued` | Existing settler's health and queue count                                                                 |
+| `usd`            | Nessie's available mock cents reported by the backend; `null` means unavailable                           |
+
+- **Game-ledger balances are not independently verified on-chain balances.** A queued payment already affects the game balance. The UI displays queued/settled status without inferring it from token movements or memo text. Explorer links are shown when a transaction signature is available and select devnet explicitly.
+- The fixed `$1 = 10 KCN` hero equivalent is illustrative, not real funds or market value. The bank panel shows actual backend-reported **available** mock dollars, not a fabricated account total or transaction history.
+- Snapshot amounts must be safe JSON integers. Unsafe integers and incompatible payloads are rejected rather than silently rounding money or substituting zero. Signed changes use bigint subtraction. The backend currently exposes whole KCN, not raw token base units.
+- The chart retains the latest 120 snapshots received this browser session. One initial observation is a dot. It is not reconstructed chain history. New ledger IDs highlight after the initial snapshot; settling an existing ID does not count as another payment.
+- Disconnections retain the last valid snapshot and its browser receipt time with a stale banner. Initial failures show connection instructions, never invented balances. Reconnection is automatic, including after an HTTP 502 before the backend starts. Hidden tabs close the stream; returning reconnects immediately. Unmount closes the stream and reconnect timer.
+- The backend emits only when its snapshot changes. An old last-update time alone does not mean the open stream is broken. `Live stream` describes the dashboard connection; `ONLINE`/`DEGRADED`/`OFFLINE` describes the backend settler separately.
+- Remote text is escaped by React. No private keys or Nessie secrets are loaded by this application.
 
 ## Verification
 
@@ -47,14 +48,11 @@ Only public Solana addresses are needed. Never enter a seed phrase, private key,
 npm test
 npm run lint
 npm run build
-# Optional production smoke after build:
 npm run start -- --hostname 127.0.0.1
 ```
 
-No chain configuration or network credentials are required for tests/build. Tests cover exact amounts, owner/token-account mapping, closed/new token accounts, role classification, missing metadata, failed transactions, ambiguous accounts, bounded concurrency, null-result retry, shared activity refresh, and independent activity failures. Chain tests use an isolated loopback RPC, never devnet writes.
+Tests/build need neither the backend nor credentials. Tests cover incompatible/unsafe money payloads, nullable bank data, initial highlight suppression, new ledger entries, queued-to-settled transitions without double-counting, signed exact changes, and the 120-snapshot retention boundary.
 
-Runtime verification completed against a **temporary local JSON-RPC harness**, not a real KCN deployment: player 20 → 40, banker 980 → 960, supply 1000; observed $2.00 → $4.00 equivalent, +20 activity and change indicator, then RPC errors retaining 40 with stale status. Setup state and mobile layout were checked in Chromium. No verification addresses or fixture responses are shipped in application code or `.env.local`.
+Browser smoke used a **temporary local SSE harness matching `Host.snapshot()`**, not a claimed live KennyCraft session: 20 → 40 KCN, +20 indicator, queued → settled, devnet transaction link, bank available dollars, disconnected stream retaining 40, recovery from initial HTTP 502 without reloading, and rejection of an unsafe-integer snapshot while retaining the previous balance. No test responses or deployment wallet addresses are shipped in application code. The real backend is not available on this development machine; the final live check is to run both applications on Kenny's machine and initiate a normal backend action there.
 
-The compiled production app was also exercised in Chromium. Independent fixture RPC reads matched the exact API balance (40 base units, zero decimals). Initial activity did not highlight, and memo markup remained plain text. An activity-only outage retained both live balances and the previous activity list. Controlled browser visibility suppressed both polls for more than 15 seconds and resumed immediately; delaying a KCN response by 6.5 seconds produced a ~11.5-second start-to-start gap with at most one in-flight KCN poll. Missing-config API responses, mutation-method 405 responses, and sanitized RPC 502 errors were checked directly. `npm test` (25 tests), lint, and production build passed.
-
-**Live integration remains unverified:** Kenny must supply the existing public devnet mint and player owner/token-account address and initiate a normal backend action for the final live demo. Independently sum `getTokenAccountsByOwner` raw amounts for that mint (or read `getAccountInfo` for an individual token account), apply the mint decimals, and compare the exact `/api/kcn` balance. No replacement mint should be created. Optional live Nessie integration was not exercised because credentials were not supplied.
+Verification passed: 9 behavior tests, lint, and production build. The compiled production app displayed pushed queued-to-settled updates without duplicating activity. Mobile layout and hidden-tab closure/resume were checked; the upstream connection count dropped to zero when hidden. The stream endpoint returned `text/event-stream`, and POST returned 405. The obsolete `/api/kcn` and `/api/bank` endpoints returned 404. The temporary harness was removed after verification.

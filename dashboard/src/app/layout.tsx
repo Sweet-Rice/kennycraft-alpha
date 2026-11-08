@@ -3,7 +3,8 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "KennyCraft · KCN Live",
-  description: "Read-only confirmed KCN activity on Solana devnet.",
+  description:
+    "Read-only KennyCraft ledger balances and backend settlement activity.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
