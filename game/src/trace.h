@@ -78,6 +78,15 @@ static inline uint32_t kc_vget_cell(void) {
 static inline q16 kc_vget_t(void) {
     uint32_t v; __asm__ volatile(".insn r 0x2B, 2, 1, %0, x0, x0" : "=r"(v)); return (q16)v;
 }
+// Asynchronous VTRACE (#60): VTRACE with rd = x0 starts the walk and returns at once. VSET,
+// VTRACE and VGET wait in EX until the walk is done, and so do world accesses and MMIO stores.
+static inline void kc_vtrace_start(int32_t max_steps) {
+    __asm__ volatile(".insn r 0x2B, 1, 0, x0, %0, x0" :: "r"(max_steps) : "memory");
+}
+// VGET field 3: {16'b0, result} of the last walk, the value VTRACE rd would have written.
+static inline uint32_t kc_vget_res(void) {
+    uint32_t v; __asm__ volatile(".insn r 0x2B, 2, 3, %0, x0, x0" : "=r"(v)); return v;
+}
 static inline void kc_trace(const kc_ray *r, int32_t max_steps, kc_hit *h) {
     KC_VSET(0, r->f[0]); KC_VSET(1, r->f[1]); KC_VSET(2, r->f[2]); KC_VSET(3, r->f[3]);
     KC_VSET(4, r->f[4]); KC_VSET(5, r->f[5]); KC_VSET(6, r->f[6]); KC_VSET(7, r->f[7]);

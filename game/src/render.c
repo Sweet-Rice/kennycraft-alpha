@@ -50,6 +50,40 @@ static inline __attribute__((always_inline)) kc_axis axis_setup(uint32_t frac15,
     return a;
 }
 
+// The ray of one block, from the frame (cell, fx, fz), the row (ay, ysign) and dx, dz.
+static inline __attribute__((always_inline))
+kc_ray block_ray(uint32_t cell, uint32_t fx, uint32_t fz, kc_axis ay, uint32_t ysign, q16 dx, q16 dz) {
+    kc_axis ax = axis_setup(fx, dx), az = axis_setup(fz, dz);
+    kc_ray r = { { cell, ax.tmax, ay.tmax, az.tmax, ax.td, ay.td, az.td,
+                   ((uint32_t)dx >> 31) | ysign | (((uint32_t)dz >> 31) << 2) } };
+    return r;
+}
+
+// One ray in flight. With the ray unit, VTRACE x0 starts the walk and returns at once; VGET
+// waits for the walk, and so do VSET and VTRACE, so the kernel builds the next block's ray in
+// registers while the walk runs and sets it only after reading this walk's result. Without
+// the ray unit (laptop, Stage 0/1) the same calls run the software walk in ray_start, so the
+// laptop checks this loop's order too.
+#if KC_VTRACE
+typedef struct { int32_t unused; } kc_inflight;
+static inline __attribute__((always_inline)) void ray_set(kc_inflight *q, const kc_ray *r) {
+    (void)q;
+    KC_VSET(0, r->f[0]); KC_VSET(1, r->f[1]); KC_VSET(2, r->f[2]); KC_VSET(3, r->f[3]);
+    KC_VSET(4, r->f[4]); KC_VSET(5, r->f[5]); KC_VSET(6, r->f[6]); KC_VSET(7, r->f[7]);
+}
+static inline __attribute__((always_inline)) void ray_start(kc_inflight *q, int32_t cap) {
+    (void)q; kc_vtrace_start(cap);
+}
+static inline __attribute__((always_inline)) uint32_t ray_result(kc_inflight *q, q16 *t) {
+    (void)q; uint32_t res = kc_vget_res(); *t = kc_vget_t(); return res;
+}
+#else
+typedef struct { kc_ray staged; kc_hit h; } kc_inflight;
+static inline void ray_set(kc_inflight *q, const kc_ray *r) { q->staged = *r; }
+static inline void ray_start(kc_inflight *q, int32_t cap) { kc_trace(&q->staged, cap, &q->h); }
+static inline uint32_t ray_result(kc_inflight *q, q16 *t) { *t = q->h.t; return q->h.res; }
+#endif
+
 // with_ents is a compile-time constant: 0 is the plain world loop, 1 adds the entity models
 // on 4x2 blocks that an entity's screen rect overlaps. All lanes share a block, so that test
 // is uniform.
@@ -96,46 +130,56 @@ static inline __attribute__((always_inline)) void frame(int32_t with_ents) {
         uint32_t ysign = ((uint32_t)d[1] >> 31) << 1;
         int32_t sky_i = (py * p->sky_k) >> 16;
         int32_t sky = (COLOR_SKY << 4) | sel(sky_i > 15, 15, sky_i);
-        uint32_t fb = (uint32_t)(py * FB_STRIDE + lx);
-        q16 dx = d[0], dz = d[2];
         // Covered rows run the block loop over two ranges, [0, skip_x0) and [skip_x1, W),
         // others over [0, W) and an empty second range: no per-block test.
         int32_t row_skip = (by >= hud_y0) & (by + 2 <= hud_y1) & (skip_x0 < skip_x1);
-        int32_t end0 = sel(row_skip, skip_x0, W), start1 = sel(row_skip, skip_x1, W);
+        int32_t end = sel(row_skip, skip_x0, W), start1 = sel(row_skip, skip_x1, W);
 
-        for (int32_t bx = 0, end = end0; ; bx += 4) {
-            if (bx >= end) {                              // uniform; at most twice per row
+        // Software pipeline over the row: block bx walks while the next block's ray is built in
+        // registers. The row's first block is started before the loop and its last block is
+        // shaded after it, so the loop itself needs no flags. Every row has a first block:
+        // the hotbar is centered, so skip_x0 > 0.
+        int32_t bx = 0;
+        uint32_t fb = (uint32_t)(py * FB_STRIDE + lx);
+        q16 dx = d[0], dz = d[2];
+        kc_inflight q;
+        kc_ray r = block_ray(cell, fx, fz, ay, ysign, dx, dz);
+        ray_set(&q, &r);
+        ray_start(&q, cap);
+        q16 t;
+        uint32_t res;
+        for (;;) {
+            // Next block in row order, jumping over the hotbar's blocks. Uniform.
+            int32_t nbx = bx + 4;
+            uint32_t nfb = fb + 4u;
+            q16 ndx = dx + r4x, ndz = dz + r4z;
+            if (nbx >= end) {
                 if (end == W) break;
-                int32_t n = start1 - bx;                  // a multiple of 4: d stays exact
-                bx = start1; end = W; fb += (uint32_t)n;
-                dx += c->right_step[0] * n; dz += c->right_step[2] * n;
-                if (bx >= W) break;
+                int32_t n = start1 - nbx;                 // a multiple of 4: d stays exact
+                nbx = start1; end = W; nfb += (uint32_t)n;
+                ndx += c->right_step[0] * n; ndz += c->right_step[2] * n;
+                if (nbx >= W) break;
             }
-            kc_axis ax = axis_setup(fx, dx), az = axis_setup(fz, dz);
-            kc_ray r = { { cell, ax.tmax, ay.tmax, az.tmax, ax.td, ay.td, az.td,
-                           ((uint32_t)dx >> 31) | ysign | (((uint32_t)dz >> 31) << 2) } };
-            uint32_t res;
-            q16 t;
-#if KC_VTRACE
-            // VSET straight from registers; only the result and t come back (no VGET cell).
-            KC_VSET(0, r.f[0]); KC_VSET(1, r.f[1]); KC_VSET(2, r.f[2]); KC_VSET(3, r.f[3]);
-            KC_VSET(4, r.f[4]); KC_VSET(5, r.f[5]); KC_VSET(6, r.f[6]); KC_VSET(7, r.f[7]);
-            res = kc_vtrace_res(cap);
-            t   = kc_vget_t();
-#else
-            kc_hit h;
-            kc_trace(&r, cap, &h);
-            res = h.res;
-            t   = h.t;
-#endif
+            kc_ray rn = block_ray(cell, fx, fz, ay, ysign, ndx, ndz);  // during the walk
+            res = ray_result(&q, &t);                     // waits for block bx's walk
+            ray_set(&q, &rn);
+            ray_start(&q, cap);                           // block nbx walks from here
             int32_t hit = (int32_t)(res & 1u);
             int32_t fog = (f0 < t) + (f1 < t) + (f2 < t);
             int32_t col = sel(hit, face_pix[res & 255u] | fog, sky);
             if (with_ents && ent_block(bx, by))
                 col = ent_composite(bx + lx, py, o, &r, sel(hit, t, 0x7FFFFFFF), (uint8_t)col);
             hal_fb_put(fb, (uint8_t)col);
-            fb += 4;
-            dx += r4x; dz += r4z;
+            bx = nbx; fb = nfb; dx = ndx; dz = ndz; r = rn;
+        }
+        res = ray_result(&q, &t);                         // the row's last block
+        {
+            int32_t hit = (int32_t)(res & 1u);
+            int32_t fog = (f0 < t) + (f1 < t) + (f2 < t);
+            int32_t col = sel(hit, face_pix[res & 255u] | fog, sky);
+            if (with_ents && ent_block(bx, by))
+                col = ent_composite(bx + lx, py, o, &r, sel(hit, t, 0x7FFFFFFF), (uint8_t)col);
+            hal_fb_put(fb, (uint8_t)col);
         }
     }
 #if KC_LANES == 1
