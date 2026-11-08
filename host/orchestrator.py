@@ -445,7 +445,7 @@ class Orchestrator:
     def _agent(self, job, site, worker, y0):
         job.scan(site[0], site[1], SITE[0], SITE[2], y0, 16)
         job.contract = builder.Contract(job.id, job, job, job.ask, origin=site, zone=SITE, worker=worker)
-        reply = builder.run(job.text, job.contract, self.chat(),
+        reply = builder.run(job.text, job.contract, self.chat(), autopilot=True,
                             log=lambda t: print(time.strftime("%H:%M:%S"), f"#{job.id}", t, file=sys.stderr, flush=True))
         job.note = job.note or reply or ""      # "quote expired" beats the agent's sign-off
 
