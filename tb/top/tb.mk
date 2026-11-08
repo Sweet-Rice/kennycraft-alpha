@@ -40,9 +40,9 @@
 #                    Built without --timing: tb/top/t_top_frame.cpp drives the
 #                    clocks, tb/ddr/unisim_sim.sv takes them with KC_EXT_CLOCKS.
 #   lint-top         verilator -Wall over the whole top at Stage 2 (with and
-#                    without QRCP; QRCP with FB_COUNT = 3), Stage 1 and
-#                    Stage 0 (sim models for the
-#                    MMCM, BUFG, MIG and XPM, as in tb/ddr)
+#                    without QRCP; QRCP with FB_COUNT = 3, on both cores:
+#                    PIPELINED = 1 is top_s2p), Stage 1 and Stage 0 (sim
+#                    models for the MMCM, BUFG, MIG and XPM, as in tb/ddr)
 
 TOP_ELFS      := kc_chip kc_chip8 kc_chip8_vtrace
 TOP_ELF       ?= kc_chip
@@ -131,6 +131,7 @@ lint-top:
 	$(VERILATOR) $(VL_LINT) --timing --top-module top $(TOP_RTL)
 	$(VERILATOR) $(VL_LINT) --timing --top-module top -GHAS_RAY_UNIT="1'b1" $(TOP_RTL)
 	$(VERILATOR) $(VL_LINT) --timing --top-module top -GHAS_RAY_UNIT="1'b1" -GHAS_QRCP="1'b1" -GFB_COUNT=3 $(TOP_RTL)
+	$(VERILATOR) $(VL_LINT) --timing --top-module top -GHAS_RAY_UNIT="1'b1" -GHAS_QRCP="1'b1" -GFB_COUNT=3 -GPIPELINED="1'b1" $(TOP_RTL)
 	$(VERILATOR) $(VL_LINT) --timing --top-module top -GLANES=1 -GHAS_DIV_STACK=0 $(TOP_RTL)
 	$(VERILATOR) $(VL_LINT) --timing --top-module top -GLANES=1 -GHAS_DIV_STACK=0 -GHAS_RAY_UNIT="1'b1" $(TOP_RTL)
 	$(VERILATOR) $(VL_LINT) --top-module world_mem rtl/mem/world_mem.sv
