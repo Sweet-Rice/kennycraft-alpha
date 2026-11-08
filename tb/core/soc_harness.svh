@@ -178,12 +178,37 @@ end
 // ---------------------------------------------------------------------
 // Peek / poke
 // ---------------------------------------------------------------------
+// The dmem window (kc_isa_pkg DWIN_*) lives in dmem_win's banks on
+// core_pipe; the multi-cycle core uses the BRAM for every dmem word.
 function automatic logic [31:0] dmem_rd(input logic [31:0] addr);
+    if (PIPELINED && kc_isa_pkg::is_dwin(addr))
+        case (addr[12:10])
+            3'd0: return dut.u_dwin.g_bank[0].mem[addr[9:2]];
+            3'd1: return dut.u_dwin.g_bank[1].mem[addr[9:2]];
+            3'd2: return dut.u_dwin.g_bank[2].mem[addr[9:2]];
+            3'd3: return dut.u_dwin.g_bank[3].mem[addr[9:2]];
+            3'd4: return dut.u_dwin.g_bank[4].mem[addr[9:2]];
+            3'd5: return dut.u_dwin.g_bank[5].mem[addr[9:2]];
+            3'd6: return dut.u_dwin.g_bank[6].mem[addr[9:2]];
+            default: return dut.u_dwin.g_bank[7].mem[addr[9:2]];
+        endcase
     return dut.u_dmem.mem[addr[14:2]];
 endfunction
 
 task automatic dmem_wr(input logic [31:0] addr, input logic [31:0] value);
-    dut.u_dmem.mem[addr[14:2]] = value;
+    if (PIPELINED && kc_isa_pkg::is_dwin(addr))
+        case (addr[12:10])
+            3'd0: dut.u_dwin.g_bank[0].mem[addr[9:2]] = value;
+            3'd1: dut.u_dwin.g_bank[1].mem[addr[9:2]] = value;
+            3'd2: dut.u_dwin.g_bank[2].mem[addr[9:2]] = value;
+            3'd3: dut.u_dwin.g_bank[3].mem[addr[9:2]] = value;
+            3'd4: dut.u_dwin.g_bank[4].mem[addr[9:2]] = value;
+            3'd5: dut.u_dwin.g_bank[5].mem[addr[9:2]] = value;
+            3'd6: dut.u_dwin.g_bank[6].mem[addr[9:2]] = value;
+            default: dut.u_dwin.g_bank[7].mem[addr[9:2]] = value;
+        endcase
+    else
+        dut.u_dmem.mem[addr[14:2]] = value;
 endtask
 
 logic [31:0] lane_x [LANES][32];
