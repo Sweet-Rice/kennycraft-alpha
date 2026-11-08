@@ -64,7 +64,15 @@
    data.
    Fetch stage F2 (the registered imem read), slot 73: ID, F2 and IF wait together
    with three different instructions through one load-use wait, two back
-   to back, and QRCP's eight MEM cycles followed by a load-use wait. */
+   to back, and QRCP's eight MEM cycles followed by a load-use wait.
+   Two-cycle MUL: an ALU op right behind a MUL whose operand comes from the
+   instruction before the MUL (WB forward in MUL's first MEM cycle, then
+   held through its second), a MUL right behind that op (MEM forward), and
+   a dependent of it (slots 74, 73).
+   dmem window modes (each lane in its own stack's bank: one cycle; else
+   the bank accesses a cycle after the pick): a slow store whose last group
+   writes the word a fast load reads right after, and a fast store of the
+   word a slow load reads right after, each load used at once (74, 75). */
 #include "kc_test.h"
 #include "kc_lanes.h"
 #define VSET(f, rs)    .insn r 0x2B, 0, f, x0, rs, x0
@@ -678,6 +686,38 @@ fast_jal_link:
     add   a0, a0, a3
     add   a0, a0, t4
     sw    a0, RES2(73)(gp)
+    /* two-cycle MUL: t0 reaches the add from WB while the MUL is in MEM */
+    li    a3, 0x00012345
+    li    a4, 0x07654321
+    addi  t0, s0, 0x35
+    mul   t1, a3, a4
+    add   t2, t0, t0
+    mul   t3, t2, t0
+    add   t4, t3, t1
+    sw    t2, RES2(74)(gp)
+    sw    t4, RES2(75)(gp)
+    /* window modes. a0: own stack word (bank 7 - lane, fast); a1: a0, but
+       lane 0's is lane 1's word + 4 (bank 6 with lane 1, another word: slow,
+       lane 1 in the second group) */
+    li    t0, 0x10007F00
+    slli  t1, s0, 10
+    sub   a0, t0, t1
+    seqz  t0, s0
+    neg   t0, t0
+    andi  t0, t0, 0x3FC
+    sub   a1, a0, t0
+    addi  t2, s0, 0x5A0
+    sw    t2, 0(a0)             /* fast */
+    addi  t3, s0, 0x5C1
+    sw    t3, 0(a1)             /* slow */
+    lw    t4, 0(a0)             /* fast, right after */
+    add   t4, t4, s0
+    addi  t5, s0, 0x6D0
+    sw    t5, 4(a0)             /* fast: lane 1 writes lane 0's a1 word */
+    lw    a2, 0(a1)             /* slow, right after */
+    add   a2, a2, s0
+    sw    t4, RES2(76)(gp)
+    sw    a2, RES2(77)(gp)
 
     /* ---------------- slow pass ---------------- */
     li    s9, 0
@@ -1334,6 +1374,50 @@ fast_jal_link:
     add   a0, a0, t4
     SLOW
     CHECK2(73, a0)
+    li    a3, 0x00012345
+    li    a4, 0x07654321
+    addi  t0, s0, 0x35
+    SLOW
+    mul   t1, a3, a4
+    add   t2, t0, t0
+    SLOW
+    mul   t3, t2, t0
+    SLOW
+    add   t4, t3, t1
+    SLOW
+    CHECK2(74, t2)
+    CHECK2(75, t4)
+    li    t0, 0x10007F00
+    slli  t1, s0, 10
+    SLOW
+    sub   a0, t0, t1
+    seqz  t0, s0
+    SLOW
+    neg   t0, t0
+    SLOW
+    andi  t0, t0, 0x3FC
+    SLOW
+    sub   a1, a0, t0
+    addi  t2, s0, 0x5A0
+    SLOW
+    sw    t2, 0(a0)
+    addi  t3, s0, 0x5C1
+    SLOW
+    sw    t3, 0(a1)
+    SLOW
+    lw    t4, 0(a0)
+    SLOW
+    add   t4, t4, s0
+    addi  t5, s0, 0x6D0
+    SLOW
+    sw    t5, 4(a0)
+    SLOW
+    lw    a2, 0(a1)
+    SLOW
+    add   a2, a2, s0
+    SLOW
+    CHECK2(76, t4)
+    CHECK2(77, a2)
 
     li    t1, 1
     MASKSET(t1)

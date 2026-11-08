@@ -11,7 +11,9 @@
 // instructions killed in EX by the registered redirect, slots 64 to 67, and
 // the LSU's registered bus request and read data, slots 68 to 72: load-use
 // at distance 1 and 2 after a store of the same word, a world store then
-// load, MMIO stores and loads in lane order). At each FB_SWAP request every
+// load, MMIO stores and loads in lane order), the two-cycle MUL behind a
+// WB-forwarded op, slots 74 and 75, and the window's fast / slow mode
+// orders, slots 76 and 77). At each FB_SWAP request every
 // lane's framebuffer word must hold the store before it, not the one after.
 // Built for both cores; tracediff-core-pipe-t_pipe_stress compares their
 // retire traces, the only pipelined trace coverage of VSET/VTRACE/VGET with
@@ -132,6 +134,14 @@ module t_pipe_stress_tb;
                      32'(32'hF1 + ALANES - 1));
             expect32($sformatf("lane %0d MMIO LW, SW, LW", l), res(l, 72),
                      32'(32'hF1 + 2 * (ALANES - 1) + l));
+            base = 32'(l) + 32'h35;
+            expect32($sformatf("lane %0d op behind a 2-cycle MUL", l), res(l, 74), 2 * base);
+            expect32($sformatf("lane %0d MUL behind it, then use", l), res(l, 75),
+                     2 * base * base + 32'h0001_2345 * 32'h0765_4321);
+            expect32($sformatf("lane %0d window slow SW, fast LW", l), res(l, 76),
+                     (l == 0) ? 32'h5A0 : 32'h5C1 + 32'(2 * l));
+            expect32($sformatf("lane %0d window fast SW, slow LW", l), res(l, 77),
+                     (l == 0) ? ((ALANES > 1) ? 32'h6D1 : 32'h5C1) : 32'h5C1 + 32'(2 * l));
         end
         expect32("FB_SWAP requests (fast, slow)", 32'(swap_req_count), 32'd2);
         expect32("mask at the end", 32'(`KC_CORE.mask), 32'd1);
