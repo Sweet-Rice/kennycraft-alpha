@@ -5,7 +5,6 @@ ENTRY(_start)
 MEMORY {
   IMEM   (rx) : ORIGIN = 0x00000000, LENGTH = 32K
   DMEM   (rw) : ORIGIN = 0x10000100, LENGTH = 0x5F00
-  GPUMEM (rw) : ORIGIN = 0x70000000, LENGTH = 0x11000
 }
 SECTIONS {
   .text   : { KEEP(*(.text.start)) *(.text*) } > IMEM
@@ -20,6 +19,5 @@ SECTIONS {
     . = ALIGN(4);
     __bss_end = .;
   } > DMEM
-  .gpumem (NOLOAD) : { *(.gpumem*) } > GPUMEM
   /DISCARD/ : { *(.note*) }
 }
