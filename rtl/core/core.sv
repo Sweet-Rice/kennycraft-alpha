@@ -14,7 +14,7 @@
 //   EX    every lane's ALU, comparator, address generator, multiply;
 //         lane control updates the mask                             1
 //   MUL   second EXECUTE cycle for MUL family (registered product) 1
-//   VT    VTRACE: wait for the ray unit's done pulse              walk + 1
+//   VT    VTRACE rd (rd != x0): wait for the ray unit's done pulse walk + 1
 //   QR    QRCP: step every lane's QRCP unit, latch the result      5
 //   MEM   LSU, one bus access per group of active lanes (lanes in the
 //         same dmem/framebuffer word coalesce, else one per lane),
@@ -46,10 +46,17 @@
 // decodes as illegal otherwise. vt_lane_mask is always M. VSET pulses
 // vt_cfg_we in EX with vt_cfg_field = funct7 and vt_cfg_data = each lane's
 // rs1. VTRACE pulses vt_start in EX with vt_max_steps = the scalar lane's
-// rs1[7:0], waits in VT for vt_done, latches each lane's {16'b0, result} and
-// writes it to rd in active lanes; a cap of 0 or M = 0 writes nothing. VGET
-// latches hit_cell (field 0, zero-extended) or t_hit (field 1) in EX and
-// writes rd in active lanes.
+// rs1[7:0]. VTRACE rd (rd != x0) waits in VT for vt_done, latches each lane's
+// {16'b0, result} and writes it to rd in active lanes; a cap of 0 or M = 0
+// writes nothing. VTRACE x0 is asynchronous: it goes straight to WB and the
+// walk runs on while later instructions execute. VGET latches hit_cell
+// (field 0, zero-extended), t_hit (field 1) or {16'b0, result} (field 3) in EX
+// and writes rd in active lanes.
+//
+// vt_pend is high from a vt_start until the ray unit's vt_done. The
+// interlock makes an asynchronous walk invisible: while vt_pend is high a
+// custom-1 instruction waits in EX (no strobe), so VSET cannot change the
+// rays, a second VTRACE cannot start and VGET reads the finished results.
 //
 // QRCP (D22, HAS_QRCP = 1; illegal otherwise) runs rtl/core/qrcp.sv in every
 // lane: the unit latches its rs1 in EX, QR steps it through qr_ph 0..3 and
@@ -338,26 +345,36 @@ module core
     // ------------------------------------------------------------------
     // Ray unit (custom-1)
     // ------------------------------------------------------------------
-    logic ex_vtrace;
+    logic ex_vtrace, ex_vt_wait;
 
     if (HAS_RAY_UNIT) begin : g_ray
         logic [7:0] cap;
+        logic       vt_pend;
 
         assign ex_vtrace = ex_is_ray && (ex_funct3 == F3_VTRACE);
+        assign ex_vt_wait = ex_is_ray && vt_pend;
         assign cap       = l_rs1[sl][7:0];
 
         assign vt_lane_mask = mask;
-        assign vt_cfg_we    = (state == S_EX) && ex_is_ray && (ex_funct3 == F3_VSET);
+        assign vt_cfg_we    = (state == S_EX) && ex_is_ray && (ex_funct3 == F3_VSET) && !vt_pend;
         assign vt_cfg_field = ex_field;
         assign vt_cfg_data  = l_rs1;
-        assign vt_start     = (state == S_EX) && ex_vtrace;
+        assign vt_start     = (state == S_EX) && ex_vtrace && !vt_pend;
         assign vt_max_steps = cap;
         assign ray_en       = ex_is_ray && (((state == S_EX) && (ex_funct3 == F3_VGET)) ||
                                             ((state == S_VT) && vt_done));
 
+        // VTRACE rd and VGET field 3 return the result, fields 0 and 1 the
+        // hit cell and t_hit (field 2 and 4 up are illegal).
         for (genvar i = 0; i < LANES; i++) begin : g_y
-            assign ray_y[i] = (ex_funct3 != F3_VGET) ? {16'd0, vt_result[i]} :
-                              ex_field[0]            ? vt_t_hit[i] : {15'd0, vt_hit_cell[i]};
+            assign ray_y[i] = ((ex_funct3 != F3_VGET) || ex_field[1]) ? {16'd0, vt_result[i]} :
+                              ex_field[0] ? vt_t_hit[i] : {15'd0, vt_hit_cell[i]};
+        end
+
+        always_ff @(posedge clk) begin
+            if (rst)           vt_pend <= 1'b0;
+            else if (vt_start) vt_pend <= 1'b1;
+            else if (vt_done)  vt_pend <= 1'b0;
         end
 
         // A cap of 0 finishes with no writes (M = 0 writes nothing anyway).
@@ -366,6 +383,7 @@ module core
         end
     end else begin : g_no_ray
         assign ex_vtrace    = 1'b0;
+        assign ex_vt_wait   = 1'b0;
         assign vt_lane_mask = '0;
         assign vt_cfg_we    = 1'b0;
         assign vt_cfg_field = '0;
@@ -425,9 +443,10 @@ module core
                 S_ID:  state <= id_fault ? S_HALT : S_EX;
                 S_EX: begin
                     if (ex_halt)                         state <= S_HALT;
+                    else if (ex_vt_wait)                 state <= S_EX;
                     else if (ex_is_mul)                  state <= S_MUL;
                     else if (ex_mem)                     state <= S_MEM;
-                    else if (ex_vtrace)                  state <= S_VT;
+                    else if (ex_vtrace && ex_r_we)       state <= S_VT;
                     else if (HAS_QRCP && ex_is_qrcp)     state <= S_QR;
                     else                                 state <= S_WB;
                 end
