@@ -173,7 +173,8 @@ module t_vtrace_async_tb;
         d_sync  = res(10, 0);
         expect32("WORK retired in the window", 32'(ovl_total), 32'(NWORK));
         expect32("WORK retired while busy", 32'(ovl_busy), 32'(NWORK));
-        expect32("VTRACE x0 retire spacing", 32'(vt0_lat), PIPELINED ? 32'd1 : 32'd4);
+        // Multi-cycle: ID, EX, WB (fetch overlaps the retiring cycle). Pipelined: one per cycle.
+        expect32("VTRACE x0 retire spacing", 32'(vt0_lat), PIPELINED ? 32'd1 : 32'd3);
         expect_true($sformatf("async (%0d cycles) faster than sync (%0d)", d_async, d_sync),
                     d_async < d_sync);
 
