@@ -37,7 +37,13 @@
    one, two and eight groups), a store right after, a mask writer and a
    taken branch right after, a framebuffer store then an FB_SWAP store (the
    testbench checks the framebuffer at swap_req), and dmem window lanes
-   mixed with bus lanes (the window done first, and the bus done first). */
+   mixed with bus lanes (the window done first, and the bus done first).
+   MEM completion computed a cycle ahead (window bank conflicts, store
+   groups): a window store where a lane shares the word of its bank's lowest
+   lane past a conflicting lane between them, then a load of the same words;
+   a store of window lanes in three cycles mixed with dmem lanes in two
+   groups, then a load; an MMIO lane followed by dmem lanes (the last group
+   in dmem, done when the bus is idle), then a load. */
 #include "kc_test.h"
 #include "kc_lanes.h"
 #define VSET(f, rs)    .insn r 0x2B, 0, f, x0, rs, x0
@@ -451,6 +457,43 @@ fast_jal_link:
     sb    t3, 0(s8)
     lbu   t4, 0(s8)
     sw    t4, RES(58)(s2)
+    /* window bank conflicts, every lane in bank 0: the even lanes on one
+       word, each odd lane on its own. Lanes 0, 2, 4, 6 go in the first
+       cycle (lane 2 shares the word of lane 0, the bank's lowest, though
+       lane 1 between them conflicts), then 1, 3, 5, 7 one per cycle */
+    andi  t0, s0, 1
+    neg   t0, t0
+    and   t1, s1, t0
+    li    a0, 0x10006100
+    add   s8, a0, t1
+    addi  t3, s0, 0xD1
+    sw    t3, 0(s8)
+    lw    t4, 0(s8)
+    addi  t4, t4, 1
+    sw    t4, RES(59)(s2)
+    /* window lanes 0, 2, 4, 6, 7 in bank 1 (three cycles: {0, 4}, {2, 7},
+       {6}) with dmem lanes 1, 5 on one word and 3 on another (two groups:
+       the store's bus part ends first) */
+    la    a0, stress_mix
+    add   a0, a0, s1
+    lw    s8, 0(a0)
+    addi  t3, s0, 0xE1
+    sw    t3, 0(s8)
+    lw    t4, 0(s8)
+    sw    t4, RES(60)(s2)
+    /* lane 0 stores to LEDS, lanes 1 to 7 to their own dmem word (lane
+       serial: an MMIO lane is pending), then every lane loads its word */
+    seqz  t0, s0
+    neg   t0, t0                /* -1 in lane 0 */
+    li    a0, MMIO_BASE + MMIO_LEDS
+    addi  a1, s4, 192
+    xor   t2, a1, a0
+    and   t2, t2, t0
+    xor   s8, a1, t2
+    addi  t3, s0, 0xF1
+    sw    t3, 0(s8)
+    lw    t4, 192(s4)
+    sw    t4, RES(61)(s2)
 
     /* ---------------- slow pass ---------------- */
     li    s9, 0
@@ -875,6 +918,53 @@ fast_jal_link:
     lbu   t4, 0(s8)
     SLOW
     CHECK(58, t4)
+    andi  t0, s0, 1
+    SLOW
+    neg   t0, t0
+    SLOW
+    and   t1, s1, t0
+    li    a0, 0x10006100
+    SLOW
+    add   s8, a0, t1
+    addi  t3, s0, 0xD1
+    SLOW
+    sw    t3, 0(s8)
+    SLOW
+    lw    t4, 0(s8)
+    SLOW
+    addi  t4, t4, 1
+    SLOW
+    CHECK(59, t4)
+    la    a0, stress_mix
+    SLOW
+    add   a0, a0, s1
+    SLOW
+    lw    s8, 0(a0)
+    addi  t3, s0, 0xE1
+    SLOW
+    sw    t3, 0(s8)
+    SLOW
+    lw    t4, 0(s8)
+    SLOW
+    CHECK(60, t4)
+    seqz  t0, s0
+    SLOW
+    neg   t0, t0
+    li    a0, MMIO_BASE + MMIO_LEDS
+    addi  a1, s4, 192
+    SLOW
+    xor   t2, a1, a0
+    SLOW
+    and   t2, t2, t0
+    SLOW
+    xor   s8, a1, t2
+    addi  t3, s0, 0xF1
+    SLOW
+    sw    t3, 0(s8)
+    SLOW
+    lw    t4, 192(s4)
+    SLOW
+    CHECK(61, t4)
 
     li    t1, 1
     MASKSET(t1)
@@ -885,3 +975,8 @@ fast_jal_link:
 
     .data
     .word 0
+    /* t_pipe_stress slot 60: per-lane store address */
+    .p2align 2
+stress_mix:
+    .word 0x10006420, 0x10001A80, 0x10006424, 0x10001A84
+    .word 0x10006420, 0x10001A80, 0x10006428, 0x10006424

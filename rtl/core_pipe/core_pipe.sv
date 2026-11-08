@@ -20,7 +20,7 @@
 //        for it. QRCP 8 cycles (seven qrcp_pipe stages, result), VTRACE rd
 //        (rd != x0) until done plus one, loads and stores with an active
 //        lane: one cycle per LSU bus access (one per group of coalesced
-//        lanes) plus one, except a store whose last group goes to dmem or
+//        lanes) plus one, except a store whose bus lanes all go to dmem or
 //        the framebuffer (no extra cycle); MUL and everything else 1.
 //        Retirement happens here
 //   WB   every lane writes rd
@@ -550,7 +550,6 @@ module core_pipe
     logic [ERR_WIDTH-1:0] m_err;
     logic [31:0]          m_pc, m_inst, m_next;
     logic                 m_walk, m_sret, m_vt_tail, m_mem, lsu_done, lsu_idle, win_fin;
-    logic                 lsu_last, st_fast;
     logic                 retire_valid;
 
     always_ff @(posedge clk) begin
@@ -620,22 +619,81 @@ module core_pipe
 
     // A load or store is done when the bus LSU has no lane left (the cycle
     // after its last access: a load's data arrives then) and the dmem window
-    // serves its last lanes (or has none). Both come from registers, so
-    // bus_ready never reaches m_done.
+    // serves its last lanes (or has none).
     //
-    // A store whose last group goes to dmem or the framebuffer is done in
-    // the cycle that group goes out (st_fast): rtl/soc/decoder.sv answers
-    // ready = req for both (BRAM / strobe ports), so bus_req alone means the
-    // accept, and bus_req, last and bus_addr come from registers. bus_req
-    // carries !vt_block, so a held access never ends MEM. Loads keep the
-    // extra cycle (their data arrives then); world, texture, MMIO, palette
-    // and unmapped stores keep waiting for lsu_idle.
-    assign st_fast = m_is_store && bus_req && lsu_last &&
-                     ((bus_addr[31:28] == REG_DMEM) || (bus_addr[31:28] == REG_FB));
+    // A store whose bus lanes all go to dmem or the framebuffer is done in
+    // the cycle its last group goes out (st_fast): rtl/soc/decoder.sv answers
+    // ready = req for both (BRAM / strobe ports) and vt_block never holds
+    // them, so such a store sends one group per cycle. Loads keep the extra
+    // cycle (their data arrives then); a store with a world, texture, MMIO,
+    // palette or unmapped lane waits for the bus LSU to be idle.
+    //
+    // m_done drives adv, the clock enable of EX, ID and IF, so it reads only
+    // registers: m_bidle (lsu_idle), m_bfast (st_fast) and win_fin (win_lsu's
+    // fin) hold this cycle's value, computed a cycle ahead.
+    //   EX, on the addresses start sees (l_alu): e_busl, the active lanes
+    //   outside the window (the bus LSU's); e_eq, lsu.sv's eq (same dmem or
+    //   framebuffer word); e_bone, the bus lanes are one dmem or framebuffer
+    //   group.
+    //   m_bidle: e_busl == 0 at the start, then lsu_idle || lsu_done (the
+    //   next cycle's lsu_idle).
+    //   m_bfast: a store with every bus lane in dmem or the framebuffer
+    //   (m_bcoal) sends its groups in the order of their lowest lanes (b_ldr)
+    //   one per cycle, so its last group goes out in the cycle after the one
+    //   with two unsent groups (b_rem); e_bone at the start.
+    logic [LANES-1:0] e_busl, e_coal, ex_win, m_busl, b_ldr, b_rem, b_sent;
+    logic [LANES-1:0] e_eq [LANES];
+    logic [LANES-1:0] m_eq [LANES];
+    logic             e_bone, m_bidle, m_bfast, m_bcoal;
+
+    for (genvar i = 0; i < LANES; i++) begin : g_bus_ex
+        assign e_coal[i] = (l_alu[i][31:28] == REG_DMEM) || (l_alu[i][31:28] == REG_FB);
+    end
+    assign e_busl = mask & ~ex_win;
+
+    for (genvar i = 0; i < LANES; i++) begin : g_eq_i
+        assign e_eq[i][i] = 1'b1;
+        for (genvar j = i + 1; j < LANES; j++) begin : g_eq_j
+            logic eq_p;
+            assign eq_p       = e_coal[i] && (l_alu[i][31:28] == l_alu[j][31:28]) &&
+                                (l_alu[i][14:2] == l_alu[j][14:2]) &&
+                                ((l_alu[i][31:28] == REG_DMEM) ||
+                                 (l_alu[i][16:15] == l_alu[j][16:15]));
+            assign e_eq[i][j] = eq_p;
+            assign e_eq[j][i] = eq_p;
+        end
+    end
+
+    always_comb begin
+        e_bone = (e_busl != '0) && ((e_busl & ~e_coal) == '0);
+        for (int i = 0; i < LANES; i++)
+            if (e_busl[i] && ((e_busl & ~e_eq[i]) != '0)) e_bone = 1'b0;
+    end
+
+    for (genvar j = 0; j < LANES; j++) begin : g_ldr
+        localparam logic [LANES-1:0] BELOW = LANES'((64'd1 << j) - 64'd1);
+        assign b_ldr[j] = m_busl[j] && ((m_busl & m_eq[j] & BELOW) == '0);
+    end
+    assign b_rem = b_ldr & ~b_sent;
+
+    always_ff @(posedge clk) begin
+        if (m_ready) begin
+            m_bidle <= (e_busl == '0);
+            m_bfast <= e_is_store && e_bone;
+            m_bcoal <= e_is_store && ((e_busl & ~e_coal) == '0);
+            m_busl  <= e_busl;
+            m_eq    <= e_eq;
+            b_sent  <= '0;
+        end else begin
+            m_bidle <= lsu_idle || lsu_done;
+            m_bfast <= m_bcoal && ($countones(b_rem) == 2);
+            b_sent  <= b_sent | (b_rem & (~b_rem + LANES'(1)));
+        end
+    end
 
     always_comb begin
         if (m_halt)          m_done = 1'b1;
-        else if (m_mem)      m_done = (lsu_idle || st_fast) && win_fin;
+        else if (m_mem)      m_done = (m_bidle || m_bfast) && win_fin;
         else if (m_qr)       m_done = (m_cnt == 3'd7);
         else if (m_vt)       m_done = m_vt_tail;
         else                 m_done = 1'b1;
@@ -643,6 +701,7 @@ module core_pipe
 
     /* verilator lint_off UNUSEDSIGNAL */
     logic [LANES-1:0] lsu_mis;
+    logic             lsu_last;   // st_fast is m_bfast
     /* verilator lint_on UNUSEDSIGNAL */
     logic [1:0] lsu_lo [LANES];
     always_comb for (int i = 0; i < LANES; i++) lsu_lo[i] = 2'b00;
@@ -673,10 +732,10 @@ module core_pipe
     // cycle (rtl/core_pipe/win_lsu.sv).
     win_lsu #(.LANES(LANES)) u_win (
         .clk, .rst,
-        .start(e_lsu_go), .active(mask),
+        .start(e_lsu_go), .active(mask), .ex_addr(l_alu),
         .go(m_valid && m_mem && !m_halt), .is_store(m_is_store), .funct3(m_funct3),
         .addr(l_res), .rs2(l_mrs2),
-        .win(win_lane), .served(win_srv), .fin(win_fin), .value(win_val),
+        .ex_win, .win(win_lane), .served(win_srv), .fin(win_fin), .value(win_val),
         .b_we(win_we), .b_addr(win_addr), .b_wdata(win_wdata), .b_rdata(win_rdata)
     );
 
@@ -721,10 +780,11 @@ module core_pipe
 
     // A store retires in the cycle the bus accepts its last lane, as on the
     // multi-cycle core, or, with no bus lane left, in the cycle the window
-    // serves its last lanes; m_sret marks it retired. A world, texture, MMIO
-    // or unmapped store then spends one more cycle in MEM; a dmem or
-    // framebuffer store leaves in its retiring cycle (st_fast implies
-    // lsu_done, so m_done and st_ret rise together and m_sret never sets).
+    // serves its last lanes; m_sret marks it retired. A store with a world,
+    // texture, MMIO or unmapped lane then spends one more cycle in MEM; a
+    // dmem or framebuffer store leaves in its retiring cycle (m_bfast is
+    // st_fast, which implies lsu_done, so m_done and st_ret rise together
+    // and m_sret never sets).
     logic st_ret;
     assign st_ret = !m_sret && (lsu_done || lsu_idle) && win_fin;
 
