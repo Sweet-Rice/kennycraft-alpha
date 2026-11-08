@@ -14,10 +14,10 @@
 //        lane, uniform checks, divergence stack, mask, lane control, ray
 //        unit configuration and start, misaligned check
 //   MEM  the only stage that takes more than one cycle; EX, ID and IF wait
-//        for it. MUL 2 cycles, QRCP 6 (load, four steps, result), VTRACE
-//        until done plus one, loads and stores with an active lane: one
-//        cycle per LSU bus access (one per group of coalesced lanes) plus
-//        one. Retirement happens here
+//        for it. MUL 2 cycles, QRCP 6 (load, four steps, result), VTRACE rd
+//        (rd != x0) until done plus one, loads and stores with an active
+//        lane: one cycle per LSU bus access (one per group of coalesced
+//        lanes) plus one. Retirement happens here
 //   WB   every lane writes rd
 //
 // Hazards. Forwarding MEM -> EX and WB -> EX for every lane, gated by that
@@ -27,6 +27,12 @@
 // MASKSET, MASKALL, DIF, DELSE and DENDIF, so the mask and divergence stack
 // that EX reads are always those of every older instruction (Tai page, GPU
 // Core, Pipelining notes: read in ID, written in EX).
+//
+// Asynchronous VTRACE (VTRACE x0) starts the walk in EX like VTRACE rd and
+// leaves MEM in one cycle. vt_pend is high from vt_start until vt_done; while
+// it is high a custom-1 instruction waits in EX (e_vt_hold: EX, ID and IF
+// hold, MEM gets a bubble), so VSET cannot change the rays, a second VTRACE
+// cannot start and VGET reads the finished results.
 //
 // Retirement (the retire_* wires, pc). An instruction retires in its last
 // MEM cycle, a store with an active lane in the cycle the bus accepts its
@@ -102,8 +108,10 @@ module core_pipe
     logic e_valid, e_go, e_halt, e_redirect;
     logic [31:0] e_next;
 
+    logic e_vt_hold;  // custom-1 in EX while a walk is in flight: EX waits
+
     assign m_ready = !m_valid || m_done;
-    assign adv     = m_ready;
+    assign adv     = m_ready && !e_vt_hold;
     assign e_go    = e_valid && adv;
     assign flush   = e_go && (e_halt || e_redirect);
 
@@ -419,11 +427,13 @@ module core_pipe
     // ------------------------------------------------------------------
     if (HAS_RAY_UNIT) begin : g_ray
         logic [7:0] cap;
+        logic       vt_pend;
 
-        assign e_vtrace = e_is_ray && (e_funct3 == F3_VTRACE);
-        assign e_vget   = e_is_ray && (e_funct3 == F3_VGET);
-        assign cap      = l_rs1[sl][7:0];
-        assign e_nowr   = e_vtrace && (cap == 8'd0);
+        assign e_vtrace  = e_is_ray && (e_funct3 == F3_VTRACE);
+        assign e_vget    = e_is_ray && (e_funct3 == F3_VGET);
+        assign e_vt_hold = e_valid && e_is_ray && vt_pend;
+        assign cap       = l_rs1[sl][7:0];
+        assign e_nowr    = e_vtrace && (cap == 8'd0);
 
         assign vt_lane_mask = mask;
         // A custom-1 instruction halts only on e_fault (DIVERGE, DIVSTACK
@@ -436,13 +446,23 @@ module core_pipe
         assign vt_max_steps = cap;
         assign vt_wr        = m_valid && m_vt && vt_done;
 
+        // VGET field 3 returns the VTRACE result, fields 0 and 1 the hit
+        // cell and t_hit (field 2 and 4 up are illegal).
         for (genvar i = 0; i < LANES; i++) begin : g_y
-            assign ray_y[i] = e_field[0] ? vt_t_hit[i] : {15'd0, vt_hit_cell[i]};
+            assign ray_y[i] = e_field[1] ? {16'd0, vt_result[i]} :
+                              e_field[0] ? vt_t_hit[i] : {15'd0, vt_hit_cell[i]};
             assign vt_y[i]  = {16'd0, vt_result[i]};
+        end
+
+        always_ff @(posedge clk) begin
+            if (rst)           vt_pend <= 1'b0;
+            else if (vt_start) vt_pend <= 1'b1;
+            else if (vt_done)  vt_pend <= 1'b0;
         end
     end else begin : g_no_ray
         assign e_vtrace     = 1'b0;
         assign e_vget       = 1'b0;
+        assign e_vt_hold    = 1'b0;
         assign e_nowr       = 1'b0;
         assign vt_lane_mask = '0;
         assign vt_cfg_we    = 1'b0;
@@ -479,7 +499,7 @@ module core_pipe
             m_valid <= 1'b0;
             m_walk  <= 1'b0;
         end else if (m_ready) begin
-            m_valid <= e_valid;
+            m_valid <= e_valid && !e_vt_hold;
             m_walk  <= e_lsu_go;
         end else if (lsu_done) begin
             m_walk  <= 1'b0;
@@ -503,7 +523,7 @@ module core_pipe
             m_mem        <= e_mem;
             m_mul        <= e_is_mul;
             m_qr         <= HAS_QRCP && e_is_qrcp;
-            m_vt         <= e_vtrace;
+            m_vt         <= e_vtrace && e_r_we;   // VTRACE x0 does not wait
             m_cnt        <= '0;
             m_tail       <= 1'b0;
             m_vt_tail    <= 1'b0;
