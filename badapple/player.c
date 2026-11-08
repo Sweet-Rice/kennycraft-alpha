@@ -1,8 +1,8 @@
 /* Bad Apple player: plays the DDR3 image the loader passes wrote.
  *
  * 1. Loads the header chunk and checks every data chunk against its sum
- *    (one box per chunk, green = intact, red = damaged), shows that screen,
- *    and stops there if anything is damaged.
+ *    (one box per chunk, green = intact, red = damaged), shows that screen
+ *    for 2 s, and stops there if anything is damaged.
  * 2. Streams the data chunks through the 16 world-window slots as a ring
  *    (chunk n in slot n mod 16; a slot is reloaded with chunk n + 16 as soon
  *    as chunk n is used up) and decodes one frame per two vsyncs (30 fps)
@@ -108,6 +108,9 @@ int main(void) {
     ba_putu(bad);
     ba_putc('\n');
     if (bad) halt();
+    /* Keep the all-green check screen up for 2 s (120 vsyncs) before playing. */
+    const uint32_t shown = FRAME_COUNT;
+    while (FRAME_COUNT - shown < 120) { }
 
     for (;;) {
         uint32_t *w = &planes[0][0][0];
