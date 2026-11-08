@@ -42,6 +42,8 @@ module display_test (
     logic [11:0] pal_wdata;
     logic        vblank;
     logic [31:0] frame_count;
+    logic [31:0] fb_word;        // the display's core port is a word port
+    logic [1:0]  fb_lane_q;
     logic [7:0]  fb_rdata;
     logic        check_valid;    // fb_rdata holds the byte read last cycle
     logic [7:0]  check_expect;
@@ -120,6 +122,8 @@ module display_test (
     assign pal_we = (state == S_PAL);
     assign fb_we  = (state == S_FB);
     assign fb_re  = (state == S_CHECK);
+    always_ff @(posedge clk_core) if (fb_re) fb_lane_q <= addr[1:0];
+    assign fb_rdata = fb_word[fb_lane_q*8 +: 8];
 
     display u_display (
         .clk_core    (clk_core),
@@ -129,8 +133,9 @@ module display_test (
         .fb_we       (fb_we),
         .fb_re       (fb_re),
         .fb_addr     (addr),
-        .fb_wdata    (fb_wdata),
-        .fb_rdata    (fb_rdata),
+        .fb_be       (4'b0001 << addr[1:0]),
+        .fb_wdata    ({4{fb_wdata}}),
+        .fb_rdata    (fb_word),
         .pal_we      (pal_we),
         .pal_addr    (pal_i),
         .pal_wdata   (pal_wdata),

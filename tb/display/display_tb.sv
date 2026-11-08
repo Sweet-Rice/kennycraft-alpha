@@ -34,8 +34,16 @@ module display_tb;
     logic        rst_core = 1'b1, rst_pix = 1'b1;
     logic        fb_we = 1'b0, fb_re = 1'b0;
     logic [16:0] fb_addr = '0;
-    logic [7:0]  fb_wdata = '0;
-    logic [7:0]  fb_rdata;
+    logic [7:0]  fb_byte = '0;        // byte to write at fb_addr
+    logic [7:0]  fb_rbyte;            // byte at fb_addr, the cycle after fb_re
+    // The display's core port is a word port with byte enables: one byte lane per access here.
+    logic [3:0]  fb_be;
+    logic [31:0] fb_wdata, fb_rdata;
+    logic [1:0]  fb_lane_q;
+    assign fb_be    = 4'b0001 << fb_addr[1:0];
+    assign fb_wdata = {4{fb_byte}};
+    always @(posedge clk_core) if (fb_re) fb_lane_q <= fb_addr[1:0];
+    assign fb_rbyte = fb_rdata[fb_lane_q*8 +: 8];
     logic        pal_we = 1'b0;
     logic [7:0]  pal_addr = '0;
     logic [11:0] pal_wdata = '0;
@@ -152,7 +160,7 @@ module display_tb;
     // ------------------------------------------------------------------
     task automatic fb_write(input int addr, input logic [7:0] data);
         @(negedge clk_core);
-        fb_we = 1'b1; fb_addr = 17'(addr); fb_wdata = data;
+        fb_we = 1'b1; fb_addr = 17'(addr); fb_byte = data;
         @(negedge clk_core);
         fb_we = 1'b0;
     endtask
@@ -161,7 +169,7 @@ module display_tb;
         @(negedge clk_core);
         for (int r = 0; r < 240; r++) begin
             for (int c = 0; c < 320; c++) begin
-                fb_we = 1'b1; fb_addr = 17'(r * 320 + c); fb_wdata = pattern(id, c, r);
+                fb_we = 1'b1; fb_addr = 17'(r * 320 + c); fb_byte = pattern(id, c, r);
                 @(negedge clk_core);
             end
         end
@@ -176,8 +184,8 @@ module display_tb;
             fb_re = 1'b1; fb_addr = 17'(addr);
             @(negedge clk_core);
             fb_re = 1'b0;
-            if (fb_rdata !== pattern(id, addr % 320, addr / 320))
-                $fatal(1, "fb read addr %0d = %02h, expected %02h", addr, fb_rdata, pattern(id, addr % 320, addr / 320));
+            if (fb_rbyte !== pattern(id, addr % 320, addr / 320))
+                $fatal(1, "fb read addr %0d = %02h, expected %02h", addr, fb_rbyte, pattern(id, addr % 320, addr / 320));
         end
     endtask
 

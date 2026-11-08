@@ -48,7 +48,8 @@ logic        err_led;
 // Display port
 logic        fb_we, fb_re, pal_we, swap_req, fb_mode;
 logic [16:0] fb_addr;
-logic [7:0]  fb_wdata, fb_rdata = 8'h00;
+logic [3:0]  fb_be;
+logic [31:0] fb_wdata, fb_rdata = 32'h0;
 logic [7:0]  pal_addr;
 logic [11:0] pal_wdata;
 logic        swap_pending = 1'b0;
@@ -110,7 +111,7 @@ kc_soc #(
     .clk, .rst,
     .uart_tx, .uart_rx,
     .leds, .err_led,
-    .fb_we, .fb_re, .fb_addr, .fb_wdata, .fb_rdata,
+    .fb_we, .fb_re, .fb_addr, .fb_be, .fb_wdata, .fb_rdata,
     .pal_we, .pal_addr, .pal_wdata,
     .swap_req, .swap_pending, .vblank, .frame_count, .fb_mode,
     .ddr_reg_en, .ddr_reg_we, .ddr_reg_off, .ddr_reg_wdata, .ddr_reg_rdata, .ddr_reg_stall,
@@ -134,8 +135,11 @@ logic [11:0] pal_mem [256];
 int          swap_req_count = 0;
 
 always @(posedge clk) begin
-    if (fb_we && fb_addr < 17'd76800) fb_mem[fb_addr] <= fb_wdata;
-    if (fb_re) fb_rdata <= (fb_addr < 17'd76800) ? fb_mem[fb_addr] : 8'h00;
+    for (int i = 0; i < 4; i++) begin
+        if (fb_we && fb_be[i] && {fb_addr[16:2], 2'(i)} < 17'd76800)
+            fb_mem[{fb_addr[16:2], 2'(i)}] <= fb_wdata[i*8 +: 8];
+        if (fb_re) fb_rdata[i*8 +: 8] <= ({fb_addr[16:2], 2'(i)} < 17'd76800) ? fb_mem[{fb_addr[16:2], 2'(i)}] : 8'h00;
+    end
     if (pal_we) pal_mem[pal_addr] <= pal_wdata;
     if (swap_req) swap_req_count <= swap_req_count + 1;
 end

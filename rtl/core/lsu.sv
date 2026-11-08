@@ -17,7 +17,15 @@
 //
 // Store side: byte enables and data replicated across the word (SB repeats the
 // byte four times, SH the halfword twice), so a byte-wide slave or an MMIO
-// register can take wdata[7:0] for any byte address. World stores reach both
+// register can take wdata[7:0] for any byte address.
+//
+// Framebuffer stores merge: the pending lanes whose address is in the same
+// word as the current lane's, in the framebuffer region (0x4, a plain memory
+// with byte enables), go out together as one access with the union of their
+// byte enables; on a byte two lanes write, the highest lane's data wins, as it
+// would one access after another. A pass of the render kernel (lanes 0-3 and
+// 4-7 on two rows of four pixels) is two accesses instead of eight. Every
+// other access (loads, dmem, MMIO, world) stays one per lane. World stores reach both
 // world copies through the SoC (world_remap, D17); the LSU issues one access.
 module lsu
     import kc_isa_pkg::*;
@@ -62,7 +70,7 @@ module lsu
     // ------------------------------------------------------------------
     // Sequencer
     // ------------------------------------------------------------------
-    logic [LANES-1:0] pending, cur_bit;
+    logic [LANES-1:0] pending;
     logic [LW-1:0]    cur;
     logic             accept;
 
@@ -72,43 +80,72 @@ module lsu
             if (pending[i]) cur = LW'(i);
     end
 
-    assign cur_bit = LANES'(1) << cur;
     assign accept  = bus_req && bus_ready;
-    assign done    = accept && ((pending & ~cur_bit) == '0);
+
+    // Lanes retired by this access: the current lane, plus, for a framebuffer
+    // store, the other pending lanes in the same word.
+    logic [LANES-1:0] group;
+    logic             merge;
+    assign merge = is_store && (addr[cur][31:28] == REG_FB);
+    always_comb begin
+        for (int i = 0; i < LANES; i++)
+            group[i] = pending[i] && ((i == int'(cur)) ||
+                                      (merge && (addr[i][31:2] == addr[cur][31:2])));
+    end
+
+    assign done = accept && ((pending & ~group) == '0);
 
     always_ff @(posedge clk) begin
         if (rst)          pending <= '0;
         else if (start)   pending <= active;
-        else if (accept)  pending <= pending & ~cur_bit;
+        else if (accept)  pending <= pending & ~group;
     end
 
     // ------------------------------------------------------------------
     // Bus side
     // ------------------------------------------------------------------
-    logic [31:0] a, d;
+    logic [31:0] a;
 
     assign a = addr[cur];
-    assign d = rs2[cur];
 
     assign bus_req   = go;
     assign bus_we    = is_store;
     assign bus_addr  = a;
 
+    // Each lane's byte enables and replicated data; the access ORs the group's
+    // enables and takes each byte from the highest group lane that writes it.
+    logic [3:0]  l_be    [LANES];
+    logic [31:0] l_wdata [LANES];
+
+    for (genvar i = 0; i < LANES; i++) begin : g_store
+        always_comb begin
+            unique case (funct3[1:0])
+                2'b00: begin
+                    l_be[i]    = 4'b0001 << addr[i][1:0];
+                    l_wdata[i] = {4{rs2[i][7:0]}};
+                end
+                2'b01: begin
+                    l_be[i]    = addr[i][1] ? 4'b1100 : 4'b0011;
+                    l_wdata[i] = {2{rs2[i][15:0]}};
+                end
+                default: begin
+                    l_be[i]    = 4'b1111;
+                    l_wdata[i] = rs2[i];
+                end
+            endcase
+        end
+    end
+
     always_comb begin
-        unique case (funct3[1:0])
-            2'b00: begin
-                bus_be    = 4'b0001 << a[1:0];
-                bus_wdata = {4{d[7:0]}};
+        bus_be    = '0;
+        bus_wdata = l_wdata[cur];
+        for (int i = 0; i < LANES; i++) begin
+            if (group[i]) begin
+                bus_be = bus_be | l_be[i];
+                for (int k = 0; k < 4; k++)
+                    if (l_be[i][k]) bus_wdata[k*8 +: 8] = l_wdata[i][k*8 +: 8];   // ascending: highest wins
             end
-            2'b01: begin
-                bus_be    = a[1] ? 4'b1100 : 4'b0011;
-                bus_wdata = {2{d[15:0]}};
-            end
-            default: begin
-                bus_be    = 4'b1111;
-                bus_wdata = d;
-            end
-        endcase
+        end
     end
 
     // ------------------------------------------------------------------

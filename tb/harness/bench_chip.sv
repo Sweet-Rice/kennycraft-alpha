@@ -110,7 +110,8 @@ module bench_chip #(
     // ------------------------------------------------------------------
     logic        fb_we, fb_re;
     logic [16:0] fb_addr;
-    logic [7:0]  fb_wdata, fb_rdata;
+    logic [3:0]  fb_be;
+    logic [31:0] fb_wdata, fb_rdata;
     logic        pal_we;
     logic [7:0]  pal_addr;
     logic [11:0] pal_wdata;
@@ -126,6 +127,7 @@ module bench_chip #(
         .fb_we        (fb_we),
         .fb_re        (fb_re),
         .fb_addr      (fb_addr),
+        .fb_be        (fb_be),
         .fb_wdata     (fb_wdata),
         .fb_rdata     (fb_rdata),
         .pal_we       (pal_we),
@@ -192,6 +194,7 @@ module bench_chip #(
         .fb_we         (fb_we),
         .fb_re         (fb_re),
         .fb_addr       (fb_addr),
+        .fb_be         (fb_be),
         .fb_wdata      (fb_wdata),
         .fb_rdata      (fb_rdata),
         .pal_we        (pal_we),

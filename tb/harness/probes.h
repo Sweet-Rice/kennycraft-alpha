@@ -19,7 +19,9 @@
 #define KC_SWAP_PENDING(d) ((d).rootp->KC_TOP_DOT(u_display__DOT__swap_pending))
 #define KC_FB_MODE(d) ((d).rootp->KC_TOP_DOT(u_display__DOT__fb_mode))
 
-// rtl/display/framebuffer.sv: buffer b, bank k (g_buf[b].g_bank[k].mem), 19 x 4096 B.
+// rtl/display/framebuffer.sv: buffer b, bank k (g_buf[b].g_bank[k].mem), 19 x 4096 B. A bank is
+// 1024 x 32 with byte lanes; byte i of the bank is lane i % 4 of word i / 4, which is exactly
+// byte i of the word array on a little-endian host, so the harness reads it as 4096 bytes.
 // The core writes buffer draw_sel_core, so that is the one an accepted swap presents.
 // KC_FB_COUNT (default 2) is the top's FB_COUNT (mk/bench.mk passes it).
 #ifndef KC_FB_COUNT
@@ -27,16 +29,18 @@
 #endif
 #define KC_FB_MEM(d, b, k) \
     ((d).rootp->KC_TOP_DOT(u_display__DOT__u_fb__DOT__g_buf__BRA__##b##__KET____DOT__g_bank__BRA__##k##__KET____DOT__mem))
+#define KC_FB_BANK(d, b, k) reinterpret_cast<const uint8_t*>(&KC_FB_MEM(d, b, k)[0])
 #define KC_FB_BUFFER(d, b) { \
-    &KC_FB_MEM(d, b, 0)[0],  &KC_FB_MEM(d, b, 1)[0],  &KC_FB_MEM(d, b, 2)[0],  &KC_FB_MEM(d, b, 3)[0], \
-    &KC_FB_MEM(d, b, 4)[0],  &KC_FB_MEM(d, b, 5)[0],  &KC_FB_MEM(d, b, 6)[0],  &KC_FB_MEM(d, b, 7)[0], \
-    &KC_FB_MEM(d, b, 8)[0],  &KC_FB_MEM(d, b, 9)[0],  &KC_FB_MEM(d, b, 10)[0], &KC_FB_MEM(d, b, 11)[0], \
-    &KC_FB_MEM(d, b, 12)[0], &KC_FB_MEM(d, b, 13)[0], &KC_FB_MEM(d, b, 14)[0], &KC_FB_MEM(d, b, 15)[0], \
-    &KC_FB_MEM(d, b, 16)[0], &KC_FB_MEM(d, b, 17)[0], &KC_FB_MEM(d, b, 18)[0]}
+    KC_FB_BANK(d, b, 0),  KC_FB_BANK(d, b, 1),  KC_FB_BANK(d, b, 2),  KC_FB_BANK(d, b, 3), \
+    KC_FB_BANK(d, b, 4),  KC_FB_BANK(d, b, 5),  KC_FB_BANK(d, b, 6),  KC_FB_BANK(d, b, 7), \
+    KC_FB_BANK(d, b, 8),  KC_FB_BANK(d, b, 9),  KC_FB_BANK(d, b, 10), KC_FB_BANK(d, b, 11), \
+    KC_FB_BANK(d, b, 12), KC_FB_BANK(d, b, 13), KC_FB_BANK(d, b, 14), KC_FB_BANK(d, b, 15), \
+    KC_FB_BANK(d, b, 16), KC_FB_BANK(d, b, 17), KC_FB_BANK(d, b, 18)}
 #define KC_FB_DRAW_SEL(d) ((d).rootp->KC_TOP_DOT(u_display__DOT__draw_sel_core))
 #define KC_PALETTE_MEM(d) ((d).rootp->KC_TOP_DOT(u_display__DOT__u_pal__DOT__mem))
 
 static_assert(sizeof(KC_FB_MEM(*static_cast<Vkc*>(nullptr), 0, 0)) == 4096, "framebuffer bank layout changed");
+static_assert(sizeof(KC_FB_MEM(*static_cast<Vkc*>(nullptr), 0, 0)[0]) == 4, "framebuffer banks are 32-bit words");
 static_assert(sizeof(KC_PALETTE_MEM(*static_cast<Vkc*>(nullptr))) == 256 * sizeof(uint16_t), "palette layout changed");
 
 // Draw buffer and palette as the RTL holds them now.
