@@ -21,7 +21,8 @@
 // LANES, HAS_DIV_STACK and HAS_RAY_UNIT configure the core: LANES = 8 with the
 // divergence stack is Stage 1 (the default, and the KC_TARGET=top board
 // build), plus HAS_RAY_UNIT = 1 Stage 2; LANES = 1 without either is Stage 0
-// (KC_TARGET=top_s0).
+// (KC_TARGET=top_s0). HAS_QRCP = 1 adds the per-lane QRCP unit (D22, Stage 2
+// top first).
 //
 // led is the error LED: the core halted on an illegal instruction, a
 // misaligned access or a fetch outside instruction memory. The MIG owns the
@@ -34,7 +35,8 @@ module top #(
     parameter string DMEM_HEX = "kc_dmem.hex",
     parameter string TEX_HEX  = "textures.hex",
     parameter string PAL_HEX  = "palette.hex",
-    parameter bit    HAS_RAY_UNIT  = 1'b0
+    parameter bit    HAS_RAY_UNIT  = 1'b0,
+    parameter bit    HAS_QRCP      = 1'b0
 ) (
     input  logic        clk,            // E3,  100 MHz
     input  logic        ck_rst,         // C2,  active low
@@ -122,7 +124,8 @@ module top #(
         .TEX_HEX  (TEX_HEX),
         .EXT_WORLD(1'b1),
         .HAS_DIV_STACK(HAS_DIV_STACK),
-        .HAS_RAY_UNIT (HAS_RAY_UNIT)
+        .HAS_RAY_UNIT (HAS_RAY_UNIT),
+        .HAS_QRCP     (HAS_QRCP)
     ) u_soc (
         .clk(clk_core), .rst(rst_core),
         .uart_tx(uart_rxd_out), .uart_rx(uart_txd_in),

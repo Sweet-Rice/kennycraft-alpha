@@ -28,7 +28,8 @@ module kc_soc
     parameter string TEX_HEX   = "",
     parameter bit    EXT_WORLD = 1'b0,
     parameter bit    HAS_DIV_STACK = 1'b0,  // custom-2 divergence stack in the core
-    parameter bit    HAS_RAY_UNIT  = 1'b0   // custom-1 ray unit (vt_* ports)
+    parameter bit    HAS_RAY_UNIT  = 1'b0,  // custom-1 ray unit (vt_* ports)
+    parameter bit    HAS_QRCP      = 1'b0   // QRCP in every lane (D22)
 ) (
     input  logic        clk,
     input  logic        rst,
@@ -99,7 +100,8 @@ module kc_soc
     logic [ERR_WIDTH-1:0] err_set;
     logic [31:0]          err_pc, pc;
 
-    core #(.LANES(LANES), .HAS_DIV_STACK(HAS_DIV_STACK), .HAS_RAY_UNIT(HAS_RAY_UNIT)) u_core (
+    core #(.LANES(LANES), .HAS_DIV_STACK(HAS_DIV_STACK), .HAS_RAY_UNIT(HAS_RAY_UNIT),
+           .HAS_QRCP(HAS_QRCP)) u_core (
         .clk, .rst,
         .imem_addr, .imem_rdata,
         .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,

@@ -154,3 +154,6 @@ lint-core:
 	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=3 -GHAS_DIV_STACK="1'b1" $(CORE_RTL)
 	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=8 -GHAS_DIV_STACK="1'b1" -GHAS_RAY_UNIT="1'b1" $(CORE_RTL)
 	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=3 -GHAS_RAY_UNIT="1'b1" $(CORE_RTL)
+	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=8 -GHAS_DIV_STACK="1'b1" -GHAS_RAY_UNIT="1'b1" -GHAS_QRCP="1'b1" $(CORE_RTL)
+	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GHAS_QRCP="1'b1" $(CORE_RTL)
+	$(VERILATOR) $(VL_LINT) --top-module qrcp rtl/core/qrcp.sv

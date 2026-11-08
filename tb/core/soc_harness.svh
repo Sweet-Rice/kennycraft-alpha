@@ -15,12 +15,14 @@
 // tracediff against the pre-lanes RTL. HAS_RAY_UNIT = 1 builds the core with
 // custom-1 and connects rtl/vtrace/vtrace.sv (WORLD_LATENCY = 2) to it, with
 // an all-air world: every ray walks until it leaves the world or hits its cap.
+// HAS_QRCP = 1 builds the core with QRCP (D22).
 
 parameter int LANES      = 1;
 parameter bit LANE0_ONLY = 1'b0;
 localparam int ALANES    = LANE0_ONLY ? 1 : LANES;   // lanes that can be active
 parameter bit HAS_DIV_STACK = 1'b0;   // custom-2 in the core, see below
 parameter bit HAS_RAY_UNIT  = 1'b0;   // custom-1 and the ray unit
+parameter bit HAS_QRCP      = 1'b0;   // QRCP (custom-0 funct3 010)
 
 `ifdef KC_BASE_CORE
 `define KC_RF(l) dut.u_core.u_rf
@@ -95,6 +97,7 @@ kc_soc #(
     .LANES(LANES),
     .HAS_DIV_STACK(HAS_DIV_STACK),
     .HAS_RAY_UNIT(HAS_RAY_UNIT),
+    .HAS_QRCP(HAS_QRCP),
     .IMEM_HEX(IMEM_HEX),
     .DMEM_HEX(DMEM_HEX)
 ) dut (
