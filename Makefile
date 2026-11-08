@@ -26,6 +26,9 @@ VLRT_OBJS     := $(addprefix $(abspath $(VLRT))/,verilated.o verilated_timing.o 
 VL_TB_FLAGS   := --binary --timing --verilate-jobs 1 -Wno-fatal
 VL_TB_BASE    := $(VL_TB_FLAGS) --build-jobs $(VL_BUILD_JOBS)
 VLRT_KEY      := $(shell $(VERILATOR) --version) $(shell $(VERILATOR) --getenv VERILATOR_ROOT) $(VL_TB_FLAGS)
+# VK_GLOBAL_OBJS= drops every runtime object Verilator would compile for the
+# model, verilated_vcd_c.o and verilated_dpi.o included, so a testbench that
+# needs --trace or DPI must use $(VL_TB_BASE) (its own runtime) instead.
 VL_TB         ?= $(VL_TB_BASE) -MAKEFLAGS VK_GLOBAL_OBJS= -LDFLAGS "$(VLRT_OBJS)"
 # Testbenches with their own C++ main (clocks driven from C++, no --timing),
 # long runs, so their C++ is built at -O3 (Verilator's default is -Os)
