@@ -26,6 +26,12 @@
 // buffering, D24; the Stage 2 builds) instead of two. CORE_MHZ sets the core
 // clock (default 50; KC_TARGET=top_s2p100 builds the pipelined core at 100).
 //
+// HAS_DDR_MEM = 1 (Doom, KC_TARGET=top_doom, PIPELINED = 1): kc_soc's I-cache,
+// D-cache and scratch (see rtl/soc/kc_soc.sv) use DDR3 through
+// rtl/ddr/ddr_line_bridge.sv instead of ddr_bridge; the chunk engine is
+// detached: CHUNK_CMD writes are dropped, CHUNK_DONE stays 0, DDR_STATUS bit 0
+// still reports calibration.
+//
 // led is the error LED: the core halted on an illegal instruction, a
 // misaligned access or a fetch outside instruction memory. The MIG owns the
 // XADC (temperature monitor); nothing else may instantiate one.
@@ -41,7 +47,8 @@ module top #(
     parameter bit    HAS_QRCP      = 1'b0,
     parameter int    FB_COUNT      = 2,
     parameter bit    PIPELINED     = 1'b0,
-    parameter int    CORE_MHZ      = 50     // core clock: 50 or 100 (VCO 1000 MHz / divider)
+    parameter int    CORE_MHZ      = 50,    // core clock: 50 or 100 (VCO 1000 MHz / divider)
+    parameter bit    HAS_DDR_MEM   = 1'b0   // caches and scratch over DDR3 (Doom)
 ) (
     input  logic        clk,            // E3,  100 MHz
     input  logic        ck_rst,         // C2,  active low
@@ -109,7 +116,11 @@ module top #(
     logic [11:0] pal_wdata;
     logic [31:0] frame_count;
 
-    logic        ddr_reg_en, ddr_reg_we, ddr_reg_stall;
+    logic        ddr_reg_en, ddr_reg_we, ddr_reg_stall, eng_reg_en;
+    logic         ddr_cmd_valid, ddr_cmd_ready, ddr_cmd_store, ddr_wr_valid, ddr_wr_ready;
+    logic         ddr_rd_valid, ddr_rd_ready;
+    logic [23:0]  ddr_cmd_line;
+    logic [127:0] ddr_wr_data, ddr_rd_data;
     logic [5:0]  ddr_reg_off;
     logic [31:0] ddr_reg_wdata, ddr_reg_rdata;
 
@@ -139,7 +150,8 @@ module top #(
         .HAS_RAY_UNIT (HAS_RAY_UNIT),
         .HAS_QRCP     (HAS_QRCP),
         .PIPELINED    (PIPELINED),
-        .FB_RD_LAT    (FB_RD_LAT)
+        .FB_RD_LAT    (FB_RD_LAT),
+        .HAS_DDR_MEM  (HAS_DDR_MEM)
     ) u_soc (
         .clk(clk_core), .rst(rst_core),
         .uart_tx(uart_rxd_out), .uart_rx(uart_txd_in),
@@ -152,7 +164,9 @@ module top #(
         .world_req, .world_we, .world_addr, .world_wdata,
         .world_ready(world_req), .world_rdata({4'b0, core_world_rdata}),
         .vt_cfg_we, .vt_cfg_field, .vt_lane_mask, .vt_cfg_data, .vt_start, .vt_max_steps,
-        .vt_done, .vt_result, .vt_hit_cell, .vt_t_hit
+        .vt_done, .vt_result, .vt_hit_cell, .vt_t_hit,
+        .ddr_cmd_valid, .ddr_cmd_ready, .ddr_cmd_store, .ddr_cmd_line,
+        .ddr_wr_valid, .ddr_wr_ready, .ddr_wr_data, .ddr_rd_valid, .ddr_rd_ready, .ddr_rd_data
     );
 
     // ------------------------------------------------------------------
@@ -250,7 +264,7 @@ module top #(
     // the rdata FIFO's pop does not wait on the core's world request decode.
     chunk_engine #(.RD_BUF(PIPELINED)) u_eng (
         .clk(clk_core), .rst(rst_core),
-        .reg_en(ddr_reg_en), .reg_we(ddr_reg_we), .reg_off(ddr_reg_off),
+        .reg_en(eng_reg_en), .reg_we(ddr_reg_we), .reg_off(ddr_reg_off),
         .reg_wdata(ddr_reg_wdata), .reg_rdata(ddr_reg_rdata), .reg_stall(ddr_reg_stall),
         .slot_valid, .win_x, .win_z,
         .vtrace_busy(vt_busy), .core_world_req(world_req),
@@ -267,13 +281,52 @@ module top #(
     logic [127:0] app_wdf_data, app_rd_data;
     logic [15:0]  app_wdf_mask;
 
-    ddr_bridge u_bridge (
-        .clk(clk_core), .rst(rst_core), .calib, .cmd_valid, .cmd_ready, .cmd_store, .cmd_chunk,
-        .wr_valid, .wr_ready, .wr_data, .rd_valid, .rd_ready, .rd_data,
-        .ui_clk, .ui_rst, .init_calib_complete, .app_addr, .app_cmd, .app_en, .app_rdy,
-        .app_wdf_data, .app_wdf_end, .app_wdf_wren, .app_wdf_mask, .app_wdf_rdy,
-        .app_rd_data, .app_rd_data_valid
-    );
+    // Both bridges are named u_bridge (rtl/ddr/ddr_bridge.xdc).
+    if (HAS_DDR_MEM) begin : g_line
+        // Chunk engine detached: CHUNK_CMD (0x30) writes never reach it, it
+        // never gets the bridge, so CHUNK_DONE stays 0.
+        assign eng_reg_en = ddr_reg_en && !(ddr_reg_we && ddr_reg_off == 6'h30);
+        assign cmd_ready  = 1'b0;
+        assign wr_ready   = 1'b0;
+        assign rd_valid   = 1'b0;
+        assign rd_data    = '0;
+
+        ddr_line_bridge u_bridge (
+            .clk(clk_core), .rst(rst_core), .calib,
+            .cmd_valid(ddr_cmd_valid), .cmd_ready(ddr_cmd_ready), .cmd_store(ddr_cmd_store),
+            .cmd_line(ddr_cmd_line), .wr_valid(ddr_wr_valid), .wr_ready(ddr_wr_ready),
+            .wr_data(ddr_wr_data), .rd_valid(ddr_rd_valid), .rd_ready(ddr_rd_ready),
+            .rd_data(ddr_rd_data),
+            .ui_clk, .ui_rst, .init_calib_complete, .app_addr, .app_cmd, .app_en, .app_rdy,
+            .app_wdf_data, .app_wdf_end, .app_wdf_wren, .app_wdf_mask, .app_wdf_rdy,
+            .app_rd_data, .app_rd_data_valid
+        );
+
+        /* verilator lint_off UNUSEDSIGNAL */
+        logic unused_eng;
+        /* verilator lint_on UNUSEDSIGNAL */
+        assign unused_eng = cmd_valid ^ cmd_store ^ (^cmd_chunk) ^ wr_valid ^ (^wr_data) ^ rd_ready;
+    end else begin : g_chunk
+        assign eng_reg_en    = ddr_reg_en;
+        assign ddr_cmd_ready = 1'b0;
+        assign ddr_wr_ready  = 1'b0;
+        assign ddr_rd_valid  = 1'b0;
+        assign ddr_rd_data   = '0;
+
+        ddr_bridge u_bridge (
+            .clk(clk_core), .rst(rst_core), .calib, .cmd_valid, .cmd_ready, .cmd_store, .cmd_chunk,
+            .wr_valid, .wr_ready, .wr_data, .rd_valid, .rd_ready, .rd_data,
+            .ui_clk, .ui_rst, .init_calib_complete, .app_addr, .app_cmd, .app_en, .app_rdy,
+            .app_wdf_data, .app_wdf_end, .app_wdf_wren, .app_wdf_mask, .app_wdf_rdy,
+            .app_rd_data, .app_rd_data_valid
+        );
+
+        /* verilator lint_off UNUSEDSIGNAL */
+        logic unused_line;
+        /* verilator lint_on UNUSEDSIGNAL */
+        assign unused_line = ddr_cmd_valid ^ ddr_cmd_store ^ (^ddr_cmd_line) ^ ddr_wr_valid ^
+                             (^ddr_wr_data) ^ ddr_rd_ready;
+    end
 
     mig_ddr3 u_mig (
         .ddr3_addr, .ddr3_ba, .ddr3_cas_n, .ddr3_ck_n, .ddr3_ck_p, .ddr3_cke,

@@ -16,15 +16,21 @@
 //                each cycle, so its data is on fb_rdata the cycle after ready
 //   0x5  mmio    register port (mmio_*), byte offset addr[7:0]
 //   0x6  palette write only, one entry per word: pal_addr = addr[9:2], low 12 bits
-//   0x7..0xF     unmapped: loads read 0, stores are dropped, no error (0x7
-//                held the rasterizer's GPU memory, removed with it)
+//   0x7  scratch HAS_DDR_MEM = 1: 64 KB word port with byte enables (scr_*),
+//                like dmem, word index addr[15:2]; otherwise unmapped
+//   0x8  ddr     HAS_DDR_MEM = 1: the D-cache (dc_*, rtl/mem/dcache.sv), DDR3
+//                byte address addr[27:0], ready from the cache; otherwise
+//                unmapped
+//   0x7..0xF     otherwise unmapped: loads read 0, stores are dropped, no
+//                error (0x7 held the rasterizer's GPU memory, removed with it)
 //
 // Byte-wide regions (world, tex) take every enabled byte lane in turn, so
 // LW/SW work there too (four accesses) and LB/SB take one.
 module decoder
     import kc_isa_pkg::*;
 #(
-    parameter int FB_RD_LAT = 1    // framebuffer port A read latency, 1..4 (display: 1 or 3)
+    parameter int FB_RD_LAT = 1,   // framebuffer port A read latency, 1..4 (display: 1 or 3)
+    parameter bit HAS_DDR_MEM = 1'b0  // regions 0x7 (scratch) and 0x8 (D-cache)
 ) (
     input  logic        clk,
     input  logic        rst,
@@ -83,11 +89,26 @@ module decoder
     // Palette (P1 display core-side port)
     output logic        pal_we,
     output logic [7:0]  pal_addr,
-    output logic [11:0] pal_wdata
+    output logic [11:0] pal_wdata,
+
+    // Scratch (HAS_DDR_MEM = 1, 64 KB, word addressed)
+    output logic [3:0]  scr_we,
+    output logic [13:0] scr_addr,
+    output logic [31:0] scr_wdata,
+    input  logic [31:0] scr_rdata,
+
+    // D-cache (HAS_DDR_MEM = 1)
+    output logic        dc_req,
+    output logic        dc_we,
+    output logic [27:0] dc_addr,
+    output logic [3:0]  dc_be,
+    output logic [31:0] dc_wdata,
+    input  logic        dc_ready,
+    input  logic [31:0] dc_rdata
 );
 
     typedef enum logic [2:0] {
-        R_NONE, R_DMEM, R_WORLD, R_TEX, R_FB, R_MMIO
+        R_NONE, R_DMEM, R_WORLD, R_TEX, R_FB, R_MMIO, R_SCR, R_DC
     } region_t;
 
     region_t sel, sel_q;
@@ -99,6 +120,8 @@ module decoder
             REG_TEX:   sel = R_TEX;
             REG_FB:    sel = R_FB;
             REG_MMIO:  sel = R_MMIO;
+            4'h7:      sel = HAS_DDR_MEM ? R_SCR : R_NONE;
+            4'h8:      sel = HAS_DDR_MEM ? R_DC  : R_NONE;
             default:   sel = R_NONE;  // imem (fetch only), palette (write only), unmapped
         endcase
     end
@@ -122,6 +145,16 @@ module decoder
     assign mmio_we    = we;
     assign mmio_addr  = addr[7:0];
     assign mmio_wdata = wdata;
+
+    assign scr_we     = (req && we && sel == R_SCR) ? be : 4'b0;
+    assign scr_addr   = addr[15:2];
+    assign scr_wdata  = wdata;
+
+    assign dc_req     = req && (sel == R_DC);
+    assign dc_we      = we;
+    assign dc_addr    = addr[27:0];
+    assign dc_be      = be;
+    assign dc_wdata   = wdata;
 
     assign pal_we     = req && we && (addr[31:28] == REG_PAL);
     assign pal_addr   = addr[9:2];
@@ -179,6 +212,7 @@ module decoder
             R_WORLD: ready = world_bus_ready;
             R_TEX:   ready = tex_bus_ready;
             R_MMIO:  ready = mmio_ready;
+            R_DC:    ready = dc_ready;
             R_FB:    ready = req && (we || fb_rd_ok);
             default: ready = req;
         endcase
@@ -196,6 +230,8 @@ module decoder
             R_TEX:   rdata = tex_bus_rdata;
             R_FB:    rdata = fb_rdata;
             R_MMIO:  rdata = mmio_rdata;
+            R_SCR:   rdata = scr_rdata;
+            R_DC:    rdata = dc_rdata;
             default: rdata = '0;
         endcase
     end
