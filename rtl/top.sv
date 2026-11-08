@@ -246,7 +246,9 @@ module top #(
     logic         wr_valid, wr_ready, rd_valid, rd_ready;
     logic [127:0] wr_data, rd_data;
 
-    chunk_engine u_eng (
+    // RD_BUF: the pipelined builds take LOAD beats through a beat buffer so
+    // the rdata FIFO's pop does not wait on the core's world request decode.
+    chunk_engine #(.RD_BUF(PIPELINED)) u_eng (
         .clk(clk_core), .rst(rst_core),
         .reg_en(ddr_reg_en), .reg_we(ddr_reg_we), .reg_off(ddr_reg_off),
         .reg_wdata(ddr_reg_wdata), .reg_rdata(ddr_reg_rdata), .reg_stall(ddr_reg_stall),
