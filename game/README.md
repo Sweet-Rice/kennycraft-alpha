@@ -113,7 +113,10 @@ screen rectangle per entity. `kc_render_frame` tests each 4x2 block against thos
 rectangles and ray traces the boxes only where one overlaps; with no entities it runs
 the plain world kernel.
 
-Colors reuse the existing palette: villagers have light-dirt skin and dark-grass
+Model part counts are derived from their arrays, so rendering cannot read past a
+model into neighboring geometry. Both villager variants use the same five boxes.
+
+Colors reuse the existing palette: villagers have light-dirt skin and black
 eyes; trader robes are brick, contractor robes light wood. The chicken is white with
 a brick comb and wattle, a planks beak and light-wood legs. The zombie has light-grass skin, a dark-stone shirt
 and near-black pants/eyes.
