@@ -48,6 +48,17 @@ module mig_ddr3 (
     .app_wdf_data, .app_wdf_end, .app_wdf_wren, .app_wdf_mask, .app_wdf_rdy,
     .app_rd_data, .app_rd_data_end, .app_rd_data_valid
   );
+  // Bench only: +ddr_load=FILE fills the model at time 0 and +ddr_save=FILE
+  // writes it out when the run ends ($readmemh/$writememh of the sparse
+  // array), so DDR3 contents carry from one kcvl run to the next.
+  initial begin
+    string f;
+    if ($value$plusargs("ddr_load=%s", f)) $readmemh(f, u_model.mem);
+  end
+  final begin
+    string f;
+    if ($value$plusargs("ddr_save=%s", f)) $writememh(f, u_model.mem);
+  end
   assign {ddr3_addr, ddr3_ba, ddr3_cas_n, ddr3_ck_n, ddr3_ck_p,
           ddr3_cke, ddr3_ras_n, ddr3_reset_n, ddr3_we_n,
           ddr3_cs_n, ddr3_dm, ddr3_odt} = '0;

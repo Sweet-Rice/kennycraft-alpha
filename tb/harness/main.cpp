@@ -84,6 +84,8 @@ Options parse(int argc, char** argv) {
                          "Frames are the RTL back buffer and palette at each swap the RTL accepts;\n"
                          "live keys reach the UART at those swaps, like a --keys replay.\n";
             std::exit(0);
+        } else if (arg.rfind('+', 0) == 0) {
+            // +name=value plusargs are for the RTL ($value$plusargs), via commandArgs.
         } else throw std::runtime_error("unknown option: " + arg);
     }
 #if !KC_HAS_ERR
