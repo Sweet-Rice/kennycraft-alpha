@@ -30,7 +30,41 @@ Frames from the laptop build of the same C code the chip runs, at 160×120 and s
 | On the board | 59.4 new frames/s while turning: the 60 Hz display is the limit |
 | Timing at 100 MHz | WNS +0.100 ns, every clock met; 27,340 LUT, 111.5 BRAM36 |
 
-Try it without a board (Linux or WSL; the window needs pygame):
+How the pieces connect:
+
+```mermaid
+flowchart LR
+  subgraph laptop [Laptop]
+    agents["kc_agents<br/>Nemotron Nano villagers<br/>Nemotron Ultra builder"]
+    host["host/kchost.py<br/>companion page, orchestrator"]
+    bank["host/bank.py<br/>KCN ledger"]
+    window["scripts/kc.py, kc_live.py<br/>keys and mouse"]
+    agents --> host
+    host --> bank
+  end
+  sol[("Solana devnet")]
+  bank --> sol
+  subgraph chip ["Arty A7-100T"]
+    uart["UART 1 Mbaud<br/>CR6 link"]
+    core["8-lane SIMD core<br/>lane masks, divergence stack"]
+    vt["VTRACE ray unit<br/>QRCP 1/x"]
+    win["World window<br/>BRAM, 64x32x64"]
+    ddr[("DDR3<br/>chunk store")]
+    fb["Framebuffers x3"]
+    uart --> core
+    core <--> vt
+    vt --> win
+    core <--> win
+    win <--> ddr
+    core --> fb
+  end
+  host <--> uart
+  window --> uart
+  fb --> vga["VGA / HDMI capture"]
+```
+
+Try it without a board
+ (Linux or WSL; the window needs pygame):
 
 ```sh
 make -C game KC_DEMO=1          # the demo village, laptop build
