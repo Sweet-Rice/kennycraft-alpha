@@ -187,11 +187,12 @@ static int cmd_models(void) {
     check(entity_move(id,Q16_INT(wx+4)+Q16_HALF,Q16_INT(wz)+Q16_HALF) == 0,"entity_move accepts a live id");
     check(entity_move(id+1,0,0) == -1,"entity_move rejects an unused id");
     q16 wp[3]; int32_t wf;
+    world_set(wx+4,terrain_height(wx+4,wz)+4,wz,B_LEAVES);    // canopy over the target
     for (int32_t f = 0; f < 40; f++) entity_tick(Q16(0.1));
     entity_get(id,wp,&wf);
     check(wp[0] == Q16_INT(wx+4)+Q16_HALF && wp[2] == Q16_INT(wz)+Q16_HALF,"walking entity reaches its target");
     check(wf == 1,"walking entity faces its direction of travel (+x)");
-    check(wp[1] == Q16_INT(terrain_height(wx+4,wz)+1) || terrain_tree_at(wx+4,wz),"walking entity stands on the ground");
+    check(wp[1] == Q16_INT(terrain_height(wx+4,wz)+1),"walking entity stands on the ground, not the canopy");
     entity_clear();
 
     const char *names[ENT_KINDS] = {"m1_trader","m1_contractor","m1_pig","m1_zombie"};
