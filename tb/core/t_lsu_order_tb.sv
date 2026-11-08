@@ -6,7 +6,9 @@
 // framebuffer and no pending lane targets MMIO; otherwise one access per
 // lane, in lane order. It checks the access count, order, address and byte
 // enables, and the LSU cycles (MEM cycles, plus WB for loads, where the last
-// access's data lands): one per access, plus one for loads. The TB_SELECT
+// access's data lands): one per access, plus one for loads; on core_pipe
+// (PIPELINED), whose LSU registers the bus request and the read data, one
+// more, and for loads two more. The TB_SELECT
 // poll's loads are checked but not listed, so the list indices stay fixed.
 // It also counts UART_RX pops.
 module t_lsu_order_tb;
@@ -119,8 +121,12 @@ module t_lsu_order_tb;
                     end
                     // Stores retire in their last MEM cycle (not yet counted
                     // here), loads in WB: either way one more cycle.
+                    // core_pipe (PIPELINED) registers the bus request
+                    // (rtl/core_pipe/lsu_pipe.sv): one more MEM cycle, to
+                    // load the first group, before its first access; and
+                    // the read data: one more for loads.
                     cyc = mem_cycles + 1;
-                    if (n != 0 && cyc != k + int'(is_ld)) begin
+                    if (n != 0 && cyc != k + int'(is_ld) + int'(PIPELINED) * (1 + int'(is_ld))) begin
                         $display("  FAIL pc %08h took %0d LSU cycles for %0d accesses", `KC_CORE.retire_pc, cyc, k);
                         errors++;
                     end

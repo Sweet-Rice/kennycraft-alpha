@@ -63,8 +63,10 @@ static const ent_part zombie_parts[7] = {
     { 1,27, 4, 3,28, 5,C_BLACK},
 };
 static const struct { const ent_part *parts; uint8_t n, robe; } models[ENT_KINDS] = {
-    {villager_parts,7,C_BRICK}, {villager_parts,7,C_WOOD_L},
-    {chicken_parts,7,0}, {zombie_parts,7,0}
+    {villager_parts,sizeof villager_parts / sizeof villager_parts[0],C_BRICK},
+    {villager_parts,sizeof villager_parts / sizeof villager_parts[0],C_WOOD_L},
+    {chicken_parts,sizeof chicken_parts / sizeof chicken_parts[0],0},
+    {zombie_parts,sizeof zombie_parts / sizeof zombie_parts[0],0}
 };
 
 int32_t entity_add(int32_t kind, q16 x, q16 y, q16 z, int32_t facing) {

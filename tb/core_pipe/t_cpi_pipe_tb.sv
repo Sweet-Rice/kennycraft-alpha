@@ -5,20 +5,24 @@
 // Per class (bus = bus cycles of one access, as in the multi-cycle core:
 // 1 for dmem, MMIO and byte accesses, 4 for words through the byte bridge):
 //   ALU, LUI, AUIPC, not-taken branch, FENCE, MASKGET    CPI_ALU
-//   MUL, MULHU (independent: no mul-use stall)          CPI_MUL
-//   taken branch, JAL, JALR (flush 2)                   CPI_TAKEN
+//   MUL, MULHU (independent: no mul-use stall; MEM 2)  CPI_MUL
+//   taken branch, JAL, JALR (flush 4: registered redirect) CPI_TAKEN
 //   MASKALL (mask writers flush like taken branches)    CPI_MASK
 //   load                                                LD_BASE + bus
 //   store                                               ST_BASE + bus
 //   store to dmem or the framebuffer                    ST_BASE + bus - ST_FAST
 // (core_pipe ends a store's MEM in the cycle the bus accepts its last group
-// when that group goes to an always-ready port: dmem or the framebuffer.)
+// when all its bus lanes go to always-ready ports: dmem or the framebuffer.
+// Its LSU registers the bus request, rtl/core_pipe/lsu_pipe.sv, so a load or
+// store spends one MEM cycle loading the first group before the bus sees
+// it, and the read data, so a load's data reaches the lanes one cycle
+// later: LD_BASE = 3, ST_BASE = 2.)
 // Slots 8 and 10 run each copy once, so the BTB has no entry for it and the
 // taken branch or JAL flushes (CPI_TAKEN). Slots 25 and 26 time loops (LI,
 // N passes of ADDI (+ JAL) + BNEZ, the back edge taken N - 1 times): the
 // first pass's BNEZ and JAL are BTB misses (CPI_TAKEN), every later one is
 // predicted taken to the right target (CPI_PRED), and the last BNEZ is
-// predicted taken but falls through (CPI_TAKEN: flush 2).
+// predicted taken but falls through (CPI_TAKEN: flush 4).
 // The defaults are the pipelined core's; the multi-cycle core passes with
 // -GCPI_ALU=3 -GCPI_MUL=4 -GCPI_TAKEN=3 -GCPI_PRED=3 -GCPI_MASK=3
 // -GLD_BASE=3 -GST_BASE=2 -GST_FAST=0.
@@ -26,12 +30,12 @@ module t_cpi_pipe_tb;
     parameter string IMEM_HEX = "";
     parameter string DMEM_HEX = "";
     parameter int    CPI_ALU   = 1;
-    parameter int    CPI_MUL   = 1;
-    parameter int    CPI_TAKEN = 3;
+    parameter int    CPI_MUL   = 2;
+    parameter int    CPI_TAKEN = 5;
     parameter int    CPI_PRED  = 1;   // predicted taken branch or JAL (BTB hit)
-    parameter int    CPI_MASK  = 3;
-    parameter int    LD_BASE   = 1;   // load: M cycles beyond the bus cycles
-    parameter int    ST_BASE   = 1;   // store: same
+    parameter int    CPI_MASK  = 5;
+    parameter int    LD_BASE   = 3;   // load: M cycles beyond the bus cycles
+    parameter int    ST_BASE   = 2;   // store: same
     parameter int    ST_FAST   = 1;   // store to dmem / fb: cycles fewer
     `include "soc_harness.svh"
 

@@ -40,6 +40,8 @@ static uint64_t now_ns(void) {
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
+static void mig_calibrate(void);
+
 void host_init(int realtime_clock) {
     realtime = realtime_clock;
     storage_ok = getenv("KC_NO_STORAGE") == NULL;
@@ -47,6 +49,7 @@ void host_init(int realtime_clock) {
     ddr_fill = !f || !strcmp(f, "random") ? 1 : !strcmp(f, "zero") ? 0 : !strcmp(f, "bedrock") ? 2 :
                !strcmp(f, "ones") ? 3 : 1;
     t0_ns = now_ns();
+    mig_calibrate();
 }
 
 // ---- world window ---------------------------------------------------------------------
@@ -186,13 +189,26 @@ void host_uart_out(FILE *f, int quiet) { uart_out = f; uart_quiet = quiet; }
 void host_tx_clear(void) { host_tx_n = 0; }
 void host_advance_cycles(uint32_t c) { cycles += c; }
 
+// MIG calibration (every configuration and every reset) writes its training pattern over
+// DDR3 bytes 0..63: chunk 0's first 128 nibbles (y = 0, z = 0..7). These are the 16-bit
+// words read back on the board, one nibble value per word.
+static void mig_calibrate(void) {
+    static const uint8_t word[32] = { 0xF, 0x0, 0xA, 0x5, 0x5, 0xA, 0x9, 0x6,
+        0xB, 0x1, 0xE, 0x4, 0x4, 0xE, 0xD, 0x8, 0xB, 0x1, 0xE, 0x4, 0x4, 0xE, 0xD, 0x8,
+        0xB, 0x1, 0xE, 0x4, 0x4, 0xE, 0xD, 0x8 };
+    uint8_t *c = ddr_chunk(0);
+    for (int i = 0; i < 128; i++) c[i] = word[i >> 2];
+}
+
 // Reset button: chip registers go back to their reset values and CYCLES restarts. BRAM and
-// DDR3 keep their contents. cycles0 stands in for the boot-to-boot jitter of the first DDR3
-// loads (they cross into the DDR3 controller's clock domain), which the boot nonce samples.
+// DDR3 keep their contents, except what MIG calibration overwrites. cycles0 stands in for
+// the boot-to-boot jitter of the first DDR3 loads (they cross into the DDR3 controller's
+// clock domain), which the boot nonce samples.
 void host_reset(uint32_t cycles0) {
     win_origin = 0; slot_valid = 0; chunk_done = 0; fb_mode = 0; leds = 0;
     rx_head = rx_tail = 0;
     cycles = cycles0;
+    mig_calibrate();
 }
 
 uint32_t host_slot_valid(void) { return slot_valid; }

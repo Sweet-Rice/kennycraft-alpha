@@ -8,7 +8,7 @@
 #   tb-qrcp-unit     rtl/core/qrcp.sv alone (qrcp_unit_tb) against golden
 #                    vectors from the same program: the edge classes and
 #                    2 x QRCP_RANDOM random inputs (QRCP_SEED)
-#   tb-qrcp-pipe-eq  rtl/core_pipe/qrcp_pipe.sv (core_pipe's two-step unit)
+#   tb-qrcp-pipe-eq  rtl/core_pipe/qrcp_pipe.sv (core_pipe's pipelined unit)
 #                    against rtl/core/qrcp.sv (qrcp_pipe_eq_tb): the edge
 #                    classes and QRCP_PIPE_RANDOM random inputs (QRCP_SEED),
 #                    identical y required

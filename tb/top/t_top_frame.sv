@@ -223,9 +223,11 @@ module t_top_frame #(
     longint      prof_cyc [PROF_WORDS], prof_ret [PROF_WORDS], prof_lanes [PROF_WORDS],
                  prof_mem [PROF_WORDS];
     logic [3:0]  prof_region [PROF_WORDS];
-    bit          wq = 0;
-    logic [31:0] wq_cyc, wq_pc, wq_addr;
-    int          wq_lane;
+    // World reads accepted on the bus whose data has not reached the lanes
+    // yet (ld_cap): the cycle after the access on the multi-cycle core, two
+    // cycles after on core_pipe, whose LSU registers the read data
+    logic [31:0] wq_cyc [$], wq_pc [$], wq_addr [$];
+    int          wq_lane [$];
     initial begin
         string fn;
         void'($value$plusargs("prof_swap=%d", prof_swap));
@@ -262,19 +264,23 @@ module t_top_frame #(
             $display("t_top_frame: profile of FB_SWAP %0d to %0d written", prof_swap, prof_swap + 1);
         end
         if (wlog_fd != 0) begin
-            if (wq) $fwrite(wlog_fd, "%0d %08h %0d %05h %0d\n", wq_cyc, wq_pc, wq_lane, wq_addr[16:0],
-                            dut.u_soc.g_core.u_core.ld_value[wq_lane]);
-            wq = 0;
+            if (wq_lane.size() != 0 && dut.u_soc.g_core.u_core.ld_cap[wq_lane[0]]) begin
+                $fwrite(wlog_fd, "%0d %08h %0d %05h %0d\n", wq_cyc[0], wq_pc[0], wq_lane[0],
+                        wq_addr[0][16:0], dut.u_soc.g_core.u_core.ld_value[wq_lane[0]]);
+                void'(wq_cyc.pop_front());
+                void'(wq_pc.pop_front());
+                void'(wq_lane.pop_front());
+                void'(wq_addr.pop_front());
+            end
             if (swaps > wlog_swap) begin
                 $fclose(wlog_fd);
                 wlog_fd = 0;
             end else if (swaps == wlog_swap && dut.u_soc.g_core.u_core.bus_req && dut.u_soc.g_core.u_core.bus_ready &&
                          !dut.u_soc.g_core.u_core.bus_we && dut.u_soc.g_core.u_core.bus_addr[31:28] == 4'h2) begin
-                wq      = 1;
-                wq_cyc  = dut.u_soc.u_mmio.cycles;
-                wq_pc   = dut.u_soc.g_core.u_core.pc;
-                wq_lane = int'(dut.u_soc.g_core.u_core.u_lsu.cur);
-                wq_addr = dut.u_soc.g_core.u_core.bus_addr;
+                wq_cyc.push_back(dut.u_soc.u_mmio.cycles);
+                wq_pc.push_back(dut.u_soc.g_core.u_core.pc);
+                wq_lane.push_back(int'(dut.u_soc.g_core.u_core.u_lsu.cur));
+                wq_addr.push_back(dut.u_soc.g_core.u_core.bus_addr);
             end
         end
     end

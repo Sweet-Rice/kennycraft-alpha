@@ -1,8 +1,10 @@
 // Clock generation (Tai page, CPU Core, Clocking).
 //   clk      100 MHz board oscillator (pin E3)
-//   clk_core  50 MHz: core, memories (port A), UART, VTRACE
+//   clk_core  1000 / CORE_DIV MHz (50 by default, 100 with CORE_DIV = 10):
+//             core, memories (port A), UART, VTRACE
 //   clk_pix   25 MHz: VGA timing, framebuffer port B, palette read
-// One MMCME2_BASE: VCO = 100 MHz x 10 = 1000 MHz, /20 -> 50 MHz, /40 -> 25 MHz.
+// One MMCME2_BASE: VCO = 100 MHz x 10 = 1000 MHz, /CORE_DIV -> core,
+// /40 -> 25 MHz.
 //
 // rst_core and rst_pix are active high. They assert asynchronously while the
 // MMCM is unlocked or rst_n (the board's ck_rst button, active low) is low,
@@ -10,9 +12,12 @@
 // clock domain. Logic in each domain uses them as synchronous resets.
 //
 // Under Verilator the MMCM is replaced by a behavioural divider with the same
-// ratios (clk_core = clk / 2, clk_pix = clk / 4) and a locked output that
-// rises after 16 input clocks, so `make vl` can run the real top.
-module clk_gen (
+// ratios (clk_core = clk / 2, or clk itself with CORE_DIV = 10; clk_pix =
+// clk / 4) and a locked output that rises after 16 input clocks, so `make vl`
+// can run the real top.
+module clk_gen #(
+    parameter int CORE_DIV = 20   // MMCM CLKOUT0 divider: 20 -> 50 MHz, 10 -> 100 MHz
+) (
     input  logic clk,
     input  logic rst_n,
     output logic clk_core,
@@ -30,7 +35,7 @@ module clk_gen (
         if (!lock_cnt[4]) lock_cnt <= lock_cnt + 5'd1;
     end
 
-    assign clk_core = div[0];
+    assign clk_core = (CORE_DIV == 10) ? clk : div[0];
     assign clk_pix  = div[1];
     assign locked   = lock_cnt[4];
 `else
@@ -42,7 +47,7 @@ module clk_gen (
         .DIVCLK_DIVIDE    (1),
         .CLKFBOUT_MULT_F  (10.0),
         .CLKFBOUT_PHASE   (0.0),
-        .CLKOUT0_DIVIDE_F (20.0),
+        .CLKOUT0_DIVIDE_F (real'(CORE_DIV)),
         .CLKOUT0_PHASE    (0.0),
         .CLKOUT0_DUTY_CYCLE(0.5),
         .CLKOUT1_DIVIDE   (40),

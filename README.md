@@ -160,9 +160,9 @@ Vivado rebuild.
 
 ## Pipelined core (P8)
 
-`rtl/core_pipe/` is a 5-stage version of the core (IF, ID, EX, MEM, WB) with
-the same ports and parameters as `rtl/core/core.sv`, built from its leaf
-modules. `PIPELINED = 1` (the last parameter of `rtl/top.sv` and
+`rtl/core_pipe/` is a pipelined version of the core (IF, F2, ID, EX, MEM,
+WB) with the same ports and parameters as `rtl/core/core.sv`, built from its
+leaf modules. `PIPELINED = 1` (a parameter of `rtl/top.sv` and
 `rtl/soc/kc_soc.sv`) selects it, and the core sits at `g_core.u_core`
 whichever core is built. It retires the same instructions, masks and
 register writes as the multi-cycle core. Only CPI changes:
@@ -171,18 +171,23 @@ register writes as the multi-cycle core. Only CPI changes:
 | --- | --- |
 | ALU, LUI, AUIPC, FENCE, MASKGET, BALLOT, LANEID, VSET, VGET, not-taken branch | 1 |
 | MUL family | 2 |
-| Taken branch, JAL, JALR, LMASK, MASKSET, MASKALL, DIF, DELSE, DENDIF (flush 2) | 3 |
-| Load or store with an active lane | G + 1, G bus accesses: one per group of active lanes in the same dmem or framebuffer word, else one per lane (+3 per world LW/SW and texture LW) |
-| QRCP | 5 after the previous retirement (7 after a flush) |
-| Load-use | +1 bubble |
+| Taken branch or JAL that the BTB predicts, right target | 1 |
+| Other taken branch or JAL, JALR, branch predicted taken but not taken, LMASK, MASKSET, MASKALL, DIF, DELSE, DENDIF (flush 4) | 5 |
+| Load, N bus accesses (groups of coalesced lanes) | N + 3 (+3 per lane for world LW and texture LW; +2 per framebuffer read access on the top) |
+| Store, N bus accesses, every bus lane to dmem or the framebuffer | N + 1 |
+| Store, N bus accesses, otherwise | N + 2 (+3 per lane for world SW) |
+| Load or store lanes in the dmem window (0x6000 to 0x7FFF) | 1 when every lane is in its own stack's bank, else one more than the words the busiest bank serves; in parallel with the bus lanes |
+| QRCP | 8 after the previous retirement (12 after a flush) |
+| Load-use, mul-use | +1 bubble |
 | VTRACE rd (rd != x0) | start until done, plus 1 |
 | VTRACE x0 | 1; the walk runs on |
 
-Branches, JALR and the uniform check (ERR.DIVERGE) resolve in EX. The mask
-and divergence stack are written in EX, and every mask writer flushes behind
-it. ERR halts report the faulting instruction's own PC. While a VTRACE x0
-walk is in flight, the next custom-1 instruction waits in EX, and world
-accesses and MMIO stores wait in MEM.
+Branches and the branch uniform check (ERR.DIVERGE) resolve in EX; a JALR's
+target uniformity is checked in MEM from registers. The redirect is
+registered (flush 4). The mask and divergence stack are written in EX, and
+every mask writer flushes behind it. ERR halts report the faulting
+instruction's own PC. While a VTRACE x0 walk is in flight, the next custom-1
+instruction waits in EX, and world accesses and MMIO stores wait in MEM.
 
 - **BTB** (`rtl/core_pipe/btb.sv`): 64 entries of distributed RAM, looked up
   from the fetch PC, with 2-bit counters. A hit predicted taken fetches the
@@ -195,9 +200,30 @@ accesses and MMIO stores wait in MEM.
   and values as the dmem BRAM, which still holds the rest. It is initialized
   from `kc_dmem.hex` at build time; `fpga/patch_bit.sh` refuses images that
   change that range.
-- **MUL** writes its product straight into WB and is forwarded from WB only
-  (mul-use bubble); **QRCP** (`rtl/core_pipe/qrcp_pipe.sv`) does its two
-  Newton steps in two MEM cycles, bit-exact with `rtl/core/qrcp.sv`.
+- **LSU** (`rtl/core_pipe/lsu_pipe.sv`): `rtl/core/lsu.sv` with a registered
+  bus request and registered read data. **MUL** (`rtl/core_pipe/mul_pipe.sv`)
+  is two MEM cycles into WB, forwarded from WB only (mul-use bubble);
+  **QRCP** (`rtl/core_pipe/qrcp_pipe.sv`) is seven register stages,
+  bit-exact with `rtl/core/qrcp.sv`.
+
+### 100 MHz (`top_s2p100`)
+
+`CORE_MHZ` (a parameter of `rtl/top.sv`, default 50) sets the core clock; the
+`top_s2p100` Vivado target builds the pipelined Stage 2 design at 100 MHz
+with timing-driven directives (`kc_timing_opt` in `fpga/build.tcl`). On
+pipelined tops the framebuffer reads take 3 cycles and the chunk engine
+buffers its DDR3 beats. MMIO CYCLES counts 20 ns ticks at either clock, so
+software timing is unchanged.
+
+`top_s2p100`, build ff7f70: core clock WNS +0.100 ns at 10 ns, every clock
+met; 27,340 LUT, 14,971 FF, 111.5 BRAM36, 48 DSP. Frames in Verilator, with
+the shallower pipeline of the extreme-hardware-optimizations branch at
+50 MHz for comparison:
+
+| Frame | Before: cycles at 50 MHz | Now: cycles at 100 MHz |
+| --- | --- | --- |
+| 160×120 | 209,190 = 239.0 fps | 244,535 = 408.9 fps |
+| 320×240 | 804,185 = 62.2 fps | 938,057 = 106.6 fps |
 
 ```sh
 make tb-core-pipe-<t>          # any tb/core test on the pipelined core

@@ -39,6 +39,20 @@
 // world_mem (WORLD_LATENCY = 2) toggles its port phase every busy cycle from
 // the first: lanes 4n, 4n + 1 are read in cnt = 0, 4n + 2, 4n + 3 in cnt = 1.
 //
+// Timing (WORLD_LATENCY > 1, same schedule and results). A lane's tMax only
+// changes on a step edge (cnt = WORLD_LATENCY - 1 or the start edge), a check
+// edge (revert) or a VSET, so its axis select (sel_x, sel_y) is a register
+// loaded every cycle with the compares of the tMax the next cycle holds: the
+// VSET data in place of the field it writes, and on a revert the reverted
+// step's axis (r_axis, the select of the state the revert restores). It is
+// stale only in the cycle after a step edge, and the next edge is never a
+// step edge. The step is then select -> mux -> 33-bit add -> saturate ->
+// tMax, without the three 32-bit compares. The check (world data -> fin ->
+// revert) reaches only the lane registers' enables: their data selects use
+// rv_sel = run && cnt = 0, the only cycle a lane reverts and never a step
+// edge's, so cfg_we must stay low while busy (both cores hold VSET until
+// done).
+//
 // The start cell is never tested. start with max_steps = 0 or an empty
 // lane_mask raises done the next cycle and changes nothing. Lanes outside
 // lane_mask keep their state and results. On a miss (left the world or step
@@ -151,8 +165,7 @@ module vtrace #(parameter int LANES = 8, parameter int WORLD_LATENCY = 2) (
     logic               p_oob;             // ... and its cell outside the world
 
     // ---- step: pick the axis with the smallest tMax ----
-    wire                sel_x = (tmx < tmy) && (tmx < tmz);
-    wire                sel_y = !sel_x && (tmy < tmz);
+    logic               sel_x, sel_y;
     wire                sel_z = !sel_x && !sel_y;
     wire signed [31:0]  tm    = sel_x ? tmx : sel_y ? tmy : tmz;
     wire signed [31:0]  td    = sel_x ? tdx : sel_y ? tdy : tdz;
@@ -165,49 +178,76 @@ module vtrace #(parameter int LANES = 8, parameter int WORLD_LATENCY = 2) (
     // undo the newest step: move back along r_axis
     wire signed [6:0]   undo  = r_sign ? 7'sd1 : -7'sd1;
 
+    wire                cfg_l = cfg_we && lane_mask[l];
+
+    if (WORLD_LATENCY > 1) begin : g_sel_q
+      // the tMax of the next cycle, unless a step or revert writes it
+      wire signed [31:0] nx = (cfg_l && cfg_field == 3'd1) ? $signed(cfg_data[l]) : tmx;
+      wire signed [31:0] ny = (cfg_l && cfg_field == 3'd2) ? $signed(cfg_data[l]) : tmy;
+      wire signed [31:0] nz = (cfg_l && cfg_field == 3'd3) ? $signed(cfg_data[l]) : tmz;
+      wire               nsx = (nx < ny) && (nx < nz);
+
+      always_ff @(posedge clk) begin
+        if (revert[l]) begin
+          sel_x <= (r_axis == 2'd0);
+          sel_y <= (r_axis == 2'd1);
+        end else begin
+          sel_x <= nsx;
+          sel_y <= !nsx && (ny < nz);
+        end
+      end
+    end else begin : g_sel_c
+      assign sel_x = (tmx < tmy) && (tmx < tmz);
+      assign sel_y = !sel_x && (tmy < tmz);
+    end
+
     // ---- check ----
     wire oob_now = cx[6] | cy[6] | cy[5] | cz[6];
     wire oob     = spec ? p_oob : oob_now;
     wire solid   = (world_data[l] != 4'd0);
-    assign fin[l] = do_check && live[l] && (oob || solid);
+    // the register-only terms, so world_data is the last input of fin
+    wire chk     = do_check && live[l];
+    wire k_oob   = chk && oob;
+    wire k_sol   = chk && !oob;
+    assign fin[l] = k_oob || (k_sol && solid);
+
+    // Write enables and data, revert over step over VSET. rv_sel stands for
+    // revert in the data (see Timing), so fin feeds only the enables.
+    wire rv_sel = (WORLD_LATENCY > 1) ? (run && (cnt == '0)) : revert[l];
+    wire st_x   = stepping[l] && sel_x;
+    wire st_y   = stepping[l] && sel_y;
+    wire st_z   = stepping[l] && sel_z;
+    wire rv_x   = revert[l] && (r_axis == 2'd0);
+    wire rv_y   = revert[l] && (r_axis == 2'd1);
+    wire rv_z   = revert[l] && r_axis[1];
+    wire cfg_c  = cfg_l && (cfg_field == 3'd0);
 
     always_ff @(posedge clk) begin
-      if (cfg_we && lane_mask[l]) begin
+      if (cfg_l) begin
         unique case (cfg_field)
-          3'd0: begin
-            cx <= {1'b0, cfg_data[l][5:0]};
-            cy <= {2'b0, cfg_data[l][10:6]};
-            cz <= {1'b0, cfg_data[l][16:11]};
-          end
-          3'd1: tmx <= cfg_data[l];
-          3'd2: tmy <= cfg_data[l];
-          3'd3: tmz <= cfg_data[l];
-          3'd4: tdx <= cfg_data[l];
-          3'd5: tdy <= cfg_data[l];
-          3'd6: tdz <= cfg_data[l];
-          3'd7: neg <= cfg_data[l][2:0];
+          3'd4:    tdx <= cfg_data[l];
+          3'd5:    tdy <= cfg_data[l];
+          3'd6:    tdz <= cfg_data[l];
+          3'd7:    neg <= cfg_data[l][2:0];
+          default: ;
         endcase
       end
+      if (cfg_c || st_x || rv_x) cx <= rv_sel ? cx + undo : st_x ? cx + delta : {1'b0, cfg_data[l][5:0]};
+      if (cfg_c || st_y || rv_y) cy <= rv_sel ? cy + undo : st_y ? cy + delta : {2'b0, cfg_data[l][10:6]};
+      if (cfg_c || st_z || rv_z) cz <= rv_sel ? cz + undo : st_z ? cz + delta : {1'b0, cfg_data[l][16:11]};
+      if ((cfg_l && cfg_field == 3'd1) || st_x || rv_x) tmx <= rv_sel ? r_t : st_x ? tm_n : $signed(cfg_data[l]);
+      if ((cfg_l && cfg_field == 3'd2) || st_y || rv_y) tmy <= rv_sel ? r_t : st_y ? tm_n : $signed(cfg_data[l]);
+      if ((cfg_l && cfg_field == 3'd3) || st_z || rv_z) tmz <= rv_sel ? r_t : st_z ? tm_n : $signed(cfg_data[l]);
+      if (stepping[l] || revert[l]) begin
+        r_axis  <= rv_sel ? p_axis      : axis;
+        r_sign  <= rv_sel ? neg[p_axis] : sgn;
+        r_t     <= rv_sel ? p_t         : tm;
+        r_steps <= rv_sel ? chk_num     : step_num;
+      end
       if (stepping[l]) begin
-        if (sel_x) begin cx <= cx + delta; tmx <= tm_n; end
-        if (sel_y) begin cy <= cy + delta; tmy <= tm_n; end
-        if (sel_z) begin cz <= cz + delta; tmz <= tm_n; end
-        r_axis  <= axis;
-        r_sign  <= sgn;
-        r_t     <= tm;
-        r_steps <= step_num;
         p_axis  <= r_axis;
         p_t     <= r_t;
         p_oob   <= oob_now;
-      end
-      if (revert[l]) begin
-        if (r_axis == 2'd0)      begin cx <= cx + undo; tmx <= r_t; end
-        else if (r_axis == 2'd1) begin cy <= cy + undo; tmy <= r_t; end
-        else                     begin cz <= cz + undo; tmz <= r_t; end
-        r_axis  <= p_axis;
-        r_sign  <= neg[p_axis];
-        r_t     <= p_t;
-        r_steps <= chk_num;
       end
       if (do_check && live[l]) begin
         r_hit  <= !oob && solid;
