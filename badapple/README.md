@@ -129,3 +129,32 @@ python3 badapple/sim.py /tmp/ba/img /tmp/ba/run 60
 - Not run in Verilator: frames after 60, including the first reload of a ring
   slot (around frame 1,098).
 - `updatemem` patched all 16 passes and the player into the base bitstream.
+
+## On the board
+
+Run on Nov 8 with `flash.sh`: 16 passes and the player, all `done=1`.
+
+- **DDR3 kept its contents through all 17 reconfigurations.** The player's
+  check screen was all green, and its UART debug line read
+  `ba-play chunks 122 damaged 0`.
+- **Decode and draw:** 736K cycles per frame on average, 756K at most (UART
+  debug, frames 1–512). That's 7.5 ms of the 33.6 ms two-vsync budget at
+  100 MHz.
+- **Capture card** (60 fps, 254.8 s), each captured frame scaled to
+  160 × 120 and matched to the reference:
+  - All 6,572 frames appeared in order, never stepping backwards. 6,571
+    turned up in the first playthrough; frame 44 only matched in the second.
+  - Matched frames differ from the reference by 0.003% of pixels on
+    average.
+  - Frames 100 to 6,000 took 198.32 s. Two vsyncs of 640 × 480 VGA at
+    59.52 Hz predict 198.24 s; a true 30 fps would be 196.67 s. So it plays
+    at 29.76 fps, and then loops.
+
+`media/` holds that recording at 640 × 480, 60 fps:
+
+- `bad_apple_board.mp4`: the capture as recorded, no audio. It starts black,
+  like the original video.
+- `bad_apple_board_audio.mp4`: the same capture with the original audio
+  added. The audio is slowed to 29.76 fps (ffmpeg `atempo=0.99168`) and
+  delayed 12.42 s, so frame 100 lands where the capture shows it. The audio
+  isn't from the board, which has no audio output.
