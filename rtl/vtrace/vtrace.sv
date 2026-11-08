@@ -47,7 +47,11 @@
 // step's axis (r_axis, the select of the state the revert restores). It is
 // stale only in the cycle after a step edge, and the next edge is never a
 // step edge. The step is then select -> mux -> 33-bit add -> saturate ->
-// tMax, without the three 32-bit compares.
+// tMax, without the three 32-bit compares. The check (world data -> fin ->
+// revert) reaches only the lane registers' enables: their data selects use
+// rv_sel = run && cnt = 0, the only cycle a lane reverts and never a step
+// edge's, so cfg_we must stay low while busy (both cores hold VSET until
+// done).
 //
 // The start cell is never tested. start with max_steps = 0 or an empty
 // lane_mask raises done the next cycle and changes nothing. Lanes outside
@@ -201,10 +205,15 @@ module vtrace #(parameter int LANES = 8, parameter int WORLD_LATENCY = 2) (
     wire oob_now = cx[6] | cy[6] | cy[5] | cz[6];
     wire oob     = spec ? p_oob : oob_now;
     wire solid   = (world_data[l] != 4'd0);
-    assign fin[l] = do_check && live[l] && (oob || solid);
+    // the register-only terms, so world_data is the last input of fin
+    wire chk     = do_check && live[l];
+    wire k_oob   = chk && oob;
+    wire k_sol   = chk && !oob;
+    assign fin[l] = k_oob || (k_sol && solid);
 
-    // Write enables and data, revert over step over VSET
-    wire rv_sel = revert[l];
+    // Write enables and data, revert over step over VSET. rv_sel stands for
+    // revert in the data (see Timing), so fin feeds only the enables.
+    wire rv_sel = (WORLD_LATENCY > 1) ? (run && (cnt == '0)) : revert[l];
     wire st_x   = stepping[l] && sel_x;
     wire st_y   = stepping[l] && sel_y;
     wire st_z   = stepping[l] && sel_z;
