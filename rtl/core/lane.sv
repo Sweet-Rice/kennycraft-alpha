@@ -11,8 +11,8 @@
 //
 // res holds the rd value (ALU, LUI immediate, link, product, lane control,
 // ray unit or QRCP result) or, for loads and stores, this lane's address.
-// Load data arrives lane-serially from the LSU: ld_cap marks the cycle in
-// which ld_value is this lane's (already extended) word. It is kept in a holding
+// Load data arrives from the LSU one access at a time: ld_cap marks the cycle
+// in which ld_value is this lane's (already extended) word. It is kept in a holding
 // register, and in WB a lane takes ld_value directly when its data arrives in
 // that cycle (the last lane of the walk) and the holding register otherwise,
 // so every lane writes back together.

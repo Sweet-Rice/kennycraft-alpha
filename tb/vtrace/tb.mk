@@ -2,7 +2,7 @@
 # `make check`.
 #
 #   tb-vtrace-l2   vtrace_tb at WORLD_LATENCY = 2 (two world copies, D17), with
-#                  the world_mem two-phase read model of tb/ddr
+#                  a model of rtl/mem/world_mem.sv's two-phase reads
 #   tb-vtrace-l1   vtrace_tb at WORLD_LATENCY = 1 (registered read)
 #   lint-vtrace    verilator -Wall over rtl/vtrace at both latencies and LANES = 1
 #

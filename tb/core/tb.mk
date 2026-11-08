@@ -9,7 +9,8 @@
 #                           RISC-V GCC, loaded as kc_imem/kc_dmem images
 #   tb-core-t_laneid        Stage 1 rung 3, LANEID / MASKALL / scalar lane
 #   tb-core-t_lsu_order, tb-core-t_mmio_lanes
-#                           Stage 1 rung 4, lane-serial LSU and MMIO
+#                           Stage 1 rung 4, LSU (coalescing, lane order) and
+#                           MMIO
 #   tb-core-t_mask, -t_ballot, -t_maskgetset, -t_mask_zero
 #                           Stage 1 rung 5, mask control and mask loops
 #   tb-core-t_branch_uniform, -t_jalr_uniform
@@ -34,6 +35,10 @@
 #                           stack, ray unit, HAS_QRCP = 1): per-lane results
 #                           against fixed.c qrcp(), inactive lanes, rd = x0,
 #                           rd = rs1, fixed latency
+#   tb-core-t_vtrace_async  asynchronous VTRACE (VTRACE x0) and VGET field 3 on
+#                           the Stage 2 core with QRCP: overlap with ALU work,
+#                           the custom-1, world and MMIO-store interlocks,
+#                           cap 0, M = 0, back-to-back walks, a halt mid-walk
 #   tracediff-core-<tb>     Stage 1 rung 2: the same test at LANES = 8 with
 #                           only lane 0 able to activate (LANE0_ONLY), whose
 #                           retirement trace must equal the LANES = 1 trace
@@ -159,6 +164,17 @@ tb-core-t_qrcp-l8: $(CORE_QRCP_HEX)
 	@mkdir -p $(OBJ)
 	$(call CORE_VL,t_qrcp_tb,_l8,$(CORE_S2Q))
 	$(call core_bin,t_qrcp_tb,_l8) $(PLUSARGS)
+
+# Asynchronous VTRACE on the Stage 2 core with QRCP
+CORE_HEX_t_vtrace_async_tb := -GIMEM_HEX='"$(CURDIR)/$(CORE_SW_OBJ)/t_vtrace_async_imem.hex"' \
+                              -GDMEM_HEX='"$(CURDIR)/$(CORE_SW_OBJ)/t_vtrace_async_dmem.hex"'
+CORE_VTA_HEX := $(CORE_SW_OBJ)/t_vtrace_async_imem.hex $(CORE_SW_OBJ)/t_vtrace_async_dmem.hex
+TB_TARGETS   += tb-core-t_vtrace_async
+
+tb-core-t_vtrace_async: $(CORE_VTA_HEX)
+	@mkdir -p $(OBJ)
+	$(call CORE_VL,t_vtrace_async_tb,,$(CORE_S2Q))
+	$(call core_bin,t_vtrace_async_tb) $(PLUSARGS)
 
 # Rung 1: the Stage 0 core (git ref CORE_BASE_REF) against the current core,
 # both at LANES = 1, same harness, same test images

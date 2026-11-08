@@ -46,9 +46,10 @@ module kc_soc
     // Display core-side port (P1)
     output logic        fb_we,
     output logic        fb_re,
-    output logic [16:0] fb_addr,
-    output logic [7:0]  fb_wdata,
-    input  logic [7:0]  fb_rdata,
+    output logic [3:0]  fb_be,
+    output logic [14:0] fb_addr,
+    output logic [31:0] fb_wdata,
+    input  logic [31:0] fb_rdata,
     output logic        pal_we,
     output logic [7:0]  pal_addr,
     output logic [11:0] pal_wdata,
@@ -162,7 +163,7 @@ module kc_soc
         .world_req(w_req), .world_we(w_we), .world_addr(w_addr), .world_wdata(w_wdata),
         .world_ready(w_ready), .world_rdata(w_rdata),
         .tex_req, .tex_we, .tex_addr, .tex_wdata, .tex_ready, .tex_rdata,
-        .fb_we, .fb_re, .fb_addr, .fb_wdata, .fb_rdata,
+        .fb_we, .fb_re, .fb_be, .fb_addr, .fb_wdata, .fb_rdata,
         .mmio_req, .mmio_we, .mmio_addr, .mmio_wdata, .mmio_ready, .mmio_rdata,
         .pal_we, .pal_addr, .pal_wdata
     );

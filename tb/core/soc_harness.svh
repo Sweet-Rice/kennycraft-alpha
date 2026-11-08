@@ -1,7 +1,7 @@
 // Shared harness for the tb/core program tests, `included inside a testbench
 // module that declares string parameters IMEM_HEX and DMEM_HEX (set with -G
 // by tb/core/tb.mk). Provides a 50 MHz clock, kc_soc, behavioral models of
-// the display core-side port (framebuffer bytes, palette, swap) and of the
+// the display core-side port (framebuffer words with byte enables, palette, swap) and of the
 // chunk-engine register port (with a programmable CHUNK_CMD stall), a 1 Mbaud
 // UART receiver on uart_tx and sender on uart_rx, a retirement trace
 // (+trace), and memory and register peek helpers. The world port is unused
@@ -47,8 +47,9 @@ logic        err_led;
 
 // Display port
 logic        fb_we, fb_re, pal_we, swap_req, fb_mode;
-logic [16:0] fb_addr;
-logic [7:0]  fb_wdata, fb_rdata = 8'h00;
+logic [3:0]  fb_be;
+logic [14:0] fb_addr;
+logic [31:0] fb_wdata, fb_rdata = 32'h0;
 logic [7:0]  pal_addr;
 logic [11:0] pal_wdata;
 logic        swap_pending = 1'b0;
@@ -110,7 +111,7 @@ kc_soc #(
     .clk, .rst,
     .uart_tx, .uart_rx,
     .leds, .err_led,
-    .fb_we, .fb_re, .fb_addr, .fb_wdata, .fb_rdata,
+    .fb_we, .fb_re, .fb_be, .fb_addr, .fb_wdata, .fb_rdata,
     .pal_we, .pal_addr, .pal_wdata,
     .swap_req, .swap_pending, .vblank, .frame_count, .fb_mode,
     .ddr_reg_en, .ddr_reg_we, .ddr_reg_off, .ddr_reg_wdata, .ddr_reg_rdata, .ddr_reg_stall,
@@ -125,7 +126,8 @@ int unsigned cycle = 0;
 always @(posedge clk) cycle <= cycle + 1;
 
 // ---------------------------------------------------------------------
-// Display model: back framebuffer (1-cycle read latency, writes >= 76800
+// Display model: back framebuffer as bytes (word port, 1-cycle read latency,
+// fb_be[k] writes byte 4 fb_addr + k, writes at word 19200 and above
 // dropped), palette, and swap_req counting. Tests drive swap_pending,
 // vblank and frame_count themselves.
 // ---------------------------------------------------------------------
@@ -134,8 +136,11 @@ logic [11:0] pal_mem [256];
 int          swap_req_count = 0;
 
 always @(posedge clk) begin
-    if (fb_we && fb_addr < 17'd76800) fb_mem[fb_addr] <= fb_wdata;
-    if (fb_re) fb_rdata <= (fb_addr < 17'd76800) ? fb_mem[fb_addr] : 8'h00;
+    for (int k = 0; k < 4; k++)
+        if (fb_we && fb_be[k] && fb_addr < 15'd19200) fb_mem[{fb_addr, 2'(k)}] <= fb_wdata[k*8 +: 8];
+    if (fb_re) fb_rdata <= (fb_addr < 15'd19200)
+        ? {fb_mem[{fb_addr, 2'd3}], fb_mem[{fb_addr, 2'd2}], fb_mem[{fb_addr, 2'd1}], fb_mem[{fb_addr, 2'd0}]}
+        : 32'h0;
     if (pal_we) pal_mem[pal_addr] <= pal_wdata;
     if (swap_req) swap_req_count <= swap_req_count + 1;
 end

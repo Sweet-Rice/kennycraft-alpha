@@ -95,8 +95,10 @@ module top #(
     // SoC
     // ------------------------------------------------------------------
     logic        fb_we, fb_re, pal_we, swap_req, swap_pending, vblank, fb_mode;
-    logic [16:0] fb_addr;
-    logic [7:0]  fb_wdata, fb_rdata, pal_addr;
+    logic [3:0]  fb_be;
+    logic [14:0] fb_addr;
+    logic [31:0] fb_wdata, fb_rdata;
+    logic [7:0]  pal_addr;
     logic [11:0] pal_wdata;
     logic [31:0] frame_count;
 
@@ -134,7 +136,7 @@ module top #(
         .clk(clk_core), .rst(rst_core),
         .uart_tx(uart_rxd_out), .uart_rx(uart_txd_in),
         .leds(), .err_led(led),
-        .fb_we, .fb_re, .fb_addr, .fb_wdata, .fb_rdata,
+        .fb_we, .fb_re, .fb_be, .fb_addr, .fb_wdata, .fb_rdata,
         .pal_we, .pal_addr, .pal_wdata,
         .swap_req, .swap_pending, .vblank, .frame_count, .fb_mode,
         .ddr_reg_en, .ddr_reg_we, .ddr_reg_off, .ddr_reg_wdata,
@@ -150,7 +152,7 @@ module top #(
     // ------------------------------------------------------------------
     display #(.PAL_HEX(PAL_HEX), .FB_COUNT(FB_COUNT)) u_display (
         .clk_core, .rst_core, .clk_pix, .rst_pix,
-        .fb_we, .fb_re, .fb_addr, .fb_wdata, .fb_rdata,
+        .fb_we, .fb_re, .fb_be, .fb_addr, .fb_wdata, .fb_rdata,
         .pal_we, .pal_addr, .pal_wdata,
         .swap_req, .swap_pending, .vblank, .frame_count, .fb_mode,
         .vga_r, .vga_g, .vga_b, .vga_hs, .vga_vs

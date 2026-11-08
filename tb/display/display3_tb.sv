@@ -46,9 +46,10 @@ module display3_tb;
 
     logic        rst_core = 1'b1, rst_pix = 1'b1;
     logic        fb_we = 1'b0, fb_re = 1'b0;
-    logic [16:0] fb_addr = '0;
-    logic [7:0]  fb_wdata = '0;
-    logic [7:0]  fb_rdata;
+    logic [3:0]  fb_be = '0;
+    logic [14:0] fb_addr = '0;
+    logic [31:0] fb_wdata = '0;
+    logic [31:0] fb_rdata;
     logic        pal_we = 1'b0;
     logic [7:0]  pal_addr = '0;
     logic [11:0] pal_wdata = '0;
@@ -226,8 +227,9 @@ module display3_tb;
     task automatic fb_fill(input int id);
         @(negedge clk_core);
         for (int r = 0; r < 240; r++) begin
-            for (int c = 0; c < 320; c++) begin
-                fb_we = 1'b1; fb_addr = 17'(r * 320 + c); fb_wdata = pattern(id, c, r);
+            for (int c = 0; c < 320; c += 4) begin
+                fb_we = 1'b1; fb_be = 4'b1111; fb_addr = 15'((r * 320 + c) / 4);
+                fb_wdata = {pattern(id, c + 3, r), pattern(id, c + 2, r), pattern(id, c + 1, r), pattern(id, c, r)};
                 @(negedge clk_core);
             end
         end
@@ -237,7 +239,7 @@ module display3_tb;
     task automatic fb_tag(input int tag);
         @(negedge clk_core);
         for (int r = 0; r < 240; r++) begin
-            fb_we = 1'b1; fb_addr = 17'(r * 320); fb_wdata = 8'(tag);
+            fb_we = 1'b1; fb_be = 4'b0001; fb_addr = 15'(r * 80); fb_wdata = {4{8'(tag)}};
             @(negedge clk_core);
             fb_we = 1'b0;
             repeat ($urandom_range(0, 1)) @(negedge clk_core);
