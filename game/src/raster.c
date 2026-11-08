@@ -109,7 +109,6 @@ static void ent_quad_verts(const view_t *vw, int32_t box, int32_t face, pvert ou
         out[i].x = qmul(r[0],vw->right[0]) + qmul(r[1],vw->right[1]) + qmul(r[2],vw->right[2]);
         out[i].y = qmul(r[0],vw->up[0]) + qmul(r[1],vw->up[1]) + qmul(r[2],vw->up[2]);
         out[i].z = qmul(r[0],vw->fwd[0]) + qmul(r[1],vw->fwd[1]) + qmul(r[2],vw->fwd[2]);
-        out[i].u = out[i].v = 0;
     }
     *mat = face | ((16 + b->color) << 3);
 }

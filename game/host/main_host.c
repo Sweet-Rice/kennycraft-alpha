@@ -695,8 +695,7 @@ static int cmd_gencost(void) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: kc_host shots|play|vectors|compare|models <dir> | contract | bench | sweep ray|raster | gencost
-");
+        fprintf(stderr, "usage: kc_host shots|play|vectors|compare|models <dir> | contract | bench | sweep ray|raster | gencost\n");
         return 2;
     }
     if (argc > 2) outdir = argv[2];
