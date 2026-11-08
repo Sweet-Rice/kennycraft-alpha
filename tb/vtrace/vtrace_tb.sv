@@ -5,9 +5,10 @@
 // cfg_data that must be ignored), optionally probe start with max_steps = 0
 // and with an empty lane_mask (done the next cycle, busy never high, no output
 // changes), then start the walk and check
-//   - busy stays high and done pulses exactly once, N * (WORLD_LATENCY + 1) + 1
-//     cycles after start (N steps of WORLD_LATENCY + 1 busy cycles, then the
-//     done cycle), N = the most steps any active lane takes;
+//   - busy stays high and done pulses exactly once, N * WORLD_LATENCY + 2
+//     cycles after start (a step every WORLD_LATENCY busy cycles, one busy
+//     cycle to check step N, then the done cycle), N = the most steps any
+//     active lane takes;
 //   - active lanes on a hit: result, hit_cell and t_hit equal the golden
 //     value bit for bit; on a miss only hit and steps (result[0] and
 //     result[15:8]) must match, the other fields being undefined (Shared,
@@ -15,11 +16,10 @@
 //   - lanes outside lane_mask: outputs unchanged.
 // World model: WORLD_LATENCY = 1 is a registered read of every lane's address.
 // WORLD_LATENCY = 2 is rtl/mem/world_mem.sv (D17) per copy of 4 lanes: the
-// phase counts busy cycles mod 3 from the first one and is 1 in the second
-// cycle of each step. Two read registers (ports A and B) load lanes 4n, 4n+1
-// in phase 0 and 4n+2, 4n+3 in phase 1, and are random while busy is low;
-// lanes 4n, 4n+1 see a copy of them taken on each busy phase-1 edge, lanes
-// 4n+2, 4n+3 see them directly.
+// phase toggles every busy cycle from 0 at the first. Two read registers
+// (ports A and B) load lanes 4n, 4n+1 in phase 0 and 4n+2, 4n+3 in phase 1,
+// and are random while busy is low; lanes 4n, 4n+1 see a copy of them taken
+// on each busy phase-1 edge, lanes 4n+2, 4n+3 see them directly.
 module vtrace_tb;
   localparam int LANES = 8;
   parameter int WORLD_LATENCY = 2;
@@ -46,14 +46,13 @@ module vtrace_tb;
 
   // ---------------------------------------------------------------- world ----
   logic [3:0] wmem [131072];
-  logic [1:0] vt_cyc = 2'd0;
-  wire        phase = (vt_cyc == 2'd1);
+  logic       phase = 1'b0;
   logic [3:0] dout [LANES / 4][2];
   logic [3:0] hold [LANES / 4][2];
   logic [3:0] world_data_q [LANES];
 
   always_ff @(posedge clk) begin
-    vt_cyc <= (busy && vt_cyc != 2'd2) ? vt_cyc + 2'd1 : 2'd0;
+    phase <= busy && !phase;
     for (int c = 0; c < LANES / 4; c++)
       for (int p = 0; p < 2; p++) begin
         dout[c][p] <= busy ? wmem[world_addr[4 * c + (phase ? 2 : 0) + p]] : 4'($urandom);
@@ -188,9 +187,9 @@ module vtrace_tb;
       cyc++;
       if (cyc > 300 * 4) $fatal(1, "%s group %0d: no done", set, g);
     end
-    if (cyc != nmax * (WORLD_LATENCY + 1) + 1) begin
-      $display("ERROR %s group %0d: done after %0d cycles, want %0d steps x %0d + 1", set, g, cyc,
-               nmax, WORLD_LATENCY + 1);
+    if (cyc != nmax * WORLD_LATENCY + 2) begin
+      $display("ERROR %s group %0d: done after %0d cycles, want %0d steps x %0d + 2", set, g, cyc,
+               nmax, WORLD_LATENCY);
       errors++;
     end
     cycles_total += cyc;
