@@ -1,6 +1,7 @@
 // render.c — the render kernel. One ray per pixel, branch-free shading.
 #include "render.h"
 #include "trace.h"
+#include "entity.h"
 #include "kc_hal.h"
 #include "kc_lanes.h"
 #include "kc_tables.h"
@@ -41,7 +42,8 @@ uint8_t kc_shade_pixel(int32_t px, int32_t py) {
     sky_i = sel(sky_i > 15, 15, sky_i);
     int32_t sky = (COLOR_SKY << 4) | sky_i;
 
-    return (uint8_t)sel(hit, PIX(color, shade, fog), sky);
+    int32_t world = sel(hit, PIX(color, shade, fog), sky);
+    return ent_composite(px, py, o, &r, sel(hit, h.t, 0x7FFFFFFF), (uint8_t)world);
 }
 
 void kc_render_frame(void) {

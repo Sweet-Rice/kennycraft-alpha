@@ -6,6 +6,7 @@ Plain C that builds for the laptop (`-DKC_HOST`) and for the chip (rv32i_zmmul) 
 make            # generate assets + laptop build (build/kc_host)
 make shots      # golden camera shots  -> out/shots/*.png + *.fb (raw 320x240 back buffer)
 make play       # scripted play-through (physics, place/break, chunk round trip, chunk tags, reset)
+make models     # static entity checks + renderer and close-up shots -> out/models
 make vectors    # VTRACE test vectors from the C reference -> out/vectors/{world.hex,rays.txt}
 make bench      # DDA steps per frame
 make chip       # rv32i_zmmul ELF (stand-in crt0/linker), fails on div/float/libcalls/ecall/csr
@@ -23,6 +24,7 @@ Every chip target also runs `tools/stack_check.sh`: the worst-case stack depth o
 | `src/fixed.[ch]` | Q16.16, `qrcp` (1/x: computed seed + Newton, branch-free, no table), `qsin`, `sel()` |
 | `src/trace.[ch]` | `ray_setup` + `kc_trace` with the exact VTRACE contract. `vtrace_ref` = C reference for one ray |
 | `src/render.[ch]` | Ray-tracing kernel. 8x8 tiles, 4x2 block per lane pass (D15). Pixel byte per spec |
+| `src/entity.[ch]` | Static villager, pig and zombie box models, shared by both renderers |
 | `src/mesh.[ch]` | Greedy mesher: per-chunk vertex + index buffers in a pool of 4 KB pages |
 | `src/raster.[ch]` | Tile rasterizer: binning into per-tile command lists, 16x16 tile of 32-bit words (8-bit color + 24-bit 1/z depth), one framebuffer write per pixel |
 | `src/kc_libc.c` | memcpy/memset for the freestanding chip build |
@@ -36,6 +38,26 @@ Every chip target also runs `tools/stack_check.sh`: the worst-case stack depth o
 | `tools/gen_assets.py` | palette.hex, kc_tables.h (math tables + the face color table), textures.hex, atlas.png |
 | `host/` | Memory-map emulation, PNG writer, headless front-end |
 | `chip/stub_*` | **Stand-ins only** so the chip build links. Bennett's kc.ld / crt0 replace them |
+
+## Static entity models
+
+The game spawns no entities. Lane-0 code can call `entity_add(kind, x, y, z, facing)`
+with an absolute Q16 feet center; facing 0/1/2/3 means +z/+x/-z/-x.
+The table holds eight entities; invalid kinds/facings or a full table return -1.
+`entity_clear()` empties it; `entity_count()` reports its size. Models have no
+movement, AI, collision or interaction. `kc_draw_world()` prepares window-relative
+boxes after `write_camera()`. The ray tracer intersects boxes; the rasterizer
+depth-tests their flat-colored faces. With no entities, existing frames are unchanged.
+
+Colors reuse the existing palette: villagers have light-dirt skin and dark-grass
+eyes; trader robes are brick, contractor robes light wood. The pig is sand with
+a brick snout and black eyes. The zombie has light-grass skin, a dark-stone shirt
+and near-black pants/eyes.
+
+`make models` checks visibility, palette colors, ray/raster silhouette agreement
+(IoU >= 0.90), terrain occlusion, behind-camera rejection and table limits.
+It saves `m0_models_ray`, `m0_models_raster` and `m1_trader`, `m1_contractor`,
+`m1_pig`, `m1_zombie` as PNG and raw `.fb` files in `out/models/`.
 
 ## For Tai
 
@@ -127,8 +149,9 @@ Each edge is grown by 2 subpixels (1/8 px) to close the hairline T-junction crac
 | Tile buffer 16×16 × (2 B color + 2 B depth) | 1.0 KB |
 | Mesher scratch | 1.8 KB |
 | Chunk slot tables + tag key | 0.1 KB |
-| **Total** | **148.6 KB of 192** |
-| + two 160×120 framebuffers, if they end up inside the budget | 186.1 KB |
+| Entity boxes + eight records + counts | 2.7 KB |
+| **Total** | **151.3 KB of 192** |
+| + two 160×120 framebuffers, if they end up inside the budget | 188.8 KB |
 
 How the mesh got small enough:
 - **Shared index buffer.** Every quad is two triangles in the same order, so there's one 6-entry index buffer drawn with base vertex = quad × 4. That's 9 bytes per quad instead of 21.

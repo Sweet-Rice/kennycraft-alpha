@@ -9,10 +9,11 @@
 #   make chip8      same with KC_LANES=8 (Stage 1 kernel)
 #   make chip-raster  tile rasterizer builds (1 and 8 lanes) + lane lint + stack check
 #   make compare    ray tracer vs rasterizer on the golden poses (out/cmp)
+#   make models     static entity checks and review shots (out/models)
 # Build options (any target): KC_GEN_BITMAP=1 (issue #2's 8 KB bitmap instead of chunk tags),
 # KC_TAG_PERSIST=1 (chunk tags without the boot nonce: stored chunks survive a reset).
 # KC_QRCP=1: 8-lane chip builds use the QRCP instruction for qrcp() (D22; Stage 2 core).
-SRC      := src/kc_libc.c src/arena.c src/fixed.c src/trace.c src/render.c src/terrain.c src/chunks.c src/game.c src/kc_main.c
+SRC      := src/kc_libc.c src/arena.c src/fixed.c src/trace.c src/render.c src/entity.c src/terrain.c src/chunks.c src/game.c src/kc_main.c
 RASTER   := src/mesh.c src/raster.c
 HOST_SRC := host/hal_host.c host/png.c host/main_host.c
 GEN      := gen/kc_tables.h gen/kc_assets.h gen/textures.hex gen/palette.hex
@@ -42,7 +43,7 @@ CFLAGS     += -DARENA_SIZE=$(ARENA_SIZE)
 CHIP_FLAGS += -DARENA_SIZE=$(ARENA_SIZE)
 endif
 
-.PHONY: all shots play vectors contract compare bench chip chip8 chip-raster clean FORCE
+.PHONY: all shots play vectors contract compare models bench chip chip8 chip-raster clean FORCE
 all: build/kc_host
 
 $(GEN): tools/gen_assets.py $(wildcard assets/textures.png)
@@ -65,6 +66,8 @@ contract: build/kc_host
 	./build/kc_host contract
 compare: build/kc_host
 	mkdir -p out/cmp && ./build/kc_host compare out/cmp
+models: build/kc_host
+	mkdir -p out/models && ./build/kc_host models out/models
 bench: build/kc_host
 	./build/kc_host bench
 

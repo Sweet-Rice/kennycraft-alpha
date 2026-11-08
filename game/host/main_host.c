@@ -6,6 +6,7 @@
 //   kc_host sweep ray|raster  arena high water over many locations x frames x edits, plus
 //                           digests of the window and the meshes (must not change with optimizations)
 //   kc_host gencost         terrain generation cost per chunk (terrain_height, window reads/writes)
+//   kc_host models  <dir>   static entity checks and renderer/close-up review shots
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,6 +22,7 @@
 #include "mesh.h"
 #include "raster.h"
 #include "arena.h"
+#include "entity.h"
 #include "terrain.h"
 #define TERRAIN_GEN(cx, cz, x0, z0) terrain_gen_chunk(cx, cz, x0, z0, gen_scratch)
 
@@ -198,6 +200,88 @@ static int cmd_compare(void) {
     }
     kc_set_resolution(160);
     printf("%s\n", failures ? "SOME CHECKS FAILED" : "all checks passed");
+    return failures != 0;
+}
+
+static void models_render(const char *name, int raster, uint8_t out[320 * 240]) {
+    kc_use_raster = raster;
+    shot(name);
+    memcpy(out,host_front_buffer(),320 * 240);
+}
+
+static int cmd_models(void) {
+    static uint8_t base[2][320 * 240], model[2][320 * 240], hidden[320 * 240];
+    q16 bx = kc_me.pos[0], by = kc_me.pos[1], bz = kc_me.pos[2];
+    int32_t sx = qfloor(bx), sz = qfloor(bz);
+    kc_set_resolution(160);
+    pose(bx,by,bz,Q16_INT(128),Q16_INT(-40));
+    entity_clear();
+    models_render("base_ray",0,base[0]);
+    models_render("base_ras",1,base[1]);
+    const int32_t dx[ENT_KINDS] = {2,5,4,7}, dz[ENT_KINDS] = {5,2,4,6}, facing[ENT_KINDS] = {2,3,2,3};
+    int32_t pig_x = 0, pig_z = 0;
+    for (int32_t k = 0; k < ENT_KINDS; k++) {
+        int32_t x = sx+dx[k], z = sz+dz[k];
+        while (terrain_tree_at(x,z)) x++;
+        entity_add(k,Q16_INT(x)+Q16_HALF,Q16_INT(terrain_height(x,z)+1),Q16_INT(z)+Q16_HALF,facing[k]);
+        if (k == ENT_PIG) { pig_x = x; pig_z = z; }
+    }
+    models_render("m0_models_ray",0,model[0]);
+    models_render("m0_models_raster",1,model[1]);
+    int changed[2] = {0,0}, bad[2] = {0,0}, brick = 0, wood = 0, inter = 0, uni = 0;
+    const uint32_t colors = (1u<<0)|(1u<<1)|(1u<<2)|(1u<<3)|(1u<<6)|(1u<<9)|(1u<<11)|(1u<<13);
+    for (int32_t y = 0; y < KC_RP->height; y++)
+        for (int32_t x = 0; x < KC_RP->width; x++) {
+            int32_t i = y*FB_STRIDE+x;
+            int a = base[0][i] != model[0][i], b = base[1][i] != model[1][i];
+            changed[0] += a; changed[1] += b;
+            bad[0] += a && !(colors & (1u << (model[0][i] >> 4)));
+            bad[1] += b && !(colors & (1u << (model[1][i] >> 4)));
+            brick += a && (model[0][i] >> 4) == 11;
+            wood += a && (model[0][i] >> 4) == 13;
+            inter += a && b; uni += a || b;
+        }
+    printf("  changed ray %d raster %d; brick %d wood %d; mask IoU %.3f\n",
+           changed[0],changed[1],brick,wood,uni ? (double)inter/uni : 0.0);
+    check(changed[0] >= 300,"ray entities change at least 300 pixels");
+    check(changed[1] >= 300,"raster entities change at least 300 pixels");
+    check(!bad[0],"ray entity pixels use only model palette colors");
+    check(!bad[1],"raster entity pixels use only model palette colors");
+    check(brick >= 20,"ray shows at least 20 brick-colored entity pixels");
+    check(wood >= 20,"ray shows at least 20 light-wood entity pixels");
+    check(uni > 0 && inter*10 >= uni*9,"ray/raster changed masks have IoU >= 0.90");
+
+    entity_clear();
+    entity_add(ENT_ZOMBIE,Q16_INT(pig_x)+Q16_HALF,Q16(2.0),Q16_INT(pig_z)+Q16_HALF,2);
+    models_render("buried_ray",0,hidden);
+    check(!memcmp(base[0],hidden,sizeof hidden),"buried entity leaves ray frame unchanged");
+    models_render("buried_raster",1,hidden);
+    check(!memcmp(base[1],hidden,sizeof hidden),"buried entity leaves raster frame unchanged");
+    entity_clear();
+    int32_t x = sx-4, z = sz-4;
+    entity_add(ENT_ZOMBIE,Q16_INT(x)+Q16_HALF,Q16_INT(terrain_height(x,z)+1),Q16_INT(z)+Q16_HALF,2);
+    models_render("behind_ray",0,hidden);
+    check(!memcmp(base[0],hidden,sizeof hidden),"entity behind camera leaves ray frame unchanged");
+    models_render("behind_raster",1,hidden);
+    check(!memcmp(base[1],hidden,sizeof hidden),"entity behind camera leaves raster frame unchanged");
+    entity_clear();
+    for (int32_t i = 0; i < ENT_MAX; i++) entity_add(ENT_PIG,bx,by,bz,0);
+    check(entity_add(ENT_PIG,bx,by,bz,0) == -1,"ninth entity is rejected");
+    entity_clear();
+    check(entity_add(ENT_KINDS,bx,by,bz,0) == -1,"invalid entity kind is rejected");
+
+    const char *names[ENT_KINDS] = {"m1_trader","m1_contractor","m1_pig","m1_zombie"};
+    kc_use_raster = 0;
+    kc_set_resolution(320);
+    for (int32_t k = 0; k < ENT_KINDS; k++) {
+        entity_clear();
+        pose(bx,by,bz,0,Q16(-30.0));
+        entity_add(k,Q16_INT(sx)+Q16_HALF,Q16_INT(terrain_height(sx,sz+3)+1),Q16_INT(sz+3)+Q16_HALF,2);
+        shot(names[k]);
+    }
+    entity_clear();
+    kc_set_resolution(160);
+    printf("%s\n",failures ? "SOME CHECKS FAILED" : "all checks passed");
     return failures != 0;
 }
 
@@ -611,7 +695,8 @@ static int cmd_gencost(void) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: kc_host shots|play|vectors|compare <dir> | contract | bench | sweep ray|raster | gencost\n");
+        fprintf(stderr, "usage: kc_host shots|play|vectors|compare|models <dir> | contract | bench | sweep ray|raster | gencost
+");
         return 2;
     }
     if (argc > 2) outdir = argv[2];
@@ -625,6 +710,7 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[1], "compare")) return cmd_compare();
     if (!strcmp(argv[1], "sweep"))   return cmd_sweep(argc > 2 ? argv[2] : "ray");
     if (!strcmp(argv[1], "gencost")) return cmd_gencost();
+    if (!strcmp(argv[1], "models"))  return cmd_models();
     fprintf(stderr, "unknown command %s\n", argv[1]);
     return 2;
 }

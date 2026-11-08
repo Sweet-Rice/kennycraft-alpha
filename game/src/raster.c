@@ -1,6 +1,7 @@
 // raster.c — tile-based rasterizer. Fixed point, no divide instruction, branch-free per pixel.
 #include "raster.h"
 #include "mesh.h"
+#include "entity.h"
 #include "chunks.h"
 #include "blocks.h"
 #include "render.h"
@@ -28,6 +29,7 @@
 #define LANE0_SMALL __attribute__((noinline))
 #endif
 #define EDGE_GROW 2                // subpixels; 2 closes every T-junction crack in the golden shots
+#define ENT_REF 0x80000000u
 
 
 
@@ -94,6 +96,24 @@ static void quad_verts(const view_t *vw, int32_t page, int32_t q, pvert out[4], 
     *mat = m;
 }
 
+static void ent_quad_verts(const view_t *vw, int32_t box, int32_t face, pvert out[4], int32_t *mat) {
+    const ent_box *b = &ent_boxes[box];
+    int32_t a = face >> 1, ua = (a + 1) % 3, va = (a + 2) % 3;
+    q16 plane = (face & 1) ? b->lo[a] : b->hi[a];
+    for (int32_t i = 0; i < 4; i++) {
+        q16 w[3];
+        w[a] = plane;
+        w[ua] = (i == 1 || i == 2) ? b->hi[ua] : b->lo[ua];
+        w[va] = (i >= 2) ? b->hi[va] : b->lo[va];
+        q16 r[3] = {w[0]-vw->eye[0],w[1]-vw->eye[1],w[2]-vw->eye[2]};
+        out[i].x = qmul(r[0],vw->right[0]) + qmul(r[1],vw->right[1]) + qmul(r[2],vw->right[2]);
+        out[i].y = qmul(r[0],vw->up[0]) + qmul(r[1],vw->up[1]) + qmul(r[2],vw->up[2]);
+        out[i].z = qmul(r[0],vw->fwd[0]) + qmul(r[1],vw->fwd[1]) + qmul(r[2],vw->fwd[2]);
+        out[i].u = out[i].v = 0;
+    }
+    *mat = face | ((16 + b->color) << 3);
+}
+
 // Signed distance to frustum plane k (>= 0 inside): near, left, right, bottom, top.
 static q16 plane_d(const pvert *p, int32_t k) {
     switch (k) {
@@ -140,10 +160,8 @@ static void project(const view_t *vw, vert *p) {
     p->iz = iz;
 }
 
-// Transform + cull + clip one quad into a screen polygon in poly[MAX_POLY]. Returns the count.
-static int32_t quad_to_screen(const view_t *vw, int32_t page, int32_t q, vert *poly, int32_t *mat) {
-    quad_verts(vw, page, q, poly, mat);
-
+// Cull, clip and project a transformed quad in poly[MAX_POLY].
+static int32_t poly_to_screen(const view_t *vw, vert *poly) {
     // Trivial accept / reject per plane
     int32_t all_in = 1;
     for (int32_t k = 0; k < 5; k++) {
@@ -155,6 +173,16 @@ static int32_t quad_to_screen(const view_t *vw, int32_t page, int32_t q, vert *p
     int32_t n = all_in ? 4 : clip_poly(poly, 4);
     for (int32_t i = 0; i < n; i++) project(vw, &poly[i]);
     return n;
+}
+
+static int32_t quad_to_screen(const view_t *vw, int32_t page, int32_t q, vert *poly, int32_t *mat) {
+    quad_verts(vw,page,q,poly,mat);
+    return poly_to_screen(vw,poly);
+}
+
+static int32_t ent_quad_to_screen(const view_t *vw, int32_t box, int32_t face, vert *poly, int32_t *mat) {
+    ent_quad_verts(vw,box,face,poly,mat);
+    return poly_to_screen(vw,poly);
 }
 
 static void view_init(view_t *vw) {
@@ -194,6 +222,24 @@ LANE0_SMALL static int32_t chunk_in_frustum(const view_t *vw) {
     return 1;
 }
 
+static int32_t bin_poly(const svert *sv, int32_t n, uint32_t ref, int32_t nvis,
+                        int32_t tiles_x, int32_t tiles_y) {
+    if (n < 3) { STAT(raster_stats.quads_culled++); STAT(raster_stats.quads_clipped++); return nvis; }
+    int32_t x0 = sv[0].X, x1 = sv[0].X, y0 = sv[0].Y, y1 = sv[0].Y;
+    for (int32_t i = 1; i < n; i++) {
+        x0 = imin(x0,sv[i].X); x1 = imax(x1,sv[i].X);
+        y0 = imin(y0,sv[i].Y); y1 = imax(y1,sv[i].Y);
+    }
+    int32_t tx0 = x0 >> 8, ty0 = y0 >> 8;
+    int32_t tx1 = imin(x1 >> 8,tiles_x-1), ty1 = imin(y1 >> 8,tiles_y-1);
+    if (nvis == RASTER_VIS_CAP) { STAT(raster_stats.vis_overflow++); return nvis; }
+    vis_ref[nvis] = ref;
+    vis_box[nvis] = (uint32_t)tx0 | ((uint32_t)ty0 << 8) | ((uint32_t)tx1 << 16) | ((uint32_t)ty1 << 24);
+    for (int32_t ty = ty0; ty <= ty1; ty++)
+        for (int32_t tx = tx0; tx <= tx1; tx++) tile_fill[ty*tiles_x+tx]++;
+    return nvis + 1;
+}
+
 static int32_t bin_frame(const view_t *vw0, int32_t tiles_x, int32_t tiles_y) {
     view_t vw = *vw0;
     int32_t nvis = 0, ntiles = tiles_x * tiles_y;
@@ -217,23 +263,20 @@ static int32_t bin_frame(const view_t *vw0, int32_t tiles_x, int32_t tiles_y) {
 
                 svert sv[MAX_POLY];
                 int32_t mat, n = quad_to_screen(&vw, pg, q, sv, &mat);
-                if (n < 3) { STAT(raster_stats.quads_culled++); STAT(raster_stats.quads_clipped++); continue; }
-                int32_t x0 = sv[0].X, x1 = sv[0].X, y0 = sv[0].Y, y1 = sv[0].Y;
-                for (int32_t i = 1; i < n; i++) {
-                    x0 = imin(x0, sv[i].X); x1 = imax(x1, sv[i].X);
-                    y0 = imin(y0, sv[i].Y); y1 = imax(y1, sv[i].Y);
-                }
-                int32_t tx0 = x0 >> 8, ty0 = y0 >> 8;                       // Q4 / 16 px per tile
-                int32_t tx1 = imin(x1 >> 8, tiles_x - 1), ty1 = imin(y1 >> 8, tiles_y - 1);
-                if (nvis == RASTER_VIS_CAP) { STAT(raster_stats.vis_overflow++); continue; }
-                vis_ref[nvis] = ((uint32_t)s << 16) | ((uint32_t)pg << 8) | (uint32_t)q;
-                vis_box[nvis] = (uint32_t)tx0 | ((uint32_t)ty0 << 8) | ((uint32_t)tx1 << 16) | ((uint32_t)ty1 << 24);
-                for (int32_t ty = ty0; ty <= ty1; ty++)
-                    for (int32_t tx = tx0; tx <= tx1; tx++) tile_fill[ty * tiles_x + tx]++;
-                nvis++;
+                uint32_t ref = ((uint32_t)s << 16) | ((uint32_t)pg << 8) | (uint32_t)q;
+                nvis = bin_poly(sv,n,ref,nvis,tiles_x,tiles_y);
             }
         }
     }
+    for (int32_t i = 0; i < ent_nboxes; i++)
+        for (int32_t f = 0; f < 6; f++) {
+            int32_t a = f >> 1;
+            q16 e = vw.eye[a], pl = (f & 1) ? ent_boxes[i].lo[a] : ent_boxes[i].hi[a];
+            if ((f & 1) ? e >= pl : e <= pl) { STAT(raster_stats.quads_culled++); STAT(raster_stats.quads_backface++); continue; }
+            svert sv[MAX_POLY];
+            int32_t mat, n = ent_quad_to_screen(&vw,i,f,sv,&mat);
+            nvis = bin_poly(sv,n,ENT_REF | (uint32_t)i << 3 | (uint32_t)f,nvis,tiles_x,tiles_y);
+        }
     STAT(raster_stats.quads_visible += nvis);
 
     // Prefix sum -> per-tile command list ranges, then fill.
@@ -330,9 +373,10 @@ __attribute__((noinline)) static void depth_px(const tri_t *t, int32_t px, int32
 __attribute__((noinline)) static void color_px(const zpx_t *o, int32_t mat) {
     int32_t face = mat & 7, a = face >> 1, type = mat >> 3;
     int32_t tface = sel(a == 1, sel(face & 1, 2, 0), 1);
+    int32_t flat = (type >> 4) & 1;                   // entity box: its own flat color
     int32_t shade = sel(a == 1, sel(face & 1, 3, 0), sel(a == 0, 1, 2));
     q16 iz = o->iz;
-    int32_t color = kc_face_color[type * 3 + tface];
+    int32_t color = sel(flat, type & 15, kc_face_color[sel(flat, 0, type) * 3 + tface]);
     int32_t fog = (iz <= fog_iz[0]) + (iz <= fog_iz[1]) + (iz <= fog_iz[2]);
     int32_t col = PIX(color, shade, fog);
     int32_t pass = o->pass, idx = o->idx;
@@ -474,10 +518,15 @@ void kc_raster_kernel(void) {
             tile_clear(Y0, lane0);
             for (uint32_t e = tile_start[t]; e < tile_start[t + 1]; e++) {
                 uint32_t ref = vis_ref[bin_entry[e]];
-                int32_t slot = (int32_t)(ref >> 16), pg = (int32_t)((ref >> 8) & 255), q = (int32_t)(ref & 255);
-                view_set_slot(&vw, slot);
                 svert sv[MAX_POLY];
-                int32_t mat, n = quad_to_screen(&vw, pg, q, sv, &mat);
+                int32_t mat, n;
+                if (ref & ENT_REF) {
+                    n = ent_quad_to_screen(&vw,(ref >> 3) & 0xFF,ref & 7,sv,&mat);
+                } else {
+                    int32_t slot = (int32_t)(ref >> 16), pg = (int32_t)((ref >> 8) & 255), q = (int32_t)(ref & 255);
+                    view_set_slot(&vw,slot);
+                    n = quad_to_screen(&vw,pg,q,sv,&mat);
+                }
                 raster_fan(sv, n, X0, Y0, mat, lane0);
             }
             tile_flush(X0, Y0, vw.H, lane0);
@@ -494,6 +543,10 @@ void raster_debug_pixel(int32_t px, int32_t py) {
     printf("tile %d entries %d\n", t, tile_start[t + 1] - tile_start[t]);
     for (uint32_t e = tile_start[t]; e < tile_start[t + 1]; e++) {
         uint32_t ref = vis_ref[bin_entry[e]];
+        if (ref & ENT_REF) {
+            printf(" entity box %d face %d\n",(int)((ref >> 3) & 0xFF),(int)(ref & 7));
+            continue;
+        }
         int32_t slot = ref >> 16, pg = (ref >> 8) & 255, q = ref & 255;
         view_set_slot(&vw, slot);
         svert sv[MAX_POLY]; pvert pv[4]; int32_t mat;
