@@ -6,7 +6,7 @@
 // rtl/core's, unchanged; QRCP is rtl/core_pipe/qrcp_pipe.sv and the one-cycle
 // multiplier rtl/core_pipe/mul_pipe.sv.
 //
-//   IF   imem_addr = pc_f, a register (a redirect writes it: flush 2), and
+//   IF   imem_addr = pc_f, a register (a redirect writes it: flush 3), and
 //        the branch target buffer lookup of pc_f (rtl/core_pipe/btb.sv)
 //        that picks the next pc_f
 //   ID   the BRAM output (or d_hold, latched in the first cycle ID waits,
@@ -31,16 +31,25 @@
 // lane's write enable, so an inactive lane sees its older value. A load or
 // MUL in EX whose rd ID reads holds ID for one cycle (load-use, mul-use):
 // neither result is forwarded from MEM, so the reader takes it from WB.
-// Branches, JAL and JALR resolve in EX and flush ID and IF; so do LMASK,
-// MASKSET, MASKALL, DIF, DELSE and DENDIF, so the mask and divergence stack
-// that EX reads are always those of every older instruction (Tai page, GPU
-// Core, Pipelining notes: read in ID, written in EX).
+// Branches, JAL and JALR resolve in EX; so do LMASK, MASKSET, MASKALL, DIF,
+// DELSE and DENDIF, so the mask and divergence stack that EX reads are
+// always those of every older instruction (Tai page, GPU Core, Pipelining
+// notes: read in ID, written in EX). The redirect is registered: flush is
+// high the cycle after a redirecting (or halting) instruction leaves EX,
+// while it is in MEM. That cycle it kills the instruction then in EX
+// (e_valid is e_vreg && !flush: no side effect, MEM gets a bubble), drops
+// ID and the fetch in flight, and loads pc_f from m_next (flush 3). EX's
+// branch compare, uniform checks and target thus end in registers (flush,
+// m_next, m_halt) instead of reaching IF and ID's enables. MEM holds the
+// redirecting instruction for one cycle (it is no load, store, QRCP or
+// VTRACE rd, or it halted), and the killed one cannot hold EX
+// (e_vt_hold reads e_valid), so the pipe always advances under flush.
 //
 // Branch prediction. IF looks pc_f up in the BTB; on a hit with a counter
 // of 2 or 3 (predicted taken) the next pc_f is the entry's target, else
 // pc_f + 4. The prediction and target ride with the instruction; ID checks
 // the target against d_pc + d_imm into the e_pok flag. A conditional branch
-// or JAL in EX redirects (flush 2) only when the prediction was wrong: taken
+// or JAL in EX redirects (flush 3) only when the prediction was wrong: taken
 // without e_pok, or predicted taken and not taken. JALR, DIF/DELSE/DENDIF
 // and the mask writers are never predicted. The BTB is written the cycle
 // after EX (u_req), unless the branch halted (m_halt, a register). Only the
@@ -65,10 +74,11 @@
 // steps through the same values as the multi-cycle pc; the fetch PC is pc_f.
 //
 // Halts. EX detects them (an ID fault: ILLEGAL; else DIVERGE, DIVSTACK,
-// ILLEGAL, as in core.sv), runs no side effect, flushes ID and IF and stops
-// fetching (pc_f freezes). The halt marker pulses err_set in MEM, after every
-// older instruction has retired. err_pc is pc, as in core.sv: then the
-// faulting instruction's PC, and it stays there while halted.
+// ILLEGAL, as in core.sv), runs no side effect, flushes EX, ID and IF the
+// next cycle and stops fetching (pc_f freezes). The halt marker pulses
+// err_set in MEM, after every older instruction has retired. err_pc is
+// pc, as in core.sv: then the faulting instruction's PC, and it stays
+// there while halted.
 //
 // state is an observation for the testbenches only: 4 (the multi-cycle
 // S_MEM code) while MEM walks the LSU, 6 (S_HALT) after a halt,
@@ -131,10 +141,10 @@ module core_pipe
     // ------------------------------------------------------------------
     logic adv;        // MEM takes EX's instruction: EX, ID and IF move on
     logic lu;         // load-use / mul-use: ID waits, EX gets a bubble
-    logic flush;      // EX redirects or halts: drop ID and the fetch in flight
+    logic flush;      // a redirect or halt left EX last cycle: kill EX, ID, IF
     logic stop;       // halted: nothing more is fetched
     logic m_valid, m_done, m_ready;
-    logic e_valid, e_go, e_halt, e_redirect;
+    logic e_vreg, e_valid, e_go, e_halt, e_redirect;
     logic [31:0] e_next;
 
     logic e_vt_hold;  // custom-1 in EX while a walk is in flight: EX waits
@@ -142,7 +152,12 @@ module core_pipe
     assign m_ready = !m_valid || m_done;
     assign adv     = m_ready && !e_vt_hold;
     assign e_go    = e_valid && adv;
-    assign flush   = e_go && (e_halt || e_redirect);
+    assign e_valid = e_vreg && !flush;
+
+    always_ff @(posedge clk) begin
+        if (rst) flush <= 1'b0;
+        else     flush <= e_go && (e_halt || e_redirect);
+    end
 
     // ------------------------------------------------------------------
     // IF / ID
@@ -162,13 +177,14 @@ module core_pipe
     logic [1:0]  u_ctr;
     logic [31:0] u_tgt;
 
-    // pc_f: a redirect writes it, otherwise it steps with ID (to the
-    // predicted target or pc_f + 4) until a halt stops fetching. A halt does
-    // not touch its select: after a halt pc_f is never decoded again.
+    // pc_f: a redirect writes it (m_next, the cycle the redirecting
+    // instruction is in MEM), otherwise it steps with ID (to the predicted
+    // target or pc_f + 4) until a halt stops fetching. After a halt pc_f
+    // is never decoded again, and it stops moving once stop is set.
     always_ff @(posedge clk) begin
-        if (rst)                     pc_f <= RESET_VEC;
-        else if (e_go && e_redirect) pc_f <= e_next;
-        else if (d_ready && !stop)   pc_f <= f_pred ? f_tgt : pc_f + 32'd4;
+        if (rst)                   pc_f <= RESET_VEC;
+        else if (flush)            pc_f <= m_next;
+        else if (d_ready && !stop) pc_f <= f_pred ? f_tgt : pc_f + 32'd4;
     end
 
     always_ff @(posedge clk) begin
@@ -179,7 +195,7 @@ module core_pipe
         end else if (flush) begin
             d_valid  <= 1'b0;
             d_hold_v <= 1'b0;
-            if (e_halt) stop <= 1'b1;
+            if (m_halt) stop <= 1'b1;
         end else if (d_ready) begin
             d_pc     <= pc_f;
             d_hit    <= f_hit;
@@ -235,8 +251,8 @@ module core_pipe
     logic [31:0] e_imm, e_pc, e_inst;
 
     always_ff @(posedge clk) begin
-        if (rst)      e_valid <= 1'b0;
-        else if (adv) e_valid <= d_valid && !lu && !flush;
+        if (rst)      e_vreg <= 1'b0;
+        else if (adv) e_vreg <= d_valid && !lu && !flush;
     end
 
     always_ff @(posedge clk) begin

@@ -5,10 +5,11 @@
 // QRCP in MEM for its own eight cycles (qrcp_pipe's seven stages, result),
 // so the distance to the previous retirement depends on what is in front
 // of it (the previous instruction retires in its last MEM cycle t, QRCP's
-// MEM cycles are then t+1..t+8 when it waited in EX, t+3..t+10 when it was
-// fetched after a flush: IF t, ID t+1, EX t+2):
+// MEM cycles are then t+1..t+8 when it waited in EX, t+4..t+11 when it was
+// fetched after a flush (the mask writer retires at t; flush, registered,
+// reloads pc_f at t+1: IF t+1, ID t+2, EX t+3):
 //   after a load, ALU op or QRCP (pipe full)        LAT_FULL  = 8
-//   after a mask writer (MASKSET/MASKALL flush 2)   LAT_FLUSH = 10
+//   after a mask writer (MASKSET/MASKALL flush 3)   LAT_FLUSH = 11
 // LAT lists the expected distance of each of the program's QRCPs in order:
 // six back to back after `lw s7`, QRCP x0, then QRCP a1 after MASKSET and
 // QRCP s7 after MASKALL. The multi-cycle core passes with -GLAT_FULL=7
@@ -17,7 +18,7 @@ module t_qrcp_pipe_tb;
     parameter string IMEM_HEX = "";
     parameter string DMEM_HEX = "";
     parameter int    LAT_FULL  = 8;
-    parameter int    LAT_FLUSH = 10;
+    parameter int    LAT_FLUSH = 11;
     `include "soc_harness.svh"
 
     localparam int NQRCP = 9;   // QRCP instructions in t_qrcp.S
