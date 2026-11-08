@@ -5,7 +5,7 @@
 enum {
     B_AIR = 0, B_GRASS, B_DIRT, B_STONE, B_COBBLE, B_LOG, B_LEAVES, B_PLANKS,
     B_SAND, B_BRICK, B_BEDROCK,
-    B_SPARE11, B_SPARE12, B_SPARE13, B_SPARE14, B_SPARE15,
+    B_NETHERRACK, B_LAVA, B_GLOWSTONE, B_OBSIDIAN, B_PORTAL,
     B_COUNT
 };
 
@@ -13,5 +13,9 @@ enum {
 #define CHUNK_W        16
 #define BUILD_MAX_Y    28      // highest y the player may place into; keeps the eye inside the window
 #define WORLD_SEED     0x4B43u // "KC"
+// The Nether is the east strip of the same world: chunks from here on get Nether terrain, so
+// storage, tags and the window need nothing new. Walking east past it from the overworld works.
+// Limit: shared coordinate space; a real dimension id in the chunk id if the strip ever matters
+#define NETHER_X0      3072
 
 #endif

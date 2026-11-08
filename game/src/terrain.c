@@ -75,7 +75,35 @@ __attribute__((noinline)) static void octave2_row(gen_scratch *g, int32_t ax0, i
     lerp_x(g->a2 + 8, g->d2 + 8, 8, g->s3, h0[1], h0[2], h1[1], h1[2]);
 }
 
+// Nether columns: bedrock floor and roof, netherrack floor (y 1..10) and ceiling (y 24..30),
+// lava lakes up to y 5 in the low spots, glowstone hanging from the ceiling.
+// Limit: two vnoise calls per column (8 hashes), unlike the overworld's per-chunk lerps;
+// share corners per chunk like terrain_gen_chunk if Nether generation shows up in the frame time
+#define NETHER_LAVA_Y 5
+static void nether_gen_chunk(int32_t ax0, int32_t az0, int32_t rx0, int32_t rz0) {
+    for (int32_t lz = 0; lz < CHUNK_W; lz++)
+        for (int32_t lx = 0; lx < CHUNK_W; lx++) {
+            int32_t ax = ax0 + lx, az = az0 + lz;
+            int32_t x = (lx + rx0) & 63, z = (lz + rz0) & 63;
+            int32_t fl = 3 + ((vnoise(ax, az, 4, WORLD_SEED ^ 0x0E7u) * 8) >> 16);    // 3..10
+            int32_t cl = 30 - ((vnoise(ax, az, 3, WORLD_SEED ^ 0x0E8u) * 7) >> 16);   // 24..30
+            int32_t glow = (hash2(ax, az, WORLD_SEED ^ 0x0E9u) & 31u) == 0;
+            for (int32_t y = 0; y < WIN_Y; y++) {
+                uint8_t t = B_AIR;
+                if (y == 0 || y == WIN_Y - 1) t = B_BEDROCK;
+                else if (y <= fl || y >= cl) t = B_NETHERRACK;
+                else if (y <= NETHER_LAVA_Y) t = B_LAVA;
+                else if (glow && y >= cl - 2) t = B_GLOWSTONE;
+                hal_win_set(x, y, z, t);
+            }
+        }
+}
+
 void terrain_gen_chunk(int32_t cx, int32_t cz, int32_t win_x0, int32_t win_z0, void *scratch) {
+    if (cx * CHUNK_W >= NETHER_X0) {
+        nether_gen_chunk(cx * CHUNK_W, cz * CHUNK_W, cx * CHUNK_W - win_x0, cz * CHUNK_W - win_z0);
+        return;
+    }
     gen_scratch *g = (gen_scratch *)scratch;
     int32_t ax0 = cx * CHUNK_W, az0 = cz * CHUNK_W;
     // Window-relative, wrapped to 0..63: hardware adds WIN_ORIGIN, so this lands on

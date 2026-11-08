@@ -129,6 +129,11 @@ def brick():
             img[v][u] = 12 if mortar else (4 if rng.random() < 0.1 else 11)
     return img
 def bedrock(): return noise([0, 6, 5], [3, 3, 1])
+def netherrack(): return noise([11, 4, 0], [5, 2, 1])
+def lava():       return noise([13, 9, 11], [5, 2, 1])
+def glowstone():  return noise([9, 13, 12], [4, 2, 1])
+def obsidian():   return noise([0, 6], [5, 1])
+def portal():     return noise([14, 12], [3, 2])
 def missing():
     img = new()
     for v in range(S):
@@ -151,6 +156,11 @@ FACES = {
     8: same(sand),
     9: same(brick),
     10: same(bedrock),
+    11: same(netherrack),
+    12: same(lava),
+    13: same(glowstone),
+    14: same(obsidian),
+    15: same(portal),
 }
 for t in range(NTYPES):
     imgs = FACES.get(t) or same(missing)

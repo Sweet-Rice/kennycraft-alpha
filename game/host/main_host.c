@@ -407,6 +407,50 @@ static int cmd_play(void) {
         check(world_boot_nonce() != n2, "nonce changes again after the corner visit");
     }
 
+    printf("nether\n");
+    {
+        step_frames(30);
+        q16 ox = kc_me.pos[0], oz = kc_me.pos[2];
+        key(KEY_P, 1); key(KEY_P, 0);
+        step_frames(150);
+        int32_t nx = qfloor(kc_me.pos[0]), ny = qfloor(kc_me.pos[1]), nz = qfloor(kc_me.pos[2]);
+        uint8_t under = world_get(nx, ny - 1, nz);
+        printf("  landed at %d %d %d on block %u\n", (int)nx, (int)ny, (int)nz, (unsigned)under);
+        check(nx >= NETHER_X0 && kc_me.pos[2] == oz, "P takes you into the Nether strip, same z");
+        check(kc_me.on_ground && (under == B_NETHERRACK || under == B_LAVA), "you stand on netherrack or lava");
+        check(world_get(nx, WIN_Y - 1, nz) == B_BEDROCK, "the Nether has a bedrock roof");
+        save_frame("p9_nether");
+        key(KEY_P, 1); key(KEY_P, 0);
+        step_frames(150);
+        q16 dx = kc_me.pos[0] - ox;
+        check(dx >= 0 && dx < Q16_INT(16) && kc_me.pos[2] == oz && kc_me.on_ground,
+              "P again brings you back to where you left, standing");
+
+        // Portal: an obsidian frame 3 blocks ahead in z, standing along x, built on the ground.
+        int32_t px = qfloor(kc_me.pos[0]), py = qfloor(kc_me.pos[1]), pz = qfloor(kc_me.pos[2]) + 3;
+        for (int32_t v = 0; v < 6; v++)
+            for (int32_t a = -1; a < 5; a++) world_set(px + a, py + v, pz, B_AIR);
+        for (int32_t a = 0; a < 4; a++) world_set(px + a, py - 1, pz, B_OBSIDIAN);   // bottom rim
+        for (int32_t v = 0; v < 4; v++) { world_set(px, py + v, pz, B_OBSIDIAN); world_set(px + 3, py + v, pz, B_OBSIDIAN); }
+        world_set(px + 1, py + 3, pz, B_OBSIDIAN);
+        check(!portal_light(px + 1, py + 3, pz), "an unfinished frame does not light");
+        world_set(px + 2, py + 3, pz, B_OBSIDIAN);
+        check(portal_light(px + 2, py + 3, pz) && world_get(px + 1, py, pz) == B_PORTAL
+              && world_get(px + 2, py + 2, pz) == B_PORTAL, "the last obsidian block lights a 2 x 3 portal");
+        kc_me.yaw = 0; kc_me.pitch = 0;   // face +z, at the portal
+        step_frames(2);
+        save_frame("p10_portal");
+        kc_me.pos[0] = Q16_INT(px + 1) + Q16_HALF;
+        kc_me.pos[2] = Q16_INT(pz) + Q16_HALF;
+        step_frames(150);
+        check(qfloor(kc_me.pos[0]) >= NETHER_X0 && kc_me.on_ground, "walking into the portal takes you to the Nether");
+        key(KEY_P, 1); key(KEY_P, 0);
+        step_frames(150);
+        int32_t bx = qfloor(kc_me.pos[0]);
+        check(bx >= px + 1 && bx < NETHER_X0 && qfloor(kc_me.pos[2]) == pz,
+              "back in the overworld at the portal, and it does not fire again until you step out");
+    }
+
     printf("tag visibility\n");
     check(tag_leaks() == 0, "window settled: every y = 0 cell of every valid slot is bedrock");
     printf("  %llu frame swaps and %llu world_updates with tag-matched loads checked\n",

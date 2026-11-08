@@ -32,10 +32,19 @@ _Static_assert(WORLD_CHUNKS * CHUNK_W < 32767, "aim / place are int16");
 
 enum { H_W = 1, H_A = 2, H_S = 4, H_D = 8, H_JUMP = 16, H_LEFT = 32, H_RIGHT = 64, H_UP = 128, H_DOWN = 256 };
 
-static const uint8_t hotbar[9] = { B_GRASS, B_DIRT, B_STONE, B_COBBLE, B_LOG, B_LEAVES, B_PLANKS, B_SAND, B_BRICK };
+static q16 back_pos[3];   // where you left the overworld
+static int32_t landing;   // just travelled: hold still until the new window is in, then land
+
+static int32_t in_portal; // standing in a portal: it fires again only after you step out
+
+// Slot 6 is obsidian for portals (leaves were there; trees still grow them).
+static const uint8_t hotbar[9] = { B_GRASS, B_DIRT, B_STONE, B_COBBLE, B_LOG, B_OBSIDIAN, B_PLANKS, B_SAND, B_BRICK };
 
 // ---------------------------------------------------------------- collision -------------
-static int32_t solid(int32_t x, int32_t y, int32_t z) { return world_get(x, y, z) != B_AIR; }
+static int32_t solid(int32_t x, int32_t y, int32_t z) {
+    uint8_t t = world_get(x, y, z);
+    return t != B_AIR && t != B_PORTAL;   // you walk into portals
+}
 
 static int32_t box_hits(const q16 p[3]) {
     int32_t x0 = qfloor(p[0] - HALF_W), x1 = qfloor(p[0] + HALF_W - 1);
@@ -120,6 +129,66 @@ static void do_place(void) {
     if (world_get(p[0], p[1], p[2]) != B_AIR) return;
     if (box_overlaps_block(p[0], p[1], p[2])) return;
     world_set(p[0], p[1], p[2], hotbar[kc_me.selected]);
+    if (hotbar[kc_me.selected] == B_OBSIDIAN) portal_light(p[0], p[1], p[2]);
+}
+
+// ---------------------------------------------------------------- the Nether ------------
+// P: overworld -> the Nether strip 512 blocks past NETHER_X0 (same z), and back to where you
+// left. The window then reloads around the new spot over a few frames (one chunk generated
+// per frame), so physics waits for it; land() then finds standing room in that column.
+// P stays as a shortcut beside obsidian portals (portal_light).
+static void travel(void) {
+    if (kc_me.pos[0] < Q16_INT(NETHER_X0)) {
+        for (int32_t i = 0; i < 3; i++) back_pos[i] = kc_me.pos[i];
+        kc_me.pos[0] = Q16_INT(NETHER_X0 + 512) + Q16_HALF;
+    } else if (back_pos[0]) {
+        kc_me.pos[0] = back_pos[0];
+        kc_me.pos[2] = back_pos[2];
+    } else {
+        kc_me.pos[0] = Q16_INT(2048) + Q16_HALF;   // walked in from the side: back to spawn x
+    }
+    kc_me.vel_y = 0;
+    landing = 1;
+}
+
+// A portal frame is obsidian around a 2 wide x 3 tall hole of air (corners optional), standing
+// along x or z. The obsidian block just placed at (x, y, z) may finish one: try every frame
+// position that has it on the rim and fill the first complete one's hole with portal.
+// Limit: breaking the frame leaves the portal blocks; clear them in do_break if that matters
+int32_t portal_light(int32_t x, int32_t y, int32_t z) {
+    for (int32_t along_x = 0; along_x < 2; along_x++)
+        for (int32_t oy = -4; oy <= 0; oy++)
+            for (int32_t oa = -3; oa <= 0; oa++) {
+                int32_t x0 = x + (along_x ? oa : 0), z0 = z + (along_x ? 0 : oa), y0 = y + oy;
+                int32_t ok = 1;
+                for (int32_t v = 0; v < 5 && ok; v++)
+                    for (int32_t a = 0; a < 4 && ok; a++) {
+                        int32_t rim_a = a == 0 || a == 3, rim_v = v == 0 || v == 4;
+                        if (rim_a && rim_v) continue;                       // corners
+                        uint8_t t = world_get(x0 + (along_x ? a : 0), y0 + v, z0 + (along_x ? 0 : a));
+                        ok = (rim_a || rim_v) ? t == B_OBSIDIAN : t == B_AIR;
+                    }
+                if (!ok) continue;
+                for (int32_t v = 1; v < 4; v++)
+                    for (int32_t a = 1; a < 3; a++)
+                        world_set(x0 + (along_x ? a : 0), y0 + v, z0 + (along_x ? 0 : a), B_PORTAL);
+                return 1;
+            }
+    return 0;
+}
+
+// Lowest spot in the column (or the next ones east) with a solid non-lava block under 2 of air.
+static void land(void) {
+    int32_t x = qfloor(kc_me.pos[0]), z = qfloor(kc_me.pos[2]);
+    for (int32_t dx = 0; dx < 16; dx++)
+        for (int32_t y = 1; y + 1 < WIN_Y; y++)
+            if (solid(x + dx, y - 1, z) && world_get(x + dx, y - 1, z) != B_LAVA
+                && !solid(x + dx, y, z) && !solid(x + dx, y + 1, z)) {
+                kc_me.pos[0] += Q16_INT(dx);
+                kc_me.pos[1] = Q16_INT(y);
+                return;
+            }
+    kc_me.pos[1] = Q16_INT(WIN_Y - 3);   // no room anywhere: drop from the top
 }
 
 // ---------------------------------------------------------------- public ----------------
@@ -136,6 +205,9 @@ void game_init(void) {
     kc_me.selected = 0;
     kc_me.held = 0;
     kc_me.want_break = kc_me.want_place = 0;
+    back_pos[0] = back_pos[1] = back_pos[2] = 0;
+    landing = 0;
+    in_portal = 0;
     world_update(sx, sz);                 // first call generates the whole window
     update_aim();
 }
@@ -156,6 +228,7 @@ static void game_key(uint8_t b) {
     case KEY_BREAK: if (down) kc_me.want_break = 1; return;   // done in pick_and_edit()
     case KEY_PLACE: if (down) kc_me.want_place = 1; return;
     case KEY_E: case KEY_Y: case KEY_N: if (down) cr6_key(b & 0x7F); return;
+    case KEY_P: if (down && !landing) travel(); return;
     case MOUSE_LEFT:  if (down) kc_me.yaw = (kc_me.yaw - MOUSE_STEP) & (Q16_INT(ANG_FULL) - 1); return;
     case MOUSE_RIGHT: if (down) kc_me.yaw = (kc_me.yaw + MOUSE_STEP) & (Q16_INT(ANG_FULL) - 1); return;
     case MOUSE_UP:    if (down) kc_me.pitch = iclamp(kc_me.pitch + MOUSE_STEP, -PITCH_MAX, PITCH_MAX); return;
@@ -185,6 +258,13 @@ void move_player(q16 dt) {
     kc_me.pitch += look * (((k & H_UP) != 0) - ((k & H_DOWN) != 0));
     kc_me.pitch = iclamp(kc_me.pitch, -PITCH_MAX, PITCH_MAX);
 
+    if (landing) {                        // after travel(): wait for the window, then stand up
+        if (!world_ready() || !world_loaded(qfloor(kc_me.pos[0]), qfloor(kc_me.pos[2]))) return;
+        land();
+        landing = 0;
+        in_portal = 1;   // landed back in the portal you left by: step out before it fires
+    }
+
     // Walk direction from yaw only
     int32_t yaw = kc_me.yaw >> 16;
     q16 sy = qsin(yaw), cy = qcos(yaw);
@@ -213,6 +293,12 @@ void move_player(q16 dt) {
     }
     kc_me.pos[0] = iclamp(kc_me.pos[0], Q16(17.0), Q16(4079.0));
     kc_me.pos[2] = iclamp(kc_me.pos[2], Q16(17.0), Q16(4079.0));
+
+    // Portal: travel when you walk in (feet or head), not again until you step out.
+    int32_t px = qfloor(kc_me.pos[0]), py = qfloor(kc_me.pos[1]), pz = qfloor(kc_me.pos[2]);
+    int32_t now_in = world_get(px, py, pz) == B_PORTAL || world_get(px, py + 1, pz) == B_PORTAL;
+    if (now_in && !in_portal) travel();
+    in_portal = now_in;
 }
 
 void pick_and_edit(void) {
