@@ -418,7 +418,8 @@ static int cmd_play(void) {
         uint8_t under = world_get(nx, ny - 1, nz);
         printf("  landed at %d %d %d on block %u\n", (int)nx, (int)ny, (int)nz, (unsigned)under);
         check(nx >= NETHER_X0 && kc_me.pos[2] == oz, "P takes you into the Nether strip, same z");
-        check(kc_me.on_ground && (under == B_NETHERRACK || under == B_LAVA), "you stand on netherrack or lava");
+        check(kc_me.on_ground && under == B_OBSIDIAN && world_get(nx, ny, nz) == B_PORTAL
+              && world_get(nx, ny + 2, nz) == B_PORTAL, "you arrive standing in a lit return portal");
         check(world_get(nx, WIN_Y - 1, nz) == B_BEDROCK, "the Nether has a bedrock roof");
         const uint16_t *pal = host_palette();
         check((pal[0xF8] >> 8) > (pal[0xF8] & 15) && pal[0x50] == kc_palette[0x50],
@@ -449,7 +450,14 @@ static int cmd_play(void) {
         kc_me.pos[2] = Q16_INT(pz) + Q16_HALF;
         step_frames(150);
         check(qfloor(kc_me.pos[0]) >= NETHER_X0 && kc_me.on_ground, "walking into the portal takes you to the Nether");
-        key(KEY_P, 1); key(KEY_P, 0);
+        int32_t qx = qfloor(kc_me.pos[0]), qy = qfloor(kc_me.pos[1]), qz = qfloor(kc_me.pos[2]);
+        check(world_get(qx, qy, qz) == B_PORTAL, "the return portal from the first trip is reused");
+        step_frames(60);
+        check(qfloor(kc_me.pos[0]) >= NETHER_X0, "standing in the return portal does not send you back");
+        world_set(qx, qy, qz + 1, B_AIR); world_set(qx, qy + 1, qz + 1, B_AIR);   // room to step out
+        kc_me.pos[2] += Q16_INT(1);
+        step_frames(5);
+        kc_me.pos[2] -= Q16_INT(1);                                             // and back in
         step_frames(150);
         int32_t bx = qfloor(kc_me.pos[0]);
         check(bx >= px + 1 && bx < NETHER_X0 && qfloor(kc_me.pos[2]) == pz,

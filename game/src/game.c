@@ -192,6 +192,19 @@ int32_t portal_light(int32_t x, int32_t y, int32_t z) {
     return 0;
 }
 
+// Arriving in the Nether: stand the player in a lit portal (along x, interior x..x+1) so the
+// way home is right there. A portal already at the landing spot is reused.
+static void return_portal(void) {
+    int32_t x = qfloor(kc_me.pos[0]), y = qfloor(kc_me.pos[1]), z = qfloor(kc_me.pos[2]);
+    if (world_get(x, y, z) == B_PORTAL) return;
+    for (int32_t v = -1; v <= 3; v++)
+        for (int32_t a = -1; a <= 2; a++) {
+            int32_t rim_a = a == -1 || a == 2, rim_v = v == -1 || v == 3;
+            if (rim_a && rim_v) continue;                       // corners stay as they are
+            world_set(x + a, y + v, z, rim_a || rim_v ? B_OBSIDIAN : B_PORTAL);
+        }
+}
+
 // Lowest spot in the column (or the next ones east) with a solid non-lava block under 2 of air.
 static void land(void) {
     int32_t x = qfloor(kc_me.pos[0]), z = qfloor(kc_me.pos[2]);
@@ -280,6 +293,7 @@ void move_player(q16 dt) {
         land();
         landing = 0;
         in_portal = 1;   // landed back in the portal you left by: step out before it fires
+        if (kc_me.pos[0] >= Q16_INT(NETHER_X0)) return_portal();
     }
 
     // Walk direction from yaw only
