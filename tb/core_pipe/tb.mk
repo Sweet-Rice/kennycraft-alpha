@@ -42,6 +42,8 @@ endif
 
 CORE_PIPE       ?= 1
 CORE_PIPE_G     := -GPIPELINED="1'b$(CORE_PIPE)"
+# Every pipelined tb build also binds core_pipe_halt_check into core_pipe
+CORE_PIPE_TB    := $(CORE_PIPE_G) tb/core_pipe/core_pipe_halt_check.sv
 # Lines at the end of the multi-cycle trace that the pipelined run may not
 # have retired yet when the testbench calls $finish (tracediff_pipe.py --tail)
 CORE_PIPE_TAIL  ?= 2
@@ -63,8 +65,8 @@ CORE_PIPE_NAMES += $(1)
 
 tb-core-pipe-$(1): $(5)
 	@mkdir -p $(OBJ)
-	$(if $(6),$$(call CORE_PIPE_VL,$(6),$(3),$(2),$(4) $$(CORE_PIPE_G)), \
-	    $$(call CORE_VL,$(2),$(3)_pipe,$(4) $$(CORE_PIPE_G)))
+	$(if $(6),$$(call CORE_PIPE_VL,$(6),$(3),$(2),$(4) $$(CORE_PIPE_TB)), \
+	    $$(call CORE_VL,$(2),$(3)_pipe,$(4) $$(CORE_PIPE_TB)))
 	$(call core_pipe_bin,$(2),$(3),$(6)) $$(PLUSARGS)
 
 tracediff-core-pipe-$(1): tb-core-$(1) tb-core-pipe-$(1)
