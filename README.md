@@ -1,6 +1,6 @@
 # KennyCraft
 
-An 8-lane SIMD GPU grown from a multi-cycle RV32I core, running a voxel Minecraft on one Arty A7-100T. HackUTD 2026.
+An 8-lane SIMD TPU (Tai Processing Unit) grown from a multi-cycle RV32I core, running a voxel game on one Arty A7-100T. HackUTD 2026.
 
 This README describes the current state of the files in this repository. The
 [GitHub wiki](https://github.com/Sweet-Rice/kennycraft-alpha/wiki) holds the
