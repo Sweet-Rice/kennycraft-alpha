@@ -22,7 +22,7 @@ Every chip target also runs `tools/stack_check.sh`: the worst-case stack depth o
 | `src/kc_hal.h` | The only platform switch. Chip: memory map + MMIO from Interfaces v1.0. Host: `host/hal_host.c` |
 | `src/fixed.[ch]` | Q16.16, `qrcp` (1/x: computed seed + Newton, branch-free, no table), `qsin`, `sel()` |
 | `src/trace.[ch]` | `ray_setup` + `kc_trace` with the exact VTRACE contract. `vtrace_ref` = C reference for one ray |
-| `src/render.[ch]` | Ray-tracing kernel. 4x2 block per lane pass (D15), blocks in rows; frame state and the ray in registers, one LBU + one SB per pixel. Pixel byte per spec |
+| `src/render.[ch]` | Ray-tracing kernel. 4x2 block per lane pass (D15), blocks in rows; frame state and the ray in registers, one LBU + one SB per pixel. Each VTRACE walk overlaps the next block's ray setup (asynchronous VTRACE), and blocks under the hotbar are not traced. Pixel byte per spec |
 | `src/entity.[ch]` | Villager, pig and zombie box models (flat colors) that walk to a target; drawn by the ray tracer |
 | `src/kc_libc.c` | memcpy/memset for the freestanding chip build |
 | `src/kc_lanes.h` | LANEID/LMASK/BALLOT/MASKGET/MASKSET/MASKALL: software for 1 lane, `.insn` for 8 |
@@ -86,13 +86,25 @@ It saves `m0_models` and `m1_trader`, `m1_contractor`,
 
 ## Shared state Kenny added
 
-`kc_rparams` at 0x1000_0030 (inside "reserved shared state"): width, height, max_steps, sky_k, fog_d[3]. Kernel-only, set by the game.
+`kc_rparams` at 0x1000_0030 (inside "reserved shared state"): width, height, max_steps, sky_k, fog_d[3], and the hotbar rectangle `hud_x0/x1/y0/y1` (80 bytes, ends at 0x1000_0080). Kernel-only, set by the game.
 
 ## Numbers
 
 - Software DDA loop (`vtrace_ref`): 53 RV32I instructions per step on `kc_chip8.elf`, 49 on `kc_chip.elf` (was 109 / 102), counted in `llvm-objdump -d`.
 - 160×120 with a 16-step cap is about 207k steps per frame, roughly 11M instructions. At about 4 CPI on a 50 MHz multi-cycle core that's ~1 fps, which matches the Stage 0 plan.
 - The default cap is 64 (`-DKC_MAX_STEPS`). At that cap a frame is 302k steps.
+- Stage 2 frame time, measured with `make tb-top-t_top_frame TOP_ELF=kc_chip8_vtrace TOP_SWAPS=6` (add `PIPELINED=1` for the pipelined core): the CYCLES between FB_SWAPs at the spawn pose, 160×120, no entities. fps at 50 MHz.
+
+| Change | Multi-cycle core | Pipelined core |
+|---|---|---|
+| Before (main with the 2-cycle step, async VTRACE, FB32 and LSU coalescing) | 814,710 cycles, 61.4 fps | 306,152 cycles, 163.3 fps |
+| + skip the blocks under the hotbar | 801,904 | 304,082 |
+| + overlap each walk with the next block's ray setup | 774,913 | 257,751 |
+| + fetch overlap (multi-cycle core) and 3-step QRCP | **591,378 cycles, 84.5 fps** | **253,550 cycles, 197.2 fps** |
+
+  Every step leaves the pixels unchanged: all `kc_host` outputs are byte-identical, and the golden checks pass at Stages 0/1/2.
+- How the kernel uses the hardware: the hotbar's 9 opaque slots are drawn over every frame, so `write_camera` passes their rectangle in `kc_rparams` and covered block rows run the block loop over two ranges (no per-block test). With asynchronous VTRACE (`VTRACE x0` starts the walk, `VGET 3` and `VGET 1` wait for it), the kernel builds the next block's ray in registers while the walk runs, reads this walk's result, sets and starts the next ray, and only then shades and stores this block. A row's first block is started before the loop and its last block is shaded after it, which keeps the fog thresholds and the face table in registers; a version with first/last flags in the loop spilled four values per pass and was slower than not overlapping at all.
+- With 4 entities on screen the frame is dominated by `ent_composite` / `ent_box_hit`, not by the world rays; that is the next thing to speed up.
 
 ## Memory budget (data memory, 32 KB)
 

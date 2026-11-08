@@ -103,7 +103,7 @@ register writes as the multi-cycle core. Only CPI changes:
 | MUL family | 2 |
 | Taken branch, JAL, JALR, LMASK, MASKSET, MASKALL, DIF, DELSE, DENDIF (flush 2) | 3 |
 | Load or store, N active lanes | N + 1 (+3 per lane for world LW/SW and texture LW) |
-| QRCP | 6 after the previous retirement (8 after a flush) |
+| QRCP | 5 after the previous retirement (7 after a flush) |
 | Load-use | +1 bubble |
 | VTRACE | start until done, plus 1 |
 
