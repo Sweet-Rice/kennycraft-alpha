@@ -3,7 +3,7 @@
 //
 //   clk (E3, 100 MHz) -> BUFG -> clk_gen  50 MHz core, 25 MHz pixel
 //                             -> ddr_clk  166.67 / 200 MHz for the MIG
-//   kc_soc      core, imem, dmem, GPU memory, decoder, MMIO, UART, textures
+//   kc_soc      core, imem, dmem, decoder, MMIO, UART, textures
 //               (EXT_WORLD = 1: its world port goes through world_remap)
 //   display     framebuffers, palette, VGA timing -> Pmod VGA on JA + JB
 //   world_remap window origin and slot-valid between the core / VTRACE and

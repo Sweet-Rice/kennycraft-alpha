@@ -1,8 +1,8 @@
 // t_mmio: runs sw/t_mmio.S against the harness's display and chunk-engine
 // models and checks every MMIO register (LEDS, FB_MODE, FB_SWAP, FRAME_COUNT,
 // VSYNC, CYCLES, UART_STATUS/RX/TX, DDR register forwarding with a CHUNK_CMD
-// stall), the framebuffer, palette, world and texture byte regions and the
-// GPU memory region (word BRAM, byte enables, no aliasing past 68 KB).
+// stall), the framebuffer, palette, world and texture byte regions, and that
+// 0x7000_0000 (the removed GPU memory) is unmapped.
 module t_mmio_tb;
     parameter string IMEM_HEX = "";
     parameter string DMEM_HEX = "";
@@ -75,18 +75,11 @@ module t_mmio_tb;
         expect32("world LW (4-bit stub)", dmem_rd(RES + 68), 32'h0F0E_0F0C);
         expect32("texture LBU (4-bit stub)", dmem_rd(RES + 72), 32'h0A);
         expect32("world LH", dmem_rd(RES + 76), 32'h0F0C);
-        expect32("gpu LW at GPU_BASE", dmem_rd(RES + 80), 32'h1234_5678);
-        expect32("gpu LW last word", dmem_rd(RES + 84), 32'hCAFE_F00D);
-        expect32("gpu backdoor last word", dut.u_gpu_hi.mem[1023], 32'hCAFE_F00D);
-        expect32("gpu LW after SB+SH", dmem_rd(RES + 88), 32'h8001_8044);
-        expect32("gpu LBU", dmem_rd(RES + 92), 32'h0000_0080);
-        expect32("gpu LB sign extends", dmem_rd(RES + 96), 32'hFFFF_FF80);
-        expect32("gpu LHU", dmem_rd(RES + 100), 32'h0000_8001);
-        expect32("gpu LH sign extends", dmem_rd(RES + 104), 32'hFFFF_8001);
-        expect32("gpu +0x11000 load (unmapped)", dmem_rd(RES + 108), 32'h0);
-        expect32("gpu +0x20000 load (unmapped)", dmem_rd(RES + 112), 32'h0);
-        expect32("gpu offset 0 not aliased", dmem_rd(RES + 116), 32'h1234_5678);
-        expect32("ERR after gpu accesses", {29'b0, dut.u_mmio.err}, 32'd0);
+        expect32("0x7 LW after SW (unmapped)", dmem_rd(RES + 80), 32'h0);
+        expect32("0x7 LW +0x10FFC (unmapped)", dmem_rd(RES + 84), 32'h0);
+        expect32("0x7 LBU after SB (unmapped)", dmem_rd(RES + 88), 32'h0);
+        expect32("0x7 LH after SH (unmapped)", dmem_rd(RES + 92), 32'h0);
+        expect32("ERR after 0x7 accesses", {29'b0, dut.u_mmio.err}, 32'd0);
 
         if (errors != 0) $fatal(1, "FAIL: t_mmio, %0d mismatches", errors);
         $display("PASS: t_mmio");
