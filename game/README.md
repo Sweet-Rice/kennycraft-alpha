@@ -225,11 +225,11 @@ This differs from ordinary floor-following movement under an awning.
 - Performance overlay: press **F** in game (`kc.py` and `kc_live.py` send it) for frames per second, top right, from the last frame's CYCLES (20 ns ticks). It costs nothing while off. It is built for the Stage 2 chip and the laptop only: the Stage 0/1 chip builds have no code memory to spare, and `KC_FIXED_DT` builds keep CYCLES off the screen.
 - Software DDA loop (`vtrace_ref`): 53 RV32I instructions per step on `kc_chip8.elf`, 49 on `kc_chip.elf`, counted in `llvm-objdump -d`.
 - The default cap is 64 (`-DKC_MAX_STEPS`). At that cap the 160×120 spawn shot (`g0_spawn`) is 297,672 steps.
-- Stage 2 frame time, measured with `make tb-top-t_top_frame TOP_ELF=kc_chip8_vtrace TOP_SWAPS=6` (add `PIPELINED=1` for the pipelined core): the core cycles between FB_SWAPs at the spawn pose, no entities. The multi-cycle core (`top_s2`) runs at 50 MHz, the pipelined core at 50 MHz (`top_s2p`) or 100 MHz (`top_s2p100`).
+- Stage 2 frame time, measured with `make tb-top-t_top_frame TOP_ELF=kc_chip8_vtrace TOP_SWAPS=6` (add `PIPELINED=1` for the pipelined core): the core cycles between FB_SWAPs at the spawn pose, no entities. 160×120 measured at main 12faff7; 320×240 at 7315b19. The multi-cycle core (`top_s2`) runs at 50 MHz, the pipelined core at 50 MHz (`top_s2p`) or 100 MHz (`top_s2p100`).
 
 | Frame | Multi-cycle core, 50 MHz | Pipelined core, 50 MHz | Pipelined core, 100 MHz |
 |---|---|---|---|
-| 160×120 | 596,341 cycles, 83.8 fps | 246,643 cycles, 202.7 fps | 405.4 fps |
+| 160×120 | 596,381 cycles, 83.8 fps | 246,677 cycles, 202.7 fps | 405.4 fps |
 | 320×240 | 2,296,081 cycles, 21.8 fps | 941,479 cycles, 53.1 fps | 106.2 fps |
 
 - On the board (`top_s2p100`, 160×120) the 60 Hz display is the limit: 59.4 new frames/s while turning.

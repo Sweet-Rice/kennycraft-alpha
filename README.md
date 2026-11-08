@@ -304,11 +304,11 @@ core clock WNS +0.100 ns at 10 ns, hold +0.030 ns, every clock met;
 
 Frames of the current game in Verilator (`t_top_frame` at the spawn pose,
 core cycles between FB_SWAPs; the two cores' 160×120 frames are
-byte-identical):
+byte-identical; 160×120 measured at main 12faff7, 320×240 at 7315b19):
 
 | Frame | Multi-cycle core (`top_s2`, 50 MHz) | Pipelined core (`top_s2p100`, 100 MHz) |
 | --- | --- | --- |
-| 160×120 | 596,341 cycles = 83.8 fps | 246,643 cycles = 405.4 fps |
+| 160×120 | 596,381 cycles = 83.8 fps | 246,677 cycles = 405.4 fps |
 | 320×240 | 2,296,081 cycles = 21.8 fps | 941,479 cycles = 106.2 fps |
 
 On the board (Arty A7-100T, 160×120 game): it boots (`kc: boot`,
