@@ -17,7 +17,7 @@
 //        lane, uniform checks, divergence stack, mask, lane control, ray
 //        unit configuration and start, misaligned check
 //   MEM  the only stage that takes more than one cycle; EX, ID and IF wait
-//        for it. QRCP 3 cycles (two steps, result), VTRACE rd
+//        for it. QRCP 8 cycles (seven qrcp_pipe stages, result), VTRACE rd
 //        (rd != x0) until done plus one, loads and stores with an active
 //        lane: one cycle per LSU bus access (one per group of coalesced
 //        lanes) plus one, except a store whose last group goes to dmem or
@@ -312,7 +312,7 @@ module core_pipe
     logic             e_vget, e_stash, e_vtrace, e_nowr;
     logic             m_is_load, m_is_store, m_mul, m_qr, m_vt;
     logic [2:0]       m_funct3, m_cnt;
-    logic             qr_s0, qr_s1, vt_wr;
+    logic             qr_s0, vt_wr;
 
     // Forwarding selects, registered: fm* = m_wr && (m_rd == e_rs*) and
     // fw* = (w_rd == e_rs*) one cycle early. m_rd, m_wr's terms and e_rs*
@@ -345,7 +345,7 @@ module core_pipe
             .res_imm(e_res_imm), .is_lane(e_is_lane), .lane_y, .ray_en(e_vget),
             .ray_y(ray_y[i]), .stash(e_stash),
             .rs1(l_rs1[i]), .alu_y(l_alu[i]), .cmp(l_cmp[i]),
-            .mul_op(m_funct3[1:0]), .m_is_load, .m_mul, .qr_s0, .qr_s1, .m_qr,
+            .mul_op(m_funct3[1:0]), .m_is_load, .m_mul, .qr_s0, .m_qr,
             .vt_wr, .vt_y(vt_y[i]), .ld_cap(l_cap[i]), .ld_value(l_ldv[i]), .m_we(m_we[i]),
             .res(l_res[i]), .m_rs2(l_mrs2[i]), .wdata(l_wdata[i]),
             .w_we(w_we[i]), .w_rd
@@ -614,9 +614,9 @@ module core_pipe
         .u_taken
     );
 
-    // QRCP: two steps (qrcp_pipe), then the result in the third cycle.
+    // QRCP: seven qrcp_pipe stages, then the result in the eighth cycle
+    // (m_cnt stops at 7).
     assign qr_s0  = m_valid && m_qr && (m_cnt == 3'd0);
-    assign qr_s1  = m_valid && m_qr && (m_cnt == 3'd1);
 
     // A load or store is done when the bus LSU has no lane left (the cycle
     // after its last access: a load's data arrives then) and the dmem window
@@ -636,7 +636,7 @@ module core_pipe
     always_comb begin
         if (m_halt)          m_done = 1'b1;
         else if (m_mem)      m_done = (lsu_idle || st_fast) && win_fin;
-        else if (m_qr)       m_done = (m_cnt == 3'd2);
+        else if (m_qr)       m_done = (m_cnt == 3'd7);
         else if (m_vt)       m_done = m_vt_tail;
         else                 m_done = 1'b1;
     end

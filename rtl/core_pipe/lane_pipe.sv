@@ -15,9 +15,10 @@
 //        which run in MEM on registered operands
 //   MEM  res and the store data / multiplier operand rs2. MUL (the product
 //        of res and m_rs2, combinational, in MEM's one cycle), QRCP
-//        (qrcp_pipe: two steps, y valid in the third cycle), the VTRACE
-//        result at the ray unit's done, and the LSU's load data (ld_cap /
-//        ld_value, held in ld_hold). fwd is MEM's result for forwarding
+//        (qrcp_pipe: seven register stages, y valid in the eighth cycle),
+//        the VTRACE result at the ray unit's done, and the LSU's load data
+//        (ld_cap / ld_value, held in ld_hold). fwd is MEM's result for
+//        forwarding
 //        (never a load's or a MUL's: the core stalls load-use and mul-use
 //        instead); wdata is the value written back (the last load lane's
 //        data arrives directly in MEM's last cycle)
@@ -67,7 +68,6 @@ module lane_pipe
     input  logic        m_is_load,
     input  logic        m_mul,        // MEM holds a MUL
     input  logic        qr_s0,        // MEM, QRCP cycle 0 (x = res)
-    input  logic        qr_s1,        // MEM, QRCP cycle 1
     input  logic        m_qr,         // MEM holds a QRCP
     input  logic        vt_wr,        // MEM, VTRACE done: res = vt_y
     input  logic [31:0] vt_y,
@@ -150,12 +150,12 @@ module lane_pipe
     mul_pipe u_mul (.op(mul_op), .a(res), .b(m_rs2), .result(mul_y));
 
     if (HAS_QRCP) begin : g_qrcp
-        qrcp_pipe u_qrcp (.clk, .s0(qr_s0), .s1(qr_s1), .x(res), .y(qr_y));
+        qrcp_pipe u_qrcp (.clk, .s0(qr_s0), .x(res), .y(qr_y));
     end else begin : g_no_qrcp
         assign qr_y = 32'd0;
         /* verilator lint_off UNUSEDSIGNAL */
         logic unused_qr;
-        assign unused_qr = qr_s0 ^ qr_s1;
+        assign unused_qr = qr_s0;
         /* verilator lint_on UNUSEDSIGNAL */
     end
 
