@@ -110,9 +110,9 @@ static inline __attribute__((always_inline)) void frame(int32_t with_ents, int32
     // one SLT each. fog_d > 0 (kc_set_max_steps); the empty asm stops clang folding the - 1
     // back into SLT + XORI.
     // Fog dithering: blocks are 4x2 at even coordinates, so a pixel's checkerboard parity
-    // (x + y) & 1 is fixed per lane. Odd lanes reach each fog level a quarter band sooner, so
-    // each hard fog ring becomes a thin checkerboard strip, at no per-pixel cost.
-    q16 dth = sel((lx ^ ly) & 1, (p->fog_d[1] - p->fog_d[0]) >> 2, 0);
+    // (x + y) & 1 is fixed per lane. Odd lanes reach each fog level half a band sooner, so
+    // each hard fog ring becomes a wide checkerboard strip, at no per-pixel cost.
+    q16 dth = sel((lx ^ ly) & 1, (p->fog_d[1] - p->fog_d[0]) >> 1, 0);
     q16 f0 = p->fog_d[0] - 1 - dth, f1 = p->fog_d[1] - 1 - dth, f2 = p->fog_d[2] - 1 - dth;
     __asm__("" : "+r"(f0), "+r"(f1), "+r"(f2));
     q16 r4x = 4 * c->right_step[0], r4z = 4 * c->right_step[2];
