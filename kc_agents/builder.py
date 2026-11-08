@@ -61,7 +61,7 @@ class Contract:
         ox, oz = origin
         grounds = sorted(chip.ground(ox + x, oz + z) for x in range(zone[0]) for z in range(zone[2]))
         self.origin = (ox, grounds[len(grounds) // 2] + 1, oz)     # floor = median ground + 1
-        self.state = "SURVEY"
+        self.state, self.supplied = "SURVEY", {}
         self.target, self.cmds, self.price, self.builds = {}, [], 0, 0
         self.rnd = random.Random(seed)
 
@@ -104,9 +104,14 @@ class Contract:
         counts = {}
         for b in target.values():
             counts[BLOCKS[b]] = counts.get(BLOCKS[b], 0) + 1
-        self.rule = bankmod.rule_price(len(target) - breaks, breaks)
+        # Blocks the player already owns (bought from the trader) are used first: half off each.
+        have = getattr(self.bank, "materials", lambda: {})()
+        self.supplied = {k: min(n, have.get(k, 0)) for k, n in counts.items() if k != "air" and have.get(k)}
+        discount = sum(self.supplied.values()) // 2
+        self.rule = max(5, bankmod.rule_price(len(target) - breaks, breaks) - discount)
         return {"ok": True, "name": name, "cells": counts, "commands": len(self.cmds),
-                "rule_price_kcn": self.rule, "player_balance_kcn": self.bank.balance("player")}
+                "rule_price_kcn": self.rule, "player_materials_used": self.supplied,
+                "materials_discount_kcn": discount, "player_balance_kcn": self.bank.balance("player")}
 
     def quote(self, price=0, message=""):
         if self.state != "PLANNED":
@@ -152,6 +157,8 @@ class Contract:
         if self.state != "VERIFIED":
             return {"error": "inspect must pass first"}
         self.bank.release(self.id, self.price)
+        if self.supplied:               # ponytail: a refunded job keeps the player's blocks
+            self.bank.use_materials(self.supplied)
         self.state = "PAID"
         return {"paid_kcn": self.price, "fee_kcn": round(self.price * bankmod.FEE)}
 
@@ -182,18 +189,19 @@ NEXT = {"SURVEY": "submit_plan", "PLANNED": "quote", "FUNDED": "build", "BUILT":
         "VERIFIED": "request_payment"}      # the tool a stalled contract is waiting on
 
 
-def run(request, contract, chat, max_steps=20, log=print):
-    """The agent loop. Returns the model's last message to the player."""
-    messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": request}]
+def run(request, contract, chat, max_steps=20, log=print, system=SYSTEM, tools=TOOLS, next_tool=NEXT):
+    """The agent loop (the builder's by default; the banker passes its own prompt and tools).
+    Returns the model's last message to the player."""
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": request}]
     nudges = 0
     for _ in range(max_steps):
-        reply = chat(messages, TOOLS)
+        reply = chat(messages, tools)
         messages.append({"role": "assistant", "content": reply["content"], "tool_calls": [
             {"id": c["id"], "type": "function",
              "function": {"name": c["name"], "arguments": json.dumps(c["args"])}} for c in reply["tool_calls"]]
             or None})
         if not reply["tool_calls"]:
-            nxt = NEXT.get(contract.state)
+            nxt = next_tool.get(contract.state)
             if not nxt or nudges >= 2:
                 break
             nudges += 1         # it said what it would do instead of doing it

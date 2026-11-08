@@ -77,6 +77,19 @@ class TestContract(unittest.TestCase):
         door = c._abs(2, 1, 0)
         self.assertEqual(c.chip.get(*door), 0)
 
+    def test_own_materials_cut_the_price_and_are_used_on_payment(self):
+        c, bank = contract()
+        full = c.submit_plan("hut", HUT)["rule_price_kcn"]
+        c2, bank2 = contract()
+        bank2.items = {"brick": 30, "planks": 4}
+        r = c2.submit_plan("hut", HUT)
+        self.assertEqual(r["player_materials_used"], {"brick": 25, "planks": 4})
+        self.assertEqual(r["rule_price_kcn"], full - 14)
+        for step in (lambda: c2.quote(r["rule_price_kcn"], "ok"), c2.build, c2.inspect, c2.request_payment):
+            step()
+        self.assertEqual(c2.state, "PAID")
+        self.assertEqual(bank2.items, {"brick": 5, "planks": 0})
+
     def test_floating_build_is_rejected(self):
         c, _ = contract()
         up = [dict(op, at=[op["at"][0], op["at"][1] + 3, op["at"][2]]) for op in HUT]
