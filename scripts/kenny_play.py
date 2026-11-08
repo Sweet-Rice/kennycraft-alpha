@@ -2,7 +2,8 @@
 """Play on the board with one command: Nemotron Nano for the villagers (llama-server, if it isn't
 running), kc-host on the board's UART (dashboard, Nemotron agents, villagers spawned when the chip
 links), the dashboard in the browser, and the kenny_keys window for keyboard, mouse and villager
-chat. Quit the keys window to stop it all.
+chat. Quit the keys window to stop it all. Any kc-host, kenny_keys or kenny_play already running
+is stopped first.
 
     pip install -r host/requirements.txt pygame-ce
     python scripts/kenny_play.py                  COM3, demo village (the board's game built KC_DEMO=1)
@@ -27,6 +28,29 @@ NANO = ['-hf', 'nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M', '--device', 'Vulk
         '-c', '8192', '-np', '4', '--jinja', '--host', '127.0.0.1', '--port', '8080']   # kc_agents/README.md
 
 
+def stop_old():
+    """Stop any kc-host, kenny_keys or kenny_play already running, so this one gets the port."""
+    pattern = r'kchost\.py|kenny_keys\.py|kenny_play\.py'
+    if os.name == 'nt':
+        ps = ("Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match '" + pattern +
+              f"' -and $_.ProcessId -ne {os.getpid()} -and $_.Name -like 'python*' }} | "
+              "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; $_.ProcessId }")
+        out = subprocess.run(['powershell', '-NoProfile', '-Command', ps], capture_output=True, text=True).stdout
+        pids = out.split()
+    else:
+        out = subprocess.run(['pgrep', '-f', rf'python[^ ]* .*({pattern})'], capture_output=True, text=True).stdout
+        pids = [p for p in out.split() if int(p) != os.getpid()]
+        for p in pids:
+            os.kill(int(p), 15)
+    if pids:
+        print(f'kenny_play: stopped the running copies ({", ".join(pids)})')
+    for _ in range(20):
+        if not listening(8000):
+            return
+        time.sleep(0.5)
+    sys.exit('kenny_play: port 8000 is still taken by something other than kc-host')
+
+
 def listening(port):
     with socket.socket() as s:
         s.settimeout(0.3)
@@ -38,8 +62,7 @@ def main():
     ap.add_argument('--port', default='COM3' if os.name == 'nt' else '/dev/ttyUSB1', help='board UART (default %(default)s)')
     ap.add_argument('--no-demo', action='store_true', help='the board runs a game built without KC_DEMO')
     args = ap.parse_args()
-    if listening(8000):
-        sys.exit('kenny_play: port 8000 is taken: another kc-host is running, stop it first')
+    stop_old()
     started = []
     try:
         if not listening(8080):
