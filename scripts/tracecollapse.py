@@ -79,27 +79,31 @@ class Trace:
 
 
 def find_loop(history, head):
-    """The loop around `head`: the lines since its previous occurrence."""
+    """The loop around `head`: the lines since its previous occurrence.
+
+    A PC recurs only through a backward jump, so any recurrence within MAX_BODY lines
+    is a loop, wherever `head` sits in it (the caller still requires an MMIO read).
+    The loop's own head may come before the MMIO load, as in `li t4, MMIO; lw; bnez`.
+    """
     body = []
     for line, pc, address in reversed(history):
         body.append((pc, address))
         if pc == head:
-            # A loop jumps back to its head; straight-line code reaching it again doesn't.
-            return body if len(body) > 1 and body[0][0] > head else None
+            return body if len(body) > 1 else None
         if len(body) > MAX_BODY:
             return None
     return None
 
 
 def find_loop_ahead(trace, head):
-    """The loop starting at `head` in trace's next lines: up to its next occurrence."""
+    """The loop through `head` in trace's next lines: up to its next occurrence."""
     body = []
     for k in range(MAX_BODY):
         record = trace.peek(k)
         if record is None:
             return None
         if k and record[1] == head:
-            return body if body[-1][0] > head else None
+            return body
         body.append((record[1], record[2]))
     return None
 
