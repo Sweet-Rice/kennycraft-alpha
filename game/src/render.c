@@ -33,15 +33,18 @@ static inline uint32_t lane_mask_of(int32_t c) {
 
 // One axis of ray_setup_frac, in registers: tMax and tDelta for direction component d and
 // origin fraction frac << 15. Bit-exact with trace.h.
+// tDelta = 1/|d| for |d| = ad, 0x7FFF_FFFF for ad = 0. qrcp(0) is Q16_BIG = 0x4000_0000
+// (fixed.c, and QRCP is bit-exact with it), so OR-ing in 0x3FFF_FFFF gives exactly TDELTA_INF.
+static inline __attribute__((always_inline)) uint32_t axis_td(q16 ad) {
+    return (uint32_t)qrcp(ad) | (lane_mask_of(ad == 0) >> 2);
+}
 typedef struct { uint32_t tmax, td; } kc_axis;
 static inline __attribute__((always_inline)) kc_axis axis_setup(uint32_t frac15, q16 d) {
     int32_t  m  = d >> 31;                            // all ones when stepping negative
     uint32_t p  = ~(uint32_t)m;                       // all ones when stepping positive
     q16      ad = (d ^ m) - m;                        // |d|
     kc_axis  a;
-    // tDelta = 1/|d|, 0x7FFF_FFFF for |d| = 0. qrcp(0) is Q16_BIG = 0x4000_0000 (fixed.c,
-    // and QRCP is bit-exact with it), so OR-ing in 0x3FFF_FFFF gives exactly TDELTA_INF.
-    a.td = (uint32_t)qrcp(ad) | (lane_mask_of(ad == 0) >> 2);
+    a.td = axis_td(ad);
     // Distance to the first boundary << 15: frac for d < 0, 1 - frac for d >= 0.
     // (x ^ 0x7FFF_FFFF) + 1 = 2^31 - x, i.e. (1.0 - frac) << 15.
     uint32_t f15 = (frac15 ^ (p >> 1)) - p;
@@ -171,10 +174,13 @@ static inline __attribute__((always_inline)) void frame(int32_t with_ents) {
             int32_t fog = (f0 < t) + (f1 < t) + (f2 < t);
             int32_t col = sel(hit, face_pix[res & 255u] | fog, sky);
             if (with_ents && (bx + 3 >= ex0) & (bx <= ex1)) {
-                // Rebuilt here rather than kept from the VSET: keeping the 8 fields alive across
+                // Recomputed here rather than kept from the VSET: keeping the ray alive across
                 // the loop spills the rest of it on every block, entity or not.
-                kc_ray re = block_ray(cell, fx, fz, ay, ysign, dx, dz);
-                col = ent_composite(bx + lx, py, o, &re, sel(hit, t, 0x7FFFFFFF), (uint8_t)col);
+                // Only the tDeltas and step signs, in registers (no kc_ray through memory).
+                q16 mx = dx >> 31, mz = dz >> 31;
+                uint32_t sg = ((uint32_t)dx >> 31) | ysign | (((uint32_t)dz >> 31) << 2);
+                col = ent_composite(bx, by, (q16)axis_td((dx ^ mx) - mx), (q16)ay.td,
+                                    (q16)axis_td((dz ^ mz) - mz), sg, sel(hit, t, 0x7FFFFFFF), (uint8_t)col);
             }
             hal_fb_put(fb, (uint8_t)col);
             bx = nbx; fb = nfb; dx = ndx; dz = ndz;
@@ -185,10 +191,13 @@ static inline __attribute__((always_inline)) void frame(int32_t with_ents) {
             int32_t fog = (f0 < t) + (f1 < t) + (f2 < t);
             int32_t col = sel(hit, face_pix[res & 255u] | fog, sky);
             if (with_ents && (bx + 3 >= ex0) & (bx <= ex1)) {
-                // Rebuilt here rather than kept from the VSET: keeping the 8 fields alive across
+                // Recomputed here rather than kept from the VSET: keeping the ray alive across
                 // the loop spills the rest of it on every block, entity or not.
-                kc_ray re = block_ray(cell, fx, fz, ay, ysign, dx, dz);
-                col = ent_composite(bx + lx, py, o, &re, sel(hit, t, 0x7FFFFFFF), (uint8_t)col);
+                // Only the tDeltas and step signs, in registers (no kc_ray through memory).
+                q16 mx = dx >> 31, mz = dz >> 31;
+                uint32_t sg = ((uint32_t)dx >> 31) | ysign | (((uint32_t)dz >> 31) << 2);
+                col = ent_composite(bx, by, (q16)axis_td((dx ^ mx) - mx), (q16)ay.td,
+                                    (q16)axis_td((dz ^ mz) - mz), sg, sel(hit, t, 0x7FFFFFFF), (uint8_t)col);
             }
             hal_fb_put(fb, (uint8_t)col);
         }

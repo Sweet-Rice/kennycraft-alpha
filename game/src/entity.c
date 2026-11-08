@@ -94,16 +94,16 @@ void entity_tick(q16 dt) {
 void entity_clear(void) { nents = 0; }
 int32_t entity_count(void) { return nents; }
 
-static void screen_rect(ent_box *b, const q16 e[3]) {
+static void screen_rect(ent_box *b) {
     const kc_rparams *p = KC_RP;
     int32_t W = p->width, H = p->height, w2 = W / 2, h2 = H / 2;
     q16 focal = p->focal;
-    // A corner's coordinate on axis a is lo[a] - e[a] or hi[a] - e[a], so each of the 9
+    // A corner's coordinate on axis a is lo[a] or hi[a] (eye-relative), so each of the 9
     // camera-axis products has only two values per box: compute those 18 once and add them up
     // per corner, in the same order as before (identical sums).
     q16 px[3][2], py[3][2], pz[3][2];
     for (int32_t a = 0; a < 3; a++) {
-        q16 rl = b->lo[a] - e[a], rh = b->hi[a] - e[a];
+        q16 rl = b->lo[a], rh = b->hi[a];             // eye-relative already
         q16 ra = p->right[a], ua = p->up[a], fa = KC_CAM->forward[a];
         px[a][0] = qmul(rl,ra); px[a][1] = qmul(rh,ra);
         py[a][0] = qmul(rl,ua); py[a][1] = qmul(rh,ua);
@@ -155,14 +155,14 @@ void entity_prepare(void) {
             default: rx0=x0; rz0=z0; rx1=x1; rz1=z1; break;
             }
             ent_box *b = &ent_boxes[ent_nboxes++];
-            b->lo[0] = ents[i].pos[0] + imin(rx0,rx1)*4096 - Q16_INT(cx);
-            b->hi[0] = ents[i].pos[0] + imax(rx0,rx1)*4096 - Q16_INT(cx);
-            b->lo[1] = ents[i].pos[1] + p->y0*4096;
-            b->hi[1] = ents[i].pos[1] + p->y1*4096;
-            b->lo[2] = ents[i].pos[2] + imin(rz0,rz1)*4096 - Q16_INT(cz);
-            b->hi[2] = ents[i].pos[2] + imax(rz0,rz1)*4096 - Q16_INT(cz);
+            b->lo[0] = (ents[i].pos[0] + imin(rx0,rx1)*4096 - Q16_INT(cx)) - e[0];
+            b->hi[0] = (ents[i].pos[0] + imax(rx0,rx1)*4096 - Q16_INT(cx)) - e[0];
+            b->lo[1] = (ents[i].pos[1] + p->y0*4096) - e[1];
+            b->hi[1] = (ents[i].pos[1] + p->y1*4096) - e[1];
+            b->lo[2] = (ents[i].pos[2] + imin(rz0,rz1)*4096 - Q16_INT(cz)) - e[2];
+            b->hi[2] = (ents[i].pos[2] + imax(rz0,rz1)*4096 - Q16_INT(cz)) - e[2];
             b->color = p->color == ROBE ? models[kind].robe : p->color;
-            screen_rect(b,e);
+            screen_rect(b);
             if (b->sx0 > b->sx1) continue;
             u[0] = imin(u[0],b->sx0); u[1] = imin(u[1],b->sy0);
             u[2] = imax(u[2],b->sx1); u[3] = imax(u[3],b->sy1);
@@ -201,14 +201,14 @@ static inline q16 slab_t(q16 dist, q16 inv) {
 static inline q16 smin(q16 a, q16 b) { return sel(a < b,a,b); }
 static inline q16 smax(q16 a, q16 b) { return sel(a > b,a,b); }
 
-// One box against one ray, everything in registers: o = window-relative eye, td = tDelta
-// (1/|d| per axis), n = step signs, fog = KC_RP fog_d. Same arithmetic as before.
+// One box against one ray, everything in registers. Box bounds are eye-relative (the window
+// origin o of the kernel equals entity_prepare's e), td = tDelta (1/|d| per axis), n = step
+// signs, fog = KC_RP fog_d. Same arithmetic as before.
 static inline __attribute__((always_inline))
-void box_hit(const ent_box *b, const q16 o[3], const q16 td[3], const int32_t n[3],
-             const q16 fog[3], q16 *ht, int32_t *hcol) {
-    q16 lo0 = b->lo[0] - o[0], hi0 = b->hi[0] - o[0];
-    q16 lo1 = b->lo[1] - o[1], hi1 = b->hi[1] - o[1];
-    q16 lo2 = b->lo[2] - o[2], hi2 = b->hi[2] - o[2];
+void box_hit(const ent_box *b, const q16 td[3], const int32_t n[3], const q16 fog[3],
+             q16 *ht, int32_t *hcol) {
+    q16 lo0 = b->lo[0], hi0 = b->hi[0], lo1 = b->lo[1], hi1 = b->hi[1];
+    q16 lo2 = b->lo[2], hi2 = b->hi[2];
     q16 tn0 = slab_t(sel(n[0],-hi0,lo0),td[0]), tf0 = slab_t(sel(n[0],-lo0,hi0),td[0]);
     q16 tn1 = slab_t(sel(n[1],-hi1,lo1),td[1]), tf1 = slab_t(sel(n[1],-lo1,hi1),td[1]);
     q16 tn2 = slab_t(sel(n[2],-hi2,lo2),td[2]), tf2 = slab_t(sel(n[2],-lo2,hi2),td[2]);
@@ -221,19 +221,13 @@ void box_hit(const ent_box *b, const q16 o[3], const q16 td[3], const int32_t n[
     *hcol = sel(win,PIX(b->color,shade,fl),*hcol);
 }
 
-static void ray_regs(const kc_ray *r, q16 td[3], int32_t n[3], q16 fog[3]) {
-    td[0] = (q16)r->f[4]; td[1] = (q16)r->f[5]; td[2] = (q16)r->f[6];
-    n[0] = r->f[7] & 1; n[1] = (r->f[7] >> 1) & 1; n[2] = (r->f[7] >> 2) & 1;
-    fog[0] = KC_RP->fog_d[0]; fog[1] = KC_RP->fog_d[1]; fog[2] = KC_RP->fog_d[2];
-}
-
-uint8_t ent_composite(int32_t px, int32_t py, const q16 o[3], const kc_ray *r, q16 tw, uint8_t col) {
-    // The skips below branch per lane, but every lane of a 4x2 block computes the same
-    // (bx, by), so they are uniform. A different lane layout would make them divergent.
-    int32_t bx = px & ~3, by = py & ~1;
-    q16 oo[3] = {o[0], o[1], o[2]}, td[3], fog[3];
-    int32_t n[3];
-    ray_regs(r, td, n, fog);
+uint8_t ent_composite(int32_t bx, int32_t by, q16 tdx, q16 tdy, q16 tdz, uint32_t signs,
+                      q16 tw, uint8_t col) {
+    // The skips below branch per lane, but every lane of a 4x2 block has the same (bx, by),
+    // so they are uniform. A different lane layout would make them divergent.
+    q16 td[3] = {tdx, tdy, tdz};
+    int32_t n[3] = {(int32_t)(signs & 1), (int32_t)((signs >> 1) & 1), (int32_t)((signs >> 2) & 1)};
+    q16 fog[3] = {KC_RP->fog_d[0], KC_RP->fog_d[1], KC_RP->fog_d[2]};
     q16 t = tw;
     int32_t c = col;
     for (int32_t e = 0; e < ent_nrects; e++) {         // whole entity first, then its boxes
@@ -242,7 +236,7 @@ uint8_t ent_composite(int32_t px, int32_t py, const q16 o[3], const kc_ray *r, q
         for (int32_t i = ent_rect_box[e][0]; i < ent_rect_box[e][1]; i++) {
             const ent_box *b = &ent_boxes[i];
             if ((bx+3 < b->sx0) | (bx > b->sx1) | (by+1 < b->sy0) | (by > b->sy1)) continue;
-            box_hit(b, oo, td, n, fog, &t, &c);
+            box_hit(b, td, n, fog, &t, &c);
         }
     }
     return (uint8_t)c;

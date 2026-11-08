@@ -10,7 +10,7 @@ enum { ENT_TRADER, ENT_CONTRACTOR, ENT_CHICKEN, ENT_ZOMBIE, ENT_KINDS };
 #define ENT_BOX_MAX (ENT_MAX * ENT_PARTS_MAX)
 
 typedef struct {
-    q16 lo[3], hi[3];
+    q16 lo[3], hi[3];           // eye-relative: window-relative bounds minus the camera origin
     int16_t sx0, sy0, sx1, sy1; // Inclusive; sx0 > sx1 means off screen.
     uint8_t color;
     uint8_t pad[3];
@@ -42,5 +42,7 @@ void entity_tick(q16 dt);
 // Lane 0, after write_camera(): rebuild boxes for the committed window and camera.
 void entity_prepare(void);
 // Per lane: composite over the world color and hit distance.
-uint8_t ent_composite(int32_t px, int32_t py, const q16 o[3], const kc_ray *r, q16 tw, uint8_t col);
+// (bx, by): the 4x2 block; tdx..tdz and signs: the ray's tDeltas and step signs (VSET 4..7).
+uint8_t ent_composite(int32_t bx, int32_t by, q16 tdx, q16 tdy, q16 tdz, uint32_t signs,
+                      q16 tw, uint8_t col);
 #endif
