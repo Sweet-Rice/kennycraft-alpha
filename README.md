@@ -25,7 +25,7 @@ design history; decision numbers such as D22 refer to it.
 | `mk/bench.mk` | Bench targets (below), included by `tb/bench/tb.mk` |
 | `fpga/` | Non-project Vivado flow (`build.tcl`), per-target `sources.tcl`, constraints (`arty.xdc`, `top.xdc`, reference XDCs in `ref/`), `kc_mmi.tcl`, `hex2mem.py`, `patch_bit.sh`, `program.tcl` |
 | `build/` | `build.tcl` entry and `summarize.py` for the fpga-tools MCP build contract |
-| `host/` | Laptop-side banking host (Python): `kchost.py` serves `companion.html` and links to the chip over CR6 (`cr6.py`, with a fake chip), `bank.py` (SQLite ledger settled on Solana devnet), `nessie.py`, `agents.py`, `orchestrator.py`, tests `test_bank.py` and `test_contract.py`, `requirements.txt` |
+| `host/` | Laptop-side banking host (Python): `kchost.py` serves `companion.html` and links to the chip over CR6 (`cr6.py`, with a fake chip), `bank.py` (SQLite ledger settled on Solana devnet), `nessie.py`, and `orchestrator.py` (connects `kc_agents` to CR6 and the ledger); tests `test_bank.py` and `test_contract.py`, `requirements.txt` |
 | `game/` | The game, built for the laptop and the chip; see `game/README.md` |
 | `kc_agents/` | Nemotron agents that act in the game world; see `kc_agents/README.md` |
 | `tight_setup_hold_pins.txt` | Vivado table of the 68 `u_bridge` FIFO and calibration-sync pins with tight setup and hold (clocks `clk50_unbuf`, `clk_pll_i`) |
@@ -42,6 +42,15 @@ design history; decision numbers such as D22 refer to it.
 `KC_LINK_FPS=50 KC_REC=/tmp/kcrec` makes the game build run a 50 fps clock and save every
 frame. Nemotron reasoning is off by default for speed; `NEMOTRON_THINKING=1` turns it on.
 
+Host dependencies are listed in `host/requirements.txt`. Bank setup is
+described by `scripts/setup_kcn.sh` (devnet token/configuration and keys) and
+`host/nessie.py` (`NESSIE_KEY` and `NESSIE_ACCOUNT`, from the environment or
+`.env`). Fake-chip mode still uses the configured bank services.
+
+`KC_CHIP=host` currently launches Windows `wsl` and constructs a Windows-drive
+path: run `kchost.py` with Windows Python against the WSL-built game in the
+shared checkout. It is not a native Linux/macOS game-process launcher.
+
 With the existing bank configuration in place, run `python host/kchost.py` and
 open http://127.0.0.1:8000. The Wallets card includes a native-canvas player KCN
 chart fed by the page's existing `/events` stream; no separate dashboard,
@@ -55,7 +64,43 @@ on-chain history. Existing ledger settlement badges and devnet transaction
 links remain available. The chart is read-only; companion game/bank controls
 are unchanged.
 
+### Laptop game window
+
+Build the Linux/WSL game first (`make -C game`, or `make -C game KC_DEMO=1`
+for the village), then install pygame for the Python running the window.
+
+| Command | Behavior |
+| --- | --- |
+| `python scripts/kc.py --host` | Start the standalone laptop game in a window; no board, bank or villager agents |
+| `python scripts/kc.py --kchost` | Attach to the already-running `KC_CHIP=host` companion above, including agents and villager text input |
+
+`--kchost [URL]` defaults to `http://127.0.0.1:8000`. It reads frames from the
+local `game/out/window/frame.rgb`; the game and window must share that file.
+Changing the URL changes control/events, not frame delivery.
+
+| Input | Action |
+| --- | --- |
+| W/A/S/D, Space | Walk, jump |
+| Arrows or captured mouse motion | Look |
+| J/K or captured left/right click | Break/place |
+| 1–9 | Select hotbar slot |
+| E, Y/N | Interact, accept/decline a quote when linked to the companion |
+
+The first click only captures the mouse. Losing focus releases held keys and
+mouse capture. Esc closes an active villager text box; otherwise it releases
+capture, or exits if already released. When a villager prompt opens in
+`--kchost`, type a request and press Enter to send it. `make keys` remains the
+separate UART-only window; it does not start either laptop mode.
+
+
 ## Checks
+
+Top-level targets require GNU Make 4.3+ for grouped targets (`&:`); macOS's
+system Make 3.81 is too old. Use `gmake` there when installed. Set `JOBS`
+explicitly if `nproc` is unavailable.
+Use `LC_ALL=C` for top-level invocations (for example, `LC_ALL=C gmake check`):
+fragment ordering must load `tb/core/tb.mk` before `tb/core_pipe/tb.mk`, and
+locale-dependent ordering can otherwise trip the include-order check.
 
 ```sh
 make check                                     # every target registered by a tb/*/tb.mk, JOBS (default nproc) at a time
@@ -66,6 +111,11 @@ Not in `make check`: `make tracediff-base-core` (every tb/core test except the
 divergence-stack ones against the Stage 0 core of git ref `CORE_BASE_REF`),
 `make qrcp-exhaustive` and `make qrcp-bench-inc`. `make tb-core-t_cpi` (part of
 `make check`) also prints the measured CPI per instruction class.
+
+With Verilator 5.054, the current pipelined RTL fails to compile at the
+streaming concatenation in `rtl/core_pipe/lane_pipe.sv`. A passing pipeline
+test run on an earlier revision does not establish compatibility with this
+revision or Verilator version.
 
 ## FPGA
 
@@ -103,8 +153,9 @@ Requires the pinned RISC-V GCC (`RISCV_PREFIX`, default the AMD 2026.1
 `riscv64-unknown-elf-`; Zmmul, D5), Verilator 5.020 and Python with Pillow.
 SDL3 with `pkg-config` is optional: without it the harness builds headless and
 needs `--headless`. `make golden-check` also needs clang (`GAME_CHIP_CC`) and
-`zig cc` (`HOST_CC`); `make keys` needs pyserial and pygame. All bench outputs
-go under the ignored `out/` directory.
+`zig cc` (`HOST_CC`); `make keys` needs pyserial and pygame. Harness outputs
+default to the ignored root `out/`; golden reference frames are generated in
+`game/out/shots/`, with game build products in `game/build/` and assets in `game/gen/`.
 
 | Target | Behavior |
 | --- | --- |
@@ -125,9 +176,13 @@ go under the ignored `out/` directory.
 ```sh
 make vl RUN_ARGS="--headless --frames 3 --keys tb/harness/fixture/keys.txt --trace out/pattern.trace"
 make vl RUN_ARGS="--headless --frames 3 --png-dir out/pattern"
-make vl-fixture RUN_ARGS="--headless --frames 5 --record out/keys.txt"
+make vl-fixture RUN_ARGS="--record out/keys.txt"
 make vl TRACE=1 RUN_ARGS="--headless --frames 1 --vcd out/chip.vcd --vcd-window 100:200"
 ```
+
+Recording needs an SDL3-enabled build and live window input; focus the window,
+press/release keys, then use Escape or close the window to finish. `--headless`
+disables live input, and `--record` does not copy events from a `--keys` replay.
 
 Production uses `out/vl/kcvl`; the independent fixture uses `out/vl-fixture/kcvl`.
 `--vcd` needs `TRACE=1`, which builds kcvl with waveform support (a slower model);
@@ -190,7 +245,8 @@ WB) with the same ports and parameters as `rtl/core/core.sv`, built from its
 leaf modules. `PIPELINED = 1` (a parameter of `rtl/top.sv` and
 `rtl/soc/kc_soc.sv`) selects it, and the core sits at `g_core.u_core`
 whichever core is built. It retires the same instructions, masks and
-register writes as the multi-cycle core. Only CPI changes:
+register writes as the multi-cycle core. Back-to-back instruction costs are
+below; dependencies, prediction misses and peripheral waits add stalls.
 
 | Class | Cycles |
 | --- | --- |
