@@ -8,3 +8,4 @@ vivado*.str
 clockInfo.txt
 __pycache__/
 /out/
+prompts/

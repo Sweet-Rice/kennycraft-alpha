@@ -23,7 +23,7 @@
 #define DT_MAX Q16(0.35)
 
 static uint32_t last_cycles;
-#if KC_RASTER
+#if KC_RASTER && defined(KC_HOST)
 int32_t kc_use_raster = 1;    // laptop can flip this at run time to compare with the ray tracer
 #endif
 
