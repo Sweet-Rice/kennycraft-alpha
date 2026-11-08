@@ -66,13 +66,19 @@ HAS_RAY_UNIT ?= $(if $(filter 2,$(STAGE)),1,0)
 HAS_QRCP ?= $(if $(filter 2,$(STAGE)),1,0)
 FB_COUNT ?= $(if $(filter 2,$(STAGE)),3,2)
 CHIP_TOP ?= $(if $(filter 2,$(STAGE)),top,bench_chip)
+# PIPELINED=1 builds either top on the 5-stage pipelined core (rtl/core_pipe)
+# instead of the multi-cycle rtl/core. Its kcvl models go in their own
+# directories (VL_SUFFIX), so both cores' builds coexist.
+PIPELINED ?= 0
+VL_SUFFIX = $(if $(filter 1,$(PIPELINED)),-pipe)
 CHIP_FB_COUNT = $(if $(filter top,$(CHIP_TOP)),$(FB_COUNT),2)
 CHIP_PARAMS = -GLANES=$(LANES) -GHAS_DIV_STACK="1'b$(HAS_DIV_STACK)" \
-	$(if $(filter top,$(CHIP_TOP)),-GHAS_RAY_UNIT="1'b$(HAS_RAY_UNIT)" -GHAS_QRCP="1'b$(HAS_QRCP)" -GFB_COUNT=$(FB_COUNT))
+	$(if $(filter top,$(CHIP_TOP)),-GHAS_RAY_UNIT="1'b$(HAS_RAY_UNIT)" -GHAS_QRCP="1'b$(HAS_QRCP)" -GFB_COUNT=$(FB_COUNT)) \
+	$(if $(filter 1,$(PIPELINED)),-GPIPELINED="1'b1")
 ifeq ($(STAGE)$(CHIP_TOP),2bench_chip)
 $(error STAGE=2 needs CHIP_TOP=top: bench_chip has no ray unit, so custom-1 would halt ERR.ILLEGAL)
 endif
-VL_MDIR ?= out/vl
+VL_MDIR ?= out/vl$(VL_SUFFIX)
 PAL_HEX ?=
 TEX_HEX ?=
 PALETTE_ARGS = $(if $(PAL_HEX),--palette-hex "$(abspath $(PAL_HEX))")
@@ -143,7 +149,8 @@ endif
 ifeq ($(STAGE),2)
 TESTS += $(TESTS_2)
 endif
-TEST_ARGS = --stage $(STAGE) --cc "$(CC)" --objcopy "$(OBJCOPY)" --nm "$(CROSS)nm" --cflags "$(CFLAGS)"
+TEST_ARGS = --stage $(STAGE) --cc "$(CC)" --objcopy "$(OBJCOPY)" --nm "$(CROSS)nm" --cflags "$(CFLAGS)" \
+	--binary $(VL_MDIR)/kcvl
 
 # Stage 2 (ray unit, rtl/top.sv) runs every test plus t_vtrace, and the golden
 # shot with Kennedy's VTRACE kernel (game/src/trace.c, KC_VTRACE = 1) and qrcp()
@@ -156,8 +163,8 @@ check-bench:
 	$(MAKE) check-stage STAGE=1
 	$(MAKE) check-stage STAGE=2
 	$(MAKE) golden-check
-	$(MAKE) golden-check STAGE=1 CHIP_TOP=top GOLDEN_VL=out/golden/vl1
-	$(MAKE) golden-check STAGE=2 GOLDEN_VL=out/golden/vl2 GAME_CHIP_CC="$(GAME_CHIP_CC) -DKC_VTRACE=1 -DKC_QRCP=1"
+	$(MAKE) golden-check STAGE=1 CHIP_TOP=top GOLDEN_VL=out/golden/vl1$(VL_SUFFIX)
+	$(MAKE) golden-check STAGE=2 GOLDEN_VL=out/golden/vl2$(VL_SUFFIX) GAME_CHIP_CC="$(GAME_CHIP_CC) -DKC_VTRACE=1 -DKC_QRCP=1"
 check-stage: vl-build
 	$(PYTHON) scripts/run_tests.py $(TEST_ARGS) $(TESTS)
 
@@ -179,7 +186,7 @@ test-%: vl-build
 # reference (make -C game shots) against kcvl running the same pose, kcvl
 # built with the game's palette and textures in its own directory.
 .PHONY: golden-check tracediff
-GOLDEN_VL = out/golden/vl
+GOLDEN_VL = out/golden/vl$(VL_SUFFIX)
 GAME_CHIP_CC ?= clang
 golden-check:
 	$(MAKE) -C game CC="$(HOST_CC)" shots
