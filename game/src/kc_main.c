@@ -83,6 +83,7 @@ void kc_frame(void) {
     q16 dt = (q16)(((uint64_t)(now - last_cycles) * DT_K) >> 32);
     last_cycles = now;
     move_player(imin(dt, DT_MAX));                     // 4.
+    entity_tick(imin(dt, DT_MAX));
     world_update(qfloor(kc_me.pos[0]), qfloor(kc_me.pos[2]));   // 5.
     pick_and_edit();                                   // 6.
     write_camera();                                    // 7.

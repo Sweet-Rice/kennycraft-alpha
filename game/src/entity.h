@@ -1,4 +1,4 @@
-// Static, flat-colored box models. No spawning, movement, or collision.
+// Flat-colored box models (voxels, vertex colors). They walk to a target; no collision.
 #ifndef KC_ENTITY_H
 #define KC_ENTITY_H
 #include "fixed.h"
@@ -25,6 +25,11 @@ extern int32_t ent_nboxes;
 int32_t entity_add(int32_t kind, q16 x, q16 y, q16 z, int32_t facing);
 void entity_clear(void);
 int32_t entity_count(void);
+// Lane 0. Walk entity id toward (tx, tz) at its kind's speed; -1 for a bad id.
+int32_t entity_move(int32_t id, q16 tx, q16 tz);
+void entity_get(int32_t id, q16 pos[3], int32_t *facing);
+// Lane 0, once per frame: step every entity toward its target and onto the ground.
+void entity_tick(q16 dt);
 // Lane 0, after write_camera(): rebuild boxes for the committed window and camera.
 void entity_prepare(void);
 // Per lane: composite over the world color and hit distance.

@@ -1,9 +1,11 @@
 #include "entity.h"
 #include "kc_hal.h"
 #include "render.h"
+#include "chunks.h"
 
-static struct { q16 pos[3]; uint8_t kind, facing; } ents[ENT_MAX];
+static struct { q16 pos[3], tgt[2]; uint8_t kind, facing; } ents[ENT_MAX];
 static int32_t nents;
+static const q16 walk_speed[ENT_KINDS] = {Q16(1.5), Q16(1.5), Q16(1.0), Q16(1.2)};   // blocks per second
 ent_box ent_boxes[ENT_BOX_MAX];
 int32_t ent_nboxes;
 
@@ -51,7 +53,36 @@ int32_t entity_add(int32_t kind, q16 x, q16 y, q16 z, int32_t facing) {
     int32_t i = nents++;
     ents[i].pos[0] = x; ents[i].pos[1] = y; ents[i].pos[2] = z;
     ents[i].kind = (uint8_t)kind; ents[i].facing = (uint8_t)facing;
+    ents[i].tgt[0] = x; ents[i].tgt[1] = z;
     return i;
+}
+
+int32_t entity_move(int32_t id, q16 tx, q16 tz) {
+    if ((uint32_t)id >= (uint32_t)nents) return -1;
+    ents[id].tgt[0] = tx; ents[id].tgt[1] = tz;
+    return 0;
+}
+
+void entity_get(int32_t id, q16 pos[3], int32_t *facing) {
+    for (int32_t a = 0; a < 3; a++) pos[a] = ents[id].pos[a];
+    *facing = ents[id].facing;
+}
+
+// ponytail: straight line, each axis clamped to the step (diagonals ~1.4x faster), no collision;
+// the laptop agents plan the route. Feet snap onto the column's top solid block when loaded.
+void entity_tick(q16 dt) {
+    for (int32_t i = 0; i < nents; i++) {
+        q16 step = qmul(walk_speed[ents[i].kind], dt);
+        q16 dx = ents[i].tgt[0] - ents[i].pos[0], dz = ents[i].tgt[1] - ents[i].pos[2];
+        if (!dx && !dz) continue;
+        ents[i].pos[0] += iclamp(dx, -step, step);
+        ents[i].pos[2] += iclamp(dz, -step, step);
+        ents[i].facing = (uint8_t)(iabs(dx) > iabs(dz) ? (dx > 0 ? 1 : 3) : (dz > 0 ? 0 : 2));
+        int32_t x = qfloor(ents[i].pos[0]), z = qfloor(ents[i].pos[2]), top = 31;
+        if (!world_loaded(x, z)) continue;             // column not loaded: keep the height
+        while (top > 0 && world_get(x, top, z) == 0) top--;
+        ents[i].pos[1] = Q16_INT(top + 1);
+    }
 }
 void entity_clear(void) { nents = 0; }
 int32_t entity_count(void) { return nents; }

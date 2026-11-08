@@ -270,6 +270,18 @@ static int cmd_models(void) {
     entity_clear();
     check(entity_add(ENT_KINDS,bx,by,bz,0) == -1,"invalid entity kind is rejected");
 
+    // Walking: 4 blocks east at 1.2 blocks/s arrives within 4 s of 0.1 s frames, facing +x, on the ground.
+    int32_t wx = sx+2, wz = sz+6, id = entity_add(ENT_ZOMBIE,Q16_INT(wx)+Q16_HALF,by,Q16_INT(wz)+Q16_HALF,0);
+    check(entity_move(id,Q16_INT(wx+4)+Q16_HALF,Q16_INT(wz)+Q16_HALF) == 0,"entity_move accepts a live id");
+    check(entity_move(id+1,0,0) == -1,"entity_move rejects an unused id");
+    q16 wp[3]; int32_t wf;
+    for (int32_t f = 0; f < 40; f++) entity_tick(Q16(0.1));
+    entity_get(id,wp,&wf);
+    check(wp[0] == Q16_INT(wx+4)+Q16_HALF && wp[2] == Q16_INT(wz)+Q16_HALF,"walking entity reaches its target");
+    check(wf == 1,"walking entity faces its direction of travel (+x)");
+    check(wp[1] == Q16_INT(terrain_height(wx+4,wz)+1) || terrain_tree_at(wx+4,wz),"walking entity stands on the ground");
+    entity_clear();
+
     const char *names[ENT_KINDS] = {"m1_trader","m1_contractor","m1_pig","m1_zombie"};
     kc_use_raster = 0;
     kc_set_resolution(320);
