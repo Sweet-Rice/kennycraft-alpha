@@ -48,9 +48,12 @@ needs `--headless`. `make golden-check` also needs clang and `zig cc`;
 make vl RUN_ARGS="--headless --frames 3 --keys tb/harness/fixture/keys.txt --trace out/pattern.trace"
 make vl RUN_ARGS="--headless --frames 3 --png-dir out/pattern"
 make vl-fixture RUN_ARGS="--headless --frames 5 --record out/keys.txt"
+make vl TRACE=1 RUN_ARGS="--headless --frames 1 --vcd out/chip.vcd --vcd-window 100:200"
 ```
 
 Production uses `out/vl/kcvl`; the independent fixture uses `out/vl-fixture/kcvl`.
+`--vcd` needs `TRACE=1`, which builds kcvl with waveform support (a slower model);
+the fixture always has it.
 `STAGE=0 DDR=1` is the default; `STAGE=1` builds 8 lanes with the divergence
 stack. `STAGE=2` adds the ray unit (`HAS_RAY_UNIT=1`), the per-lane QRCP unit
 (`HAS_QRCP=1`) and `t_vtrace`, and builds

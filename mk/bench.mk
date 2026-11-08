@@ -80,7 +80,14 @@ SDL_LIBS := $(shell pkg-config --libs sdl3 2>/dev/null)
 KC_SDL := $(if $(SDL_LIBS),1,0)
 # Verilator's wrapper drops an empty argument, so never pass -LDFLAGS "".
 SDL_LDFLAGS = $(if $(SDL_LIBS),-LDFLAGS "$(SDL_LIBS)")
-VL_FLAGS = --cc --exe --build -j 0 --verilate-jobs 1 -Wall --prefix Vkc --trace -o kcvl
+# The model's C++ at -O3 (Verilator's default is -Os): the golden runs are long.
+VL_FLAGS = --cc --exe --build -j 0 --verilate-jobs 1 -Wall --prefix Vkc -o kcvl \
+	-MAKEFLAGS OPT_FAST=-O3 -MAKEFLAGS OPT_GLOBAL=-O3
+# TRACE=1 builds kcvl with VCD support (--vcd / --vcd-window); without it the
+# model skips the per-signal activity tracking and runs faster. The fixture
+# always has it: check-fixture tests the VCD window.
+TRACE ?= 0
+VL_TRACE = $(if $(filter 1,$(TRACE)),--trace)
 HARNESS_CFLAGS = -std=c++17 -Wall -Wextra -I$(abspath tb/harness) -DKC_SDL=$(KC_SDL) $(SDL_CFLAGS)
 RTL_FILES = rtl/kc_isa_pkg.sv $(filter-out rtl/kc_isa_pkg.sv rtl/isa_decode_check.sv rtl/top.sv rtl/display/clk_gen.sv rtl/ddr/ddr_clk.sv,$(wildcard rtl/*.sv rtl/core/*.sv rtl/soc/*.sv rtl/mem/*.sv rtl/display/*.sv rtl/ddr/*.sv rtl/vtrace/*.sv))
 CHIP_FILE = $(if $(filter bench_chip,$(CHIP_TOP)),tb/harness/bench_chip.sv,rtl/top.sv)
@@ -88,7 +95,7 @@ VL_STUBS = $(wildcard tb/harness/stubs/*.sv) tb/ddr/xpm_sim.sv
 
 .PHONY: vl-fixture vl-fixture-build check-fixture
 vl-fixture-build: | out
-	$(VERILATOR) $(VL_FLAGS) --Mdir out/vl-fixture --top-module fixture_top \
+	$(VERILATOR) $(VL_FLAGS) --trace --Mdir out/vl-fixture --top-module fixture_top \
 		-CFLAGS "$(HARNESS_CFLAGS) -DKC_FIXTURE" $(SDL_LDFLAGS) \
 		tb/harness/fixture/public.vlt tb/harness/fixture/fixture_top.sv \
 		$(abspath $(HARNESS_CPP))
@@ -103,7 +110,7 @@ check-fixture: vl-fixture-build
 .PHONY: vl vl-build
 vl-build: sw
 	@mkdir -p $(VL_MDIR)
-	$(VERILATOR) $(VL_FLAGS) --Mdir $(VL_MDIR) --top-module $(CHIP_TOP) $(CHIP_PARAMS) \
+	$(VERILATOR) $(VL_FLAGS) $(VL_TRACE) --Mdir $(VL_MDIR) --top-module $(CHIP_TOP) $(CHIP_PARAMS) \
 		-GIMEM_HEX='"out/kc_imem.hex"' -GDMEM_HEX='"out/kc_dmem.hex"' \
 		-GPAL_HEX='"$(if $(PAL_HEX),$(abspath $(PAL_HEX)))"' -GTEX_HEX='"$(if $(TEX_HEX),$(abspath $(TEX_HEX)))"' \
 		-CFLAGS "$(HARNESS_CFLAGS) -DCHIP_TOP=$(CHIP_TOP)" $(SDL_LDFLAGS) \
@@ -134,8 +141,9 @@ endif
 TEST_ARGS = --stage $(STAGE) --cc "$(CC)" --objcopy "$(OBJCOPY)" --nm "$(CROSS)nm" --cflags "$(CFLAGS)"
 
 # Stage 2 (ray unit, rtl/top.sv) runs every test plus t_vtrace, and the golden
-# shot with Kennedy's VTRACE kernel (game/src/trace.c, KC_VTRACE = 1) against
-# the plain C (software DDA) reference.
+# shot with Kennedy's VTRACE kernel (game/src/trace.c, KC_VTRACE = 1) and qrcp()
+# on the QRCP instruction (KC_QRCP = 1, D22) against the plain C (software DDA)
+# reference.
 .PHONY: check-bench check-stage
 check-bench:
 	$(MAKE) check-fixture
@@ -144,7 +152,7 @@ check-bench:
 	$(MAKE) check-stage STAGE=2
 	$(MAKE) golden-check
 	$(MAKE) golden-check STAGE=1 CHIP_TOP=top GOLDEN_VL=out/golden/vl1
-	$(MAKE) golden-check STAGE=2 GOLDEN_VL=out/golden/vl2 GAME_CHIP_CC="$(GAME_CHIP_CC) -DKC_VTRACE=1"
+	$(MAKE) golden-check STAGE=2 GOLDEN_VL=out/golden/vl2 GAME_CHIP_CC="$(GAME_CHIP_CC) -DKC_VTRACE=1 -DKC_QRCP=1"
 check-stage: vl-build
 	$(PYTHON) scripts/run_tests.py $(TEST_ARGS) $(TESTS)
 

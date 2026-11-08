@@ -1,7 +1,7 @@
 // Full-top Verilator test (P3): rtl/top.sv with the 100 MHz board clock, the
 // clk_gen Verilator model, ddr_model standing in for the MIG (tb/ddr/
-// unisim_sim.sv) and the memory images as parameters (tb/top/tb.mk builds
-// them from Kennedy's game into $(OBJ)/top_hex/<build>).
+// unisim_sim.sv with KC_EXT_CLOCKS) and the memory images as parameters
+// (tb/top/tb.mk builds them from Kennedy's game into $(OBJ)/top_hex/<build>).
 //
 // It runs the program until FRAMES frame swaps have completed. After each
 // swap it captures the next whole frame from the VGA pins (640x480 RGB444),
@@ -30,6 +30,11 @@
 // LANES / HAS_DIV_STACK / HAS_RAY_UNIT / HAS_QRCP pick the core (tb/top/tb.mk:
 // 1 / 0 / 0 / 0 for the one-lane game builds, 8 / 1 / 0 / 0 for the 8-lane
 // ones, 8 / 1 / 1 / 1 for kc_chip8_vtrace).
+//
+// The build has no --timing: tb/top/t_top_frame.cpp drives the ports, the
+// 100 MHz clk (first rising edge at 5 ns), ck_rst (released with the 20th
+// rising edge of clk), the MIG's 83.33 MHz ui_clk (first rising edge at
+// 6 ns) and the DDR MMCM's LOCKED (high from 500 ns), in 1 ps steps.
 
 module t_top_frame #(
     parameter int    LANES         = 1,
@@ -40,12 +45,14 @@ module t_top_frame #(
     parameter string PAL_HEX  = "palette.hex",
     parameter bit    HAS_RAY_UNIT  = 1'b0,
     parameter bit    HAS_QRCP      = 1'b0
+) (
+    input logic clk,
+    input logic ck_rst,
+    input logic ddr_ui_clk,        // mig_ddr3's ui_clk (tb/ddr/unisim_sim.sv)
+    input logic ddr_mmcm_locked    // ddr_clk's MMCME2_BASE LOCKED
 );
     localparam int W = 640, H = 480;
     localparam longint TIMEOUT_NS = 64'd20_000_000_000;  // 20 s of board time
-
-    logic clk = 1'b0, ck_rst = 1'b0;
-    always #5 clk = ~clk;
 
     logic        uart_rxd_out, led, vga_hs, vga_vs;
     logic [3:0]  vga_r, vga_g, vga_b;
@@ -71,26 +78,34 @@ module t_top_frame #(
     int    frames = 1;
 
     // ------------------------------------------------------------------
-    // UART TX monitor: 1 Mbaud = 100 board clocks per bit
+    // UART TX monitor: 1 Mbaud = 100 board clocks per bit. From the falling
+    // edge of the start bit, bit i is sampled at the (150 + 100 i)th rising
+    // edge of clk and the stop bit at the 950th.
     // ------------------------------------------------------------------
-    string line = "";
-    initial begin
-        forever begin
-            logic [7:0] b;
-            @(negedge uart_rxd_out);
-            repeat (150) @(posedge clk);
-            for (int i = 0; i < 8; i++) begin
-                b[i] = uart_rxd_out;
-                repeat (100) @(posedge clk);
-            end
+    string      line = "";
+    bit         uart_busy = 0;
+    int         uart_clks = 0;
+    logic [7:0] uart_b;
+
+    always @(negedge uart_rxd_out) if (!uart_busy) begin
+        uart_busy = 1;
+        uart_clks = 0;
+    end
+
+    always @(posedge clk) if (uart_busy) begin
+        uart_clks++;
+        if (uart_clks >= 150 && uart_clks < 950 && uart_clks % 100 == 50) begin
+            uart_b[(uart_clks - 150) / 100] = uart_rxd_out;
+        end else if (uart_clks == 950) begin
             if (!uart_rxd_out) $fatal(1, "UART framing error");
-            if (b == 8'h0A) begin
+            if (uart_b == 8'h0A) begin
                 $display("uart: %s", line);
                 $fflush();   // progress shows up even when stdout is a pipe
                 line = "";
-            end else if (b != 8'h0D) begin
-                line = {line, string'(b)};
+            end else if (uart_b != 8'h0D) begin
+                line = {line, string'(uart_b)};
             end
+            uart_busy = 0;
         end
     end
 
@@ -176,6 +191,7 @@ module t_top_frame #(
                      swaps, dut.u_soc.u_mmio.cycles, dut.u_soc.u_mmio.cycles - last_swap, swaps - 1);
         last_swap = dut.u_soc.u_mmio.cycles;
         $fflush();
+        check_pass();
     end
 
     // Optional retire trace (+trace_lo / +trace_hi), from the core's retire wires.
@@ -298,35 +314,52 @@ module t_top_frame #(
     always @(posedge dut.rst_core)
         if (boots > 0) $display("t_top_frame: rst_core asserted at time %0t", $time);
 
+    // Frame n (1..frames) is captured from the first end of a swap
+    // (swap_pending falling) once n FB_SWAPs have happened. PASS once every
+    // frame is written and at least +swaps FB_SWAPs have happened.
+    int     min_swaps = 0, frame_n = 1;
+    bit     frames_done = 0, frame_wait = 0;
+    longint timeout_ns = TIMEOUT_NS;
     initial begin
-        int min_swaps = 0;
+        int timeout_s;
         void'($value$plusargs("outdir=%s", outdir));
         void'($value$plusargs("frames=%d", frames));
         void'($value$plusargs("swaps=%d", min_swaps));
-        repeat (20) @(posedge clk);
-        ck_rst = 1'b1;
-        for (int n = 1; n <= frames; n++) begin
-            wait (swaps >= n);
-            @(negedge dut.swap_pending);
-            armed = 1; captured = 0;
-            wait (captured);
-            write_frames(n);
-            $display("t_top_frame: frame %0d captured from the VGA pins -> %s/frame%0d.ppm",
-                     n, outdir, n);
-            $fflush();
+        if ($value$plusargs("timeout_s=%d", timeout_s)) timeout_ns = longint'(timeout_s) * 1_000_000_000;
+    end
+
+    function automatic void check_pass();
+        if (frames_done && swaps >= min_swaps) begin
+            $display("t_top_frame: PASS");
+            $finish;
         end
-        wait (swaps >= min_swaps);
-        $display("t_top_frame: PASS");
-        $finish;
+    endfunction
+
+    always @(posedge ck_rst) begin
+        frames_done = frames < 1;
+        check_pass();
+    end
+
+    always @(negedge dut.swap_pending) if (!frames_done && !frame_wait && swaps >= frame_n) begin
+        armed = 1; captured = 0;
+        frame_wait = 1;
+    end
+
+    always @(posedge captured) if (frame_wait) begin
+        frame_wait = 0;
+        write_frames(frame_n);
+        $display("t_top_frame: frame %0d captured from the VGA pins -> %s/frame%0d.ppm",
+                 frame_n, outdir, frame_n);
+        $fflush();
+        frame_n++;
+        if (frame_n > frames) begin
+            frames_done = 1;
+            check_pass();
+        end
     end
 
     always @(posedge led) $fatal(1, "error LED: core halted, ERR_PC %08h", dut.u_soc.err_pc);
 
-    initial begin
-        longint timeout_ns = TIMEOUT_NS;
-        int     timeout_s;
-        if ($value$plusargs("timeout_s=%d", timeout_s)) timeout_ns = longint'(timeout_s) * 1_000_000_000;
-        #(timeout_ns);
-        $fatal(1, "timeout");
-    end
+    // clk falls at every multiple of 10 ns, so this fires at timeout_ns.
+    always @(negedge clk) if ($time >= timeout_ns) $fatal(1, "timeout");
 endmodule

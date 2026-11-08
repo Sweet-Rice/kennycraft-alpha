@@ -3,8 +3,8 @@
 //   kc_host play    <dir>   scripted play-through with checks (physics, editing, chunk round trip)
 //   kc_host vectors <dir>   VTRACE test vectors: world.hex + rays.txt from the C reference
 //   kc_host bench           render timing and world reads per frame
-//   kc_host sweep ray|raster  arena high water over many locations x frames x edits, plus
-//                           digests of the window and the meshes (must not change with optimizations)
+//   kc_host sweep           arena high water over many locations x frames x edits, plus
+//                           a digest of the window (must not change with optimizations)
 //   kc_host gencost         terrain generation cost per chunk (terrain_height, window reads/writes)
 //   kc_host models  <dir>   static entity checks and renderer/close-up review shots
 #include <stdio.h>
@@ -19,8 +19,6 @@
 #include "render.h"
 #include "trace.h"
 #include "blocks.h"
-#include "mesh.h"
-#include "raster.h"
 #include "arena.h"
 #include "entity.h"
 #include "terrain.h"
@@ -100,7 +98,6 @@ static void shot(const char *name) {
 }
 
 static int cmd_shots(void) {
-    kc_use_raster = 0;                                  // golden shots = the ray-traced reference
     struct { const char *name; double x, y, z, yaw, pitch; int w; } s[] = {
         { "g0_spawn",     0, 0, 0, 128, -40, 160 },
         { "g1_horizon",   0, 0, 0, 300,   0, 160 },
@@ -131,93 +128,19 @@ static int box_overlap_any(void) {
     return 0;
 }
 
-static int cmd_compare(void) {
-    struct { const char *name; double yaw, pitch, dy; int w; } s[] = {
-        { "c0_spawn", 128, -40, 0, 160 }, { "c1_horizon", 300, 0, 0, 160 },
-        { "c2_down", 0, -200, 0, 160 },   { "c3_high", 900, -60, 6, 160 },
-        { "c4_spawn_320", 128, -40, 0, 320 },
-    };
-    q16 bx = kc_me.pos[0], by = kc_me.pos[1], bz = kc_me.pos[2];
-    mesh_update();
-    printf("  mesh: %d quads in %d of %d pages (%d KB)\n", mesh_total_quads(), mesh_pages_used(), MESH_PAGES,
-           mesh_pages_used());
-    for (unsigned i = 0; i < sizeof s / sizeof s[0]; i++) {
-        kc_set_resolution(s[i].w);
-        pose(bx, by + (q16)(s[i].dy * 65536), bz, (q16)(s[i].yaw * 65536), (q16)(s[i].pitch * 65536));
-        static uint8_t ray[320 * 240];
-        char name[64];
-        kc_use_raster = 0; snprintf(name, sizeof name, "%s_ray", s[i].name);
-        mesh_update();                                  // don't count remeshing as ray work
-        uint64_t r0 = hstats.world_reads;
-        shot(name);
-        double ray_mi = ((hstats.world_reads - r0) * 52.0 + KC_RP->width * KC_RP->height * 200.0) / 1e6;
-        printf("  %-13s ray tracer: %llu DDA steps, est. %.1f M instr\n", s[i].name,
-               (unsigned long long)(hstats.world_reads - r0), ray_mi);
-        memcpy(ray, host_front_buffer(), sizeof ray);
-        kc_use_raster = 1; snprintf(name, sizeof name, "%s_raster", s[i].name); shot(name);
-        const uint8_t *ras = host_front_buffer();
-        int w = KC_RP->width, h = KC_RP->height, same = 0, close = 0, geo = 0, holes = 0;
-        for (int y = 0; y < h; y++)
-            for (int x = 0; x < w; x++) {
-                uint8_t a = ray[y * 320 + x], b = ras[y * 320 + x];
-                int sa = (a >> 4) == COLOR_SKY, sb = (b >> 4) == COLOR_SKY;
-                same += a == b;
-                close += (a >> 2) == (b >> 2);          // same color + shade, fog level may differ
-                geo += sa == sb && (sa || ((a >> 2) & 3) == ((b >> 2) & 3));   // sky vs surface + face
-                holes += !sa && sb;                     // ray hit ground, raster shows sky
-            }
-        double geo_pct = 100.0 * geo / (w * h);
-        printf("  %-13s geometry match %5.1f%%, sky holes %d\n", s[i].name, geo_pct, holes);
-        // Edge growth (1/8 px, closes T-junction cracks) fattens silhouettes: 98-99% is expected.
-        if (geo_pct < 97.5 || holes) { printf("  FAIL  %s: geometry below 97.5%% or sky holes\n", s[i].name); failures++; }
-        raster_stats_t *r = &raster_stats;
-        // Instruction estimates from the rv32 disassembly: covers ~25, triangle setup ~450 (kept
-        // from the textured kernel, so conservative: only 1/z is set up now), bin per quad ~40 (culled) / ~250 (visible), chunk frustum test ~800 per chunk;
-        // pixels: depth half ~75 per covered pixel, color half ~78 per covered pixel in a group where
-        // some lane passed (vertex colors: no qrcp, no texture). Ray: 52 per DDA step + ~200 per pixel.
-        const double CD = 75, CC = 78;
-        double px_cost = r->pixels_covered * CD + r->pixels_in_shaded_groups * CC;
-        double chunk_cost = (r->chunks_drawn + r->chunks_frustum_culled) * 800.0;
-        double ras_mi = (r->pixels_tested * 25.0 + px_cost + r->tri_setups * 450.0
-                       + r->quads_culled * 40.0 + r->quads_visible * 250.0 + r->bin_entries * 300.0 + chunk_cost) / 1e6;
-        printf("  %-13s same %5.1f%% | quads vis %4u culled %4u, tile entries %4u, tri setups %4u, px tested %6u "
-               "covered %6u written %6u | est. %.1f M instr%s\n",
-               s[i].name, 100.0 * same / (w * h), r->quads_visible, r->quads_culled,
-               r->bin_entries, r->tri_setups, r->pixels_tested, r->pixels_covered, r->pixels_written, ras_mi,
-               r->vis_overflow || r->bin_overflow ? "  OVERFLOW" : "");
-        printf("  %-13s chunks drawn %2u frustum-culled %2u, quads skipped %4u, backface %4u clipped %4u"
-               " | groups covered %5u shaded %5u, px in shaded groups %6u\n",
-               s[i].name, r->chunks_drawn, r->chunks_frustum_culled, r->quads_skipped,
-               r->quads_backface, r->quads_clipped, r->groups_covered, r->groups_shaded, r->pixels_in_shaded_groups);
-        // Stage 1 frame time (8 lanes): binning runs on lane 0 alone, the kernel runs 8 pixels per
-        // instruction but every lane repeats the per-quad work (quad_to_screen per tile entry, setup).
-        // A frustum-rejected quad pays the transform + plane tests, ~200 (the stock model says 40).
-        double bin0 = r->quads_backface * 40.0 + r->quads_clipped * 200.0 + r->quads_visible * 250.0 + chunk_cost;
-        double kern = r->bin_entries * 300.0 + r->tri_setups * 450.0 + r->pixels_tested / 8.0 * 25.0
-                    + r->groups_covered * CD + r->groups_shaded * CC;
-        printf("  %-13s 8-lane est. %.2f M cycles (lane-0 bin %.2f + kernel %.2f)\n", s[i].name,
-               (bin0 + kern) / 1e6, bin0 / 1e6, kern / 1e6);
-    }
-    kc_set_resolution(160);
-    printf("%s\n", failures ? "SOME CHECKS FAILED" : "all checks passed");
-    return failures != 0;
-}
-
-static void models_render(const char *name, int raster, uint8_t out[320 * 240]) {
-    kc_use_raster = raster;
+static void models_render(const char *name, uint8_t out[320 * 240]) {
     shot(name);
     memcpy(out,host_front_buffer(),320 * 240);
 }
 
 static int cmd_models(void) {
-    static uint8_t base[2][320 * 240], model[2][320 * 240], hidden[320 * 240];
+    static uint8_t base[320 * 240], model[320 * 240], hidden[320 * 240];
     q16 bx = kc_me.pos[0], by = kc_me.pos[1], bz = kc_me.pos[2];
     int32_t sx = qfloor(bx), sz = qfloor(bz);
     kc_set_resolution(160);
     pose(bx,by,bz,Q16_INT(128),Q16_INT(-40));
     entity_clear();
-    models_render("base_ray",0,base[0]);
-    models_render("base_ras",1,base[1]);
+    models_render("base",base);
     const int32_t dx[ENT_KINDS] = {2,5,4,7}, dz[ENT_KINDS] = {5,2,4,6}, facing[ENT_KINDS] = {2,3,2,3};
     int32_t pig_x = 0, pig_z = 0;
     for (int32_t k = 0; k < ENT_KINDS; k++) {
@@ -226,44 +149,33 @@ static int cmd_models(void) {
         entity_add(k,Q16_INT(x)+Q16_HALF,Q16_INT(terrain_height(x,z)+1),Q16_INT(z)+Q16_HALF,facing[k]);
         if (k == ENT_PIG) { pig_x = x; pig_z = z; }
     }
-    models_render("m0_models_ray",0,model[0]);
-    models_render("m0_models_raster",1,model[1]);
-    int changed[2] = {0,0}, bad[2] = {0,0}, brick = 0, wood = 0, inter = 0, uni = 0;
+    models_render("m0_models",model);
+    int changed = 0, bad = 0, brick = 0, wood = 0;
     const uint32_t colors = (1u<<0)|(1u<<1)|(1u<<2)|(1u<<3)|(1u<<6)|(1u<<9)|(1u<<11)|(1u<<13);
     for (int32_t y = 0; y < KC_RP->height; y++)
         for (int32_t x = 0; x < KC_RP->width; x++) {
             int32_t i = y*FB_STRIDE+x;
-            int a = base[0][i] != model[0][i], b = base[1][i] != model[1][i];
-            changed[0] += a; changed[1] += b;
-            bad[0] += a && !(colors & (1u << (model[0][i] >> 4)));
-            bad[1] += b && !(colors & (1u << (model[1][i] >> 4)));
-            brick += a && (model[0][i] >> 4) == 11;
-            wood += a && (model[0][i] >> 4) == 13;
-            inter += a && b; uni += a || b;
+            int a = base[i] != model[i];
+            changed += a;
+            bad += a && !(colors & (1u << (model[i] >> 4)));
+            brick += a && (model[i] >> 4) == 11;
+            wood += a && (model[i] >> 4) == 13;
         }
-    printf("  changed ray %d raster %d; brick %d wood %d; mask IoU %.3f\n",
-           changed[0],changed[1],brick,wood,uni ? (double)inter/uni : 0.0);
-    check(changed[0] >= 300,"ray entities change at least 300 pixels");
-    check(changed[1] >= 300,"raster entities change at least 300 pixels");
-    check(!bad[0],"ray entity pixels use only model palette colors");
-    check(!bad[1],"raster entity pixels use only model palette colors");
-    check(brick >= 20,"ray shows at least 20 brick-colored entity pixels");
-    check(wood >= 20,"ray shows at least 20 light-wood entity pixels");
-    check(uni > 0 && inter*10 >= uni*9,"ray/raster changed masks have IoU >= 0.90");
+    printf("  changed %d; brick %d wood %d\n",changed,brick,wood);
+    check(changed >= 300,"entities change at least 300 pixels");
+    check(!bad,"entity pixels use only model palette colors");
+    check(brick >= 20,"at least 20 brick-colored entity pixels");
+    check(wood >= 20,"at least 20 light-wood entity pixels");
 
     entity_clear();
     entity_add(ENT_ZOMBIE,Q16_INT(pig_x)+Q16_HALF,Q16(2.0),Q16_INT(pig_z)+Q16_HALF,2);
-    models_render("buried_ray",0,hidden);
-    check(!memcmp(base[0],hidden,sizeof hidden),"buried entity leaves ray frame unchanged");
-    models_render("buried_raster",1,hidden);
-    check(!memcmp(base[1],hidden,sizeof hidden),"buried entity leaves raster frame unchanged");
+    models_render("buried",hidden);
+    check(!memcmp(base,hidden,sizeof hidden),"buried entity leaves the frame unchanged");
     entity_clear();
     int32_t x = sx-4, z = sz-4;
     entity_add(ENT_ZOMBIE,Q16_INT(x)+Q16_HALF,Q16_INT(terrain_height(x,z)+1),Q16_INT(z)+Q16_HALF,2);
-    models_render("behind_ray",0,hidden);
-    check(!memcmp(base[0],hidden,sizeof hidden),"entity behind camera leaves ray frame unchanged");
-    models_render("behind_raster",1,hidden);
-    check(!memcmp(base[1],hidden,sizeof hidden),"entity behind camera leaves raster frame unchanged");
+    models_render("behind",hidden);
+    check(!memcmp(base,hidden,sizeof hidden),"entity behind the camera leaves the frame unchanged");
     entity_clear();
     for (int32_t i = 0; i < ENT_MAX; i++) entity_add(ENT_PIG,bx,by,bz,0);
     check(entity_add(ENT_PIG,bx,by,bz,0) == -1,"ninth entity is rejected");
@@ -283,7 +195,6 @@ static int cmd_models(void) {
     entity_clear();
 
     const char *names[ENT_KINDS] = {"m1_trader","m1_contractor","m1_pig","m1_zombie"};
-    kc_use_raster = 0;
     kc_set_resolution(320);
     for (int32_t k = 0; k < ENT_KINDS; k++) {
         entity_clear();
@@ -584,7 +495,6 @@ static int cmd_bench(void) {
         kc_set_resolution(w);
         uint64_t r0 = hstats.world_reads;
         clock_t c0 = clock();
-        kc_use_raster = 0;
         for (int i = 0; i < 20; i++) { write_camera(); kc_draw_world(); }
         double ms = (double)(clock() - c0) * 1000.0 / CLOCKS_PER_SEC / 20;
         double reads = (double)(hstats.world_reads - r0) / 20;
@@ -612,26 +522,10 @@ static uint64_t window_digest(uint64_t h) {
     return h;
 }
 
-static uint64_t mesh_digest(uint64_t h) {
-    for (int32_t s = 0; s < 16; s++) {
-        mesh_cmd *c = &mesh_cmds[s];
-        h = fnv(h, (uint32_t)c->cx); h = fnv(h, c->cx < 0 ? 0 : (uint32_t)c->cz); h = fnv(h, c->quads);
-        if (c->cx < 0) continue;
-        for (uint8_t p = c->first_page; p != MESH_NONE; p = mesh_page_next[p])
-            for (uint32_t q = 0; q < mesh_page_quads[p]; q++) {
-                h = fnv(h, mesh_pool[p].mat[q]);
-                for (int i = 0; i < 4; i++) h = fnv(h, mesh_pool[p].vtx[q * 4 + i]);
-            }
-    }
-    return h;
-}
-
 static void tap(uint8_t code) { key(code, 1); key(code, 0); }
 
-static int cmd_sweep(const char *mode) {
-    int raster = mode && !strcmp(mode, "raster");
-    kc_use_raster = raster;
-    uint64_t wd = 1469598103934665603ull, md = 1469598103934665603ull;
+static int cmd_sweep(void) {
+    uint64_t wd = 1469598103934665603ull;
     int locations = 48, frames = 0, edits = 0;
     uint32_t worst_loc = 0, worst = 0;
     for (int l = 0; l < locations; l++) {
@@ -665,16 +559,13 @@ static int cmd_sweep(const char *mode) {
         }
         frames += n;
         wd = window_digest(wd);
-        if (raster) { mesh_update(); md = mesh_digest(md); }
         if (arena_high_water() > worst) { worst = arena_high_water(); worst_loc = (uint32_t)l; }
     }
-    printf("  sweep %s: %d locations, %d frames, %d edits, %u chunks generated\n", raster ? "raster" : "ray",
+    printf("  sweep: %d locations, %d frames, %d edits, %u chunks generated\n",
            locations, frames, edits, (unsigned)world_stats_generated());
     printf("  arena high water: %u of %u bytes (first reached at location %u)\n",
            (unsigned)arena_high_water(), (unsigned)ARENA_SIZE, (unsigned)worst_loc);
     printf("  window digest %016llx\n", (unsigned long long)wd);
-    if (raster) printf("  mesh digest   %016llx (%d quads, %d pages now, %u chunks meshed)\n", (unsigned long long)md,
-                       mesh_total_quads(), mesh_pages_used(), (unsigned)mesh_stat_slots);
     return 0;
 }
 
@@ -707,7 +598,7 @@ static int cmd_gencost(void) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: kc_host shots|play|vectors|compare|models <dir> | contract | bench | sweep ray|raster | gencost\n");
+        fprintf(stderr, "usage: kc_host shots|play|vectors|models <dir> | contract | bench | sweep | gencost\n");
         return 2;
     }
     if (argc > 2) outdir = argv[2];
@@ -718,8 +609,7 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[1], "vectors")) return cmd_vectors();
     if (!strcmp(argv[1], "contract")) return cmd_contract();
     if (!strcmp(argv[1], "bench"))   return cmd_bench();
-    if (!strcmp(argv[1], "compare")) return cmd_compare();
-    if (!strcmp(argv[1], "sweep"))   return cmd_sweep(argc > 2 ? argv[2] : "ray");
+    if (!strcmp(argv[1], "sweep"))   return cmd_sweep();
     if (!strcmp(argv[1], "gencost")) return cmd_gencost();
     if (!strcmp(argv[1], "models"))  return cmd_models();
     fprintf(stderr, "unknown command %s\n", argv[1]);
