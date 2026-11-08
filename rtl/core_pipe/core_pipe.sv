@@ -320,7 +320,7 @@ module core_pipe
     // ------------------------------------------------------------------
     logic [31:0]      lane_y;
     logic [31:0]      l_rs1 [LANES];
-    logic [31:0]      l_alu [LANES];
+    logic [31:0]      l_ea [LANES];   // rs1 + imm: load/store address, JALR sum
     logic [31:0]      l_res [LANES];
     logic [31:0]      l_mrs2 [LANES];
     logic [31:0]      l_wdata [LANES];
@@ -376,15 +376,20 @@ module core_pipe
             .alu_b_sel(e_alu_b_sel), .funct3(e_funct3), .pc(e_pc), .imm(e_imm),
             .res_imm(e_res_imm), .is_lane(e_is_lane), .lane_y, .ray_en(e_vget),
             .ray_y(ray_y[i]), .stash(e_stash),
-            .rs1(l_rs1[i]), .alu_y(l_alu[i]), .cmp(l_cmp[i]),
+            .rs1(l_rs1[i]), .cmp(l_cmp[i]),
             .mul_op(m_funct3[1:0]), .m_is_load, .m_mul, .qr_s0, .m_qr,
             .vt_wr, .vt_y(vt_y[i]), .ld_cap(l_cap[i]), .ld_value(l_ldv[i]),
             .res(l_res[i]), .m_rs2(l_mrs2[i]), .wdata(l_wdata[i]),
             .w_we(w_we[i]), .w_rd
         );
 
+        // The load/store address (the ALU's rs1 + imm, which res latches)
+        // from its own adder on the forwarded rs1, without the ALU's operand
+        // and result muxes: the misaligned check, the dmem window and the
+        // bus coalescing compares read it.
+        assign l_ea[i]    = l_rs1[i] + e_imm;
         assign nonzero[i] = (l_rs1[i] != 32'd0);
-        assign mis[i]     = is_misaligned(e_funct3, l_alu[i][1:0]);
+        assign mis[i]     = is_misaligned(e_funct3, l_ea[i][1:0]);
         assign l_cap[i]   = ld_cap[i] || (win_srv[i] && m_is_load);
         assign l_ldv[i]   = win_srv[i] ? win_val[i] : ld_value[i];
     end
@@ -412,7 +417,7 @@ module core_pipe
 
     for (genvar i = 0; i < LANES; i++) begin : g_uniform
         assign l_taken[i] = l_cmp[i] ^ e_funct3[0];
-        assign l_jt[i]    = (l_rs1[i] + e_imm) & ~32'd1;
+        assign l_jt[i]    = l_ea[i] & ~32'd1;
         assign jt_diff[i] = (l_jt[i] != l_jt[sl]);
     end
 
@@ -741,7 +746,7 @@ module core_pipe
     // cycle (rtl/core_pipe/win_lsu.sv).
     win_lsu #(.LANES(LANES)) u_win (
         .clk, .rst,
-        .start(e_lsu_go), .active(mask), .ex_addr(l_alu),
+        .start(e_lsu_go), .active(mask), .ex_addr(l_ea),
         .go(m_valid && m_mem && !m_halt), .is_store(m_is_store), .funct3(m_funct3),
         .addr(l_res), .rs2(l_mrs2),
         .ex_win, .win(win_lane), .served(win_srv), .fin(win_fin), .value(win_val),

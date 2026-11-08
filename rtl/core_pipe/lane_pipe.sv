@@ -62,7 +62,6 @@ module lane_pipe
     input  logic        stash,        // MUL, QRCP: res = rs1 for MEM
 
     output logic [31:0] rs1,          // forwarded EX operand rs1
-    output logic [31:0] alu_y,
     output logic        cmp,
 
     // MEM
@@ -101,7 +100,7 @@ module lane_pipe
     // ------------------------------------------------------------------
     // EX
     // ------------------------------------------------------------------
-    logic [31:0] e_rs1, e_rs2, rs2, fwd, alu_a, alu_b;
+    logic [31:0] e_rs1, e_rs2, rs2, fwd, alu_a, alu_b, alu_y;
 
     assign rs1 = fm1 ? fwd : (fw1 && w_we) ? w_res : e_rs1;
     assign rs2 = fm2 ? fwd : (fw2 && w_we) ? w_res : e_rs2;
