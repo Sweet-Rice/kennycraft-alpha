@@ -27,7 +27,8 @@ wander (stroll somewhere nearby), idle (stay), greet (turn to the player and say
 follow (walk toward the player), go_home, offer_job (the contractor offers to build something).
 dx, dz move the villager relative to where it stands, at most 8 blocks each.
 "say" is optional, at most 40 characters, in character. Traders sell, contractors build for KCN coins.
-Answer only JSON: {"decisions": [{"id": 0, "act": "wander", "dx": 3, "dz": -2, "say": "..."}]}"""
+Use each villager's own id (the number after #), one decision per villager, in order.
+Answer only compact JSON: {"decisions": [{"id": 5, "act": "wander", "dx": 3, "dz": -2, "say": "..."}]}"""
 
 
 class Mob:
@@ -62,6 +63,8 @@ def validate(mob, d, pos, player):
     act = d.get("act", "idle")
     if mob.kind in VILLAGERS and act not in VILLAGER_ACTS:
         act = "idle"
+    if act == "offer_job" and mob.kind != KINDS["contractor"]:
+        act = "greet"
     try:
         dx, dz = float(d.get("dx", 0)), float(d.get("dz", 0))
     except (TypeError, ValueError):
@@ -79,6 +82,8 @@ def validate(mob, d, pos, player):
         if r > LEASH:
             tx, tz = mob.home[0] + hx * LEASH / r, mob.home[1] + hz * LEASH / r
     say = str(d.get("say", ""))[:40] if mob.kind in VILLAGERS else ""
+    if not any(c.isalpha() for c in say):                       # Nano sometimes "says" "..."
+        say = ""
     return act, tx, tz, say
 
 
@@ -127,8 +132,11 @@ class MobManager:
                          f"recently: {', '.join(m.memory) or 'nothing'}")
         reply = self.chat([{"role": "system", "content": MOB_SYSTEM},
                            {"role": "user", "content": "\n".join(lines)}])
-        out = {d.get("id"): d for d in reply.get("decisions", []) if isinstance(d, dict)}
-        return out
+        ds = [d for d in reply.get("decisions", []) if isinstance(d, dict)]
+        ids = [m.id for m in group]
+        if {d.get("id") for d in ds} <= set(ids):
+            return {d.get("id"): d for d in ds}
+        return dict(zip(ids, ds))       # Nano often copies the example's id 0: match by order instead
 
     def step(self, now, player):
         """Call every ~250 ms with the player's (x, z). Returns [(id, act, say)] decided this step."""

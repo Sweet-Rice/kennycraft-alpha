@@ -48,6 +48,12 @@ class TestValidation(unittest.TestCase):
         _, tx, tz, _ = validate(v, {"act": "wander", "dx": 8, "dz": 8}, (14, 14), (0, 0))
         self.assertLessEqual(math.hypot(tx, tz), LEASH + 1e-9)
 
+    def test_only_the_contractor_offers_jobs_and_empty_talk_is_dropped(self):
+        t = Mob(0, KINDS["trader"], (0, 0))
+        self.assertEqual(validate(t, {"act": "offer_job", "say": "..."}, (0, 0), (0, 0))[::3], ("greet", ""))
+        c = Mob(1, KINDS["contractor"], (0, 0))
+        self.assertEqual(validate(c, {"act": "offer_job"}, (0, 0), (0, 0))[0], "offer_job")
+
     def test_pigs_never_talk(self):
         p = Mob(0, KINDS["pig"], (0, 0))
         self.assertEqual(validate(p, {"act": "wander", "say": "oink"}, (0, 0), (0, 0))[3], "")
@@ -95,6 +101,13 @@ class TestModelBrain(unittest.TestCase):
         z = mm.spawn("zombie", 105, 100)
         mm.busy.add(z)
         self.assertEqual(mm.step(0, (100, 100)), [])
+
+    def test_wrong_ids_are_matched_by_order(self):
+        mm = manager(lambda m: {"decisions": [{"id": 0, "act": "idle"}, {"id": 1, "act": "follow"}]})
+        mm.spawn("pig", 120, 120)                                  # takes id 0, so the villagers are 1 and 2
+        a, b = mm.spawn("trader", 103, 103), mm.spawn("contractor", 104, 104)
+        done = {i: act for i, act, _ in mm.step(0, (100, 100))}
+        self.assertEqual((done[a], done[b]), ("idle", "follow"))
 
     def test_json_reply_accepts_fences(self):
         self.assertEqual(json_reply('```json\n{"decisions": []}\n```'), {"decisions": []})

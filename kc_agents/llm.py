@@ -31,7 +31,7 @@ def nemotron_chat():
     return chat
 
 
-def nano_json(timeout=1.5):
+def nano_json(timeout=3.0):
     """Mob brain: Nemotron Nano on the laptop's GPU (llama-server, OpenAI API), JSON out.
     Returns chat_json(messages) -> dict; raises on timeout or bad JSON (the caller falls back).
 
@@ -45,8 +45,10 @@ def nano_json(timeout=1.5):
     model = os.environ.get("NANO_MODEL", "nemotron-nano")
 
     def chat_json(messages):
+        # Thinking off: with it on, Nano spends all 200 tokens reasoning and answers nothing (3 s/call).
         r = client.chat.completions.create(model=model, messages=messages, temperature=0.7, max_tokens=200,
-                                           response_format={"type": "json_object"})
+                                           response_format={"type": "json_object"},
+                                           extra_body={"chat_template_kwargs": {"enable_thinking": False}})
         return json_reply(r.choices[0].message.content or "{}")
 
     return chat_json
