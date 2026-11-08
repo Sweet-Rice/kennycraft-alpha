@@ -32,8 +32,9 @@ Answer only compact JSON: {"decisions": [{"id": 5, "act": "wander", "dx": 3, "dz
 
 
 class Mob:
-    def __init__(self, eid, kind, home):
+    def __init__(self, eid, kind, home, leash=None):
         self.id, self.kind, self.home = eid, kind, home
+        self.leash = leash or (LEASH if kind in VILLAGERS else None)   # blocks from home; None = free
         self.next_think = 0.0
         self.greeted = False
         self.memory = []            # last few things this villager did or saw
@@ -76,11 +77,11 @@ def validate(mob, d, pos, player):
     dx = max(-MAX_OFFSET, min(MAX_OFFSET, dx))
     dz = max(-MAX_OFFSET, min(MAX_OFFSET, dz))
     tx, tz = pos[0] + dx, pos[1] + dz
-    if mob.kind in VILLAGERS:                                   # leash to home
+    if mob.leash:                                               # leash to home
         hx, hz = tx - mob.home[0], tz - mob.home[1]
         r = math.hypot(hx, hz)
-        if r > LEASH:
-            tx, tz = mob.home[0] + hx * LEASH / r, mob.home[1] + hz * LEASH / r
+        if r > mob.leash:
+            tx, tz = mob.home[0] + hx * mob.leash / r, mob.home[1] + hz * mob.leash / r
     say = str(d.get("say", ""))[:40] if mob.kind in VILLAGERS else ""
     if not any(c.isalpha() for c in say):                       # Nano sometimes "says" "..."
         say = ""

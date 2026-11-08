@@ -133,6 +133,7 @@ class Host:
             "hud": hud, "world": world, "live": self.proc is not None, "board": self.port is not None,
             "roles": {r: i for i, r in self.orch.roles.items()},
             "items": {"player": self.ledger.stock("player"), "trader": self.ledger.stock("trader")},
+            "player_at": self.orch.player_at,
             "speech": self.orch.speech, "brains": self.orch.mobs and self.orch.mobs.stats,
             "mode": mode, "queued": queued, "usd": self.usd, "prompt": self.orch.prompt,
             "wallets": {w: self.ledger.balance(w) for w in ("player", "escrow", "builder", "miner", "farmer", "treasury")},

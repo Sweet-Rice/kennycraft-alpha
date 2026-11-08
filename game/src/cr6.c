@@ -244,9 +244,15 @@ void cr6_key(uint8_t code) {
         if (d <= best_d && iabs(e[1] - kc_me.pos[1]) < Q16(2.0)) { best = i; best_d = d; }
     }
     if (best < 0) return;
+#if KC_DEMO     // the demo village's plot plus a block around it: wherever you talk, builds go there
+    zone[0] = (int16_t)(DEMO_X0 + DEMO_PLOT_X0 - 1);
+    zone[1] = (int16_t)(DEMO_H + 1);
+    zone[2] = (int16_t)(DEMO_Z0 + DEMO_PLOT_Z0 - 1);
+#else
     zone[0] = (int16_t)(qfloor(kc_me.pos[0]) - ZONE / 2);
     zone[1] = (int16_t)imax(1, qfloor(kc_me.pos[1]) - 4);
     zone[2] = (int16_t)(qfloor(kc_me.pos[2]) - ZONE / 2);
+#endif
     zone_set = 1;
     event(EV_INTERACT, (uint32_t)best);
 }

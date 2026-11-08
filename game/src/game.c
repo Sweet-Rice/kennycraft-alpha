@@ -250,6 +250,10 @@ void game_init(void) {
     kc_me.vel_y = 0;
     kc_me.yaw = Q16(128.0);               // 45 degrees
     kc_me.pitch = Q16(-40.0);
+#if KC_DEMO
+    kc_me.yaw = 0;                        // look up the path at the village (+z)
+    kc_me.pitch = Q16(-12.0);
+#endif
     kc_me.on_ground = 0;
     kc_me.selected = 0;
     kc_me.held = 0;

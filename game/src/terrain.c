@@ -25,13 +25,57 @@ uint32_t terrain_height_calls;
 #endif
 
 #if KC_DEMO
-// Demo world (make KC_DEMO=1): flat grass at one height. Trees stay for scenery and to bound
-// the view distance, but none within DEMO_CLEAR blocks of spawn (2048, 2048), so the villagers'
-// spot and the build site east of the player are open ground.
-#define DEMO_H     14
-#define DEMO_CLEAR 20
+// Demo world (make KC_DEMO=1): flat grass at DEMO_H with a village toward +z from spawn.
+// Natural trees stay outside the village; they ring it and keep the view distance short.
 static int32_t demo_clear(int32_t ax, int32_t az) {
-    return iabs(ax - 2048) <= DEMO_CLEAR && iabs(az - 2048) <= DEMO_CLEAR;
+    int32_t x = ax - DEMO_X0, z = az - DEMO_Z0;
+    return x >= -22 && x <= 22 && z >= -10 && z <= 38;
+}
+// Village boxes, from spawn (x right, z ahead; y 0 is the grass layer, 1 the first block
+// above it), inclusive corners. ring = only the box's x/z border. Later boxes win.
+typedef struct { int8_t x0, z0, y0, x1, z1, y1; uint8_t block, ring; } demo_box;
+#define BOX(x0, z0, y0, x1, z1, y1, b) {x0, z0, y0, x1, z1, y1, b, 0}
+#define RING(x0, z0, y0, x1, z1, y1, b) {x0, z0, y0, x1, z1, y1, b, 1}
+#define HOUSE(x0, z0, dx, dz)                                          /* 5x5, door at (dx, dz) */     BOX(x0, z0, 0, x0 + 4, z0 + 4, 0, B_COBBLE), RING(x0, z0, 1, x0 + 4, z0 + 4, 3, B_PLANKS),         BOX(x0, z0, 1, x0, z0, 3, B_LOG), BOX(x0 + 4, z0, 1, x0 + 4, z0, 3, B_LOG),                        BOX(x0, z0 + 4, 1, x0, z0 + 4, 3, B_LOG), BOX(x0 + 4, z0 + 4, 1, x0 + 4, z0 + 4, 3, B_LOG),        BOX(dx, dz, 1, dx, dz, 2, B_AIR), BOX(x0, z0, 4, x0 + 4, z0 + 4, 4, B_BRICK)
+#define STALL(x0, z0, x1, z1, roof)                                    /* log posts, roof */     BOX(x0, z0, 1, x0, z0, 3, B_LOG), BOX(x1, z0, 1, x1, z0, 3, B_LOG),                                BOX(x0, z1, 1, x0, z1, 3, B_LOG), BOX(x1, z1, 1, x1, z1, 3, B_LOG), BOX(x0, z0, 4, x1, z1, 4, roof)
+static const demo_box village[] = {
+    BOX(-1, 1, 0, 1, 14, 0, B_DIRT),                         // path from spawn to the contractor
+    BOX(-4, 9, 0, 4, 9, 0, B_DIRT),
+    BOX(-3, 5, 0, 3, 13, 0, B_SAND), BOX(-4, 6, 0, 4, 12, 0, B_SAND),   // plaza
+    BOX(-5, 9, 0, -5, 9, 0, B_DIRT), BOX(5, 9, 0, 5, 9, 0, B_DIRT),
+    RING(-1, 8, 1, 1, 10, 1, B_COBBLE),                      // well: ring, posts, roof, a hole
+    BOX(-1, 8, 2, -1, 8, 3, B_LOG), BOX(1, 8, 2, 1, 8, 3, B_LOG),
+    BOX(-1, 10, 2, -1, 10, 3, B_LOG), BOX(1, 10, 2, 1, 10, 3, B_LOG),
+    BOX(-1, 8, 4, 1, 10, 4, B_PLANKS), BOX(0, 9, 0, 0, 9, 0, B_AIR),
+    STALL(-10, 7, -6, 11, B_BRICK), BOX(-6, 8, 1, -6, 10, 1, B_PLANKS),   // banker (west)
+    STALL(6, 7, 10, 11, B_SAND), BOX(6, 8, 1, 6, 10, 1, B_PLANKS),        // trader (east)
+    STALL(-2, 15, 2, 18, B_PLANKS), BOX(-1, 15, 1, 1, 15, 1, B_PLANKS),   // contractor (north)
+    RING(DEMO_PLOT_X0, DEMO_PLOT_Z0, 0, DEMO_PLOT_X0 + DEMO_PLOT_W - 1,  // the build plot
+         DEMO_PLOT_Z0 + DEMO_PLOT_W - 1, 0, B_COBBLE),
+    BOX(-9, 1, 0, -6, 4, 0, B_DIRT),                         // chicken pen, gate east
+    RING(-10, 0, 1, -5, 5, 2, B_PLANKS), BOX(-5, 2, 1, -5, 3, 2, B_AIR),
+    BOX(-10, 0, 1, -10, 0, 3, B_LOG), BOX(-5, 0, 1, -5, 0, 3, B_LOG),
+    BOX(-10, 5, 1, -10, 5, 3, B_LOG), BOX(-5, 5, 1, -5, 5, 3, B_LOG),
+    HOUSE(-18, 12, -14, 14), HOUSE(14, 12, 14, 14), HOUSE(13, -4, 13, -2),
+    BOX(9, 28, 1, 9, 28, 5, B_OBSIDIAN), BOX(12, 28, 1, 12, 28, 2, B_OBSIDIAN),   // ruined portal:
+    BOX(12, 28, 4, 12, 28, 5, B_OBSIDIAN), BOX(10, 28, 1, 11, 28, 1, B_OBSIDIAN), // (12, 3) is the
+    BOX(10, 28, 5, 11, 28, 5, B_OBSIDIAN),                                        // missing block
+    BOX(8, 28, 0, 8, 28, 0, B_NETHERRACK), BOX(13, 27, 0, 13, 27, 0, B_NETHERRACK),
+    BOX(10, 29, 0, 11, 29, 0, B_NETHERRACK), BOX(13, 28, 1, 13, 28, 1, B_COBBLE),
+};
+static void demo_village(int32_t ax0, int32_t az0, int32_t rx0, int32_t rz0) {
+    for (uint32_t i = 0; i < sizeof village / sizeof village[0]; i++) {
+        const demo_box *b = &village[i];
+        int32_t x0 = imax(b->x0 + DEMO_X0, ax0), x1 = imin(b->x1 + DEMO_X0, ax0 + CHUNK_W - 1);
+        int32_t z0 = imax(b->z0 + DEMO_Z0, az0), z1 = imin(b->z1 + DEMO_Z0, az0 + CHUNK_W - 1);
+        for (int32_t az = z0; az <= z1; az++)
+            for (int32_t ax = x0; ax <= x1; ax++) {
+                if (b->ring && ax != b->x0 + DEMO_X0 && ax != b->x1 + DEMO_X0
+                    && az != b->z0 + DEMO_Z0 && az != b->z1 + DEMO_Z0) continue;
+                for (int32_t y = b->y0; y <= b->y1; y++)
+                    hal_win_set((ax - ax0 + rx0) & 63, DEMO_H + y, (az - az0 + rz0) & 63, b->block);
+            }
+    }
 }
 #endif
 
@@ -191,4 +235,7 @@ void terrain_gen_chunk(int32_t cx, int32_t cz, int32_t win_x0, int32_t win_z0, v
                 for (int32_t dy = 1; dy <= 4; dy++)
                     hal_win_set(WX(bx), h + dy, WZ(bz), B_LOG);
         }
+#if KC_DEMO
+    demo_village(ax0, az0, rx0, rz0);
+#endif
 }
