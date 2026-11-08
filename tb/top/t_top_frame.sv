@@ -47,7 +47,8 @@ module t_top_frame #(
     parameter string PAL_HEX  = "palette.hex",
     parameter bit    HAS_RAY_UNIT  = 1'b0,
     parameter bit    HAS_QRCP      = 1'b0,
-    parameter int    FB_COUNT      = 2
+    parameter int    FB_COUNT      = 2,
+    parameter bit    PIPELINED     = 1'b0   // core_pipe instead of core (P8)
 ) (
     input logic clk,
     input logic ck_rst,
@@ -69,7 +70,8 @@ module t_top_frame #(
 
     top #(.LANES(LANES), .HAS_DIV_STACK(HAS_DIV_STACK),
           .IMEM_HEX(IMEM_HEX), .DMEM_HEX(DMEM_HEX), .TEX_HEX(TEX_HEX), .PAL_HEX(PAL_HEX),
-          .HAS_RAY_UNIT(HAS_RAY_UNIT), .HAS_QRCP(HAS_QRCP), .FB_COUNT(FB_COUNT)) dut (
+          .HAS_RAY_UNIT(HAS_RAY_UNIT), .HAS_QRCP(HAS_QRCP), .FB_COUNT(FB_COUNT),
+          .PIPELINED(PIPELINED)) dut (
         .clk, .ck_rst, .uart_rxd_out, .uart_txd_in(1'b1), .led,
         .vga_r, .vga_g, .vga_b, .vga_hs, .vga_vs,
         .ddr3_addr, .ddr3_ba, .ddr3_cas_n, .ddr3_ck_n, .ddr3_ck_p, .ddr3_cke,
