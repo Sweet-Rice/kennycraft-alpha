@@ -8,6 +8,10 @@
 #   tb-qrcp-unit     rtl/core/qrcp.sv alone (qrcp_unit_tb) against golden
 #                    vectors from the same program: the edge classes and
 #                    2 x QRCP_RANDOM random inputs (QRCP_SEED)
+#   tb-qrcp-pipe-eq  rtl/core_pipe/qrcp_pipe.sv (core_pipe's two-step unit)
+#                    against rtl/core/qrcp.sv (qrcp_pipe_eq_tb): the edge
+#                    classes and QRCP_PIPE_RANDOM random inputs (QRCP_SEED),
+#                    identical y required
 #
 # Not in `make check`: `make qrcp-exhaustive` runs the model check on all
 # 2^32 inputs (about a minute on one thread), and `make qrcp-bench-inc`
@@ -21,9 +25,10 @@ HOST_CC     ?= zig cc
 QRCP_STRIDE ?= 251
 QRCP_RANDOM ?= 20000
 QRCP_SEED   ?= 0x4B43
+QRCP_PIPE_RANDOM ?= 1000000
 QR_OBJ      := $(OBJ)/qrcp
 
-TB_TARGETS += tb-qrcp-model tb-qrcp-unit
+TB_TARGETS += tb-qrcp-model tb-qrcp-unit tb-qrcp-pipe-eq
 
 $(QR_OBJ)/gen/kc_tables.h: game/tools/gen_assets.py
 	@mkdir -p $(QR_OBJ)/gen
@@ -54,3 +59,9 @@ tb-qrcp-unit: $(QR_OBJ)/vectors.txt
 	$(QR_OBJ)/unit/Vqrcp_unit_tb +vectors=$(CURDIR)/$(QR_OBJ)/vectors.txt
 
 .PHONY: qrcp-exhaustive qrcp-bench-inc
+
+tb-qrcp-pipe-eq:
+	$(VERILATOR) $(VL_TB) --top-module qrcp_pipe_eq_tb -Mdir $(QR_OBJ)/pipe_eq \
+	    rtl/core/qrcp.sv rtl/core_pipe/qrcp_pipe.sv tb/qrcp/qrcp_pipe_eq_tb.sv
+	$(QR_OBJ)/pipe_eq/Vqrcp_pipe_eq_tb +random=$(QRCP_PIPE_RANDOM) \
+	    +seed=$(patsubst 0x%,%,$(QRCP_SEED))

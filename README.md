@@ -30,6 +30,21 @@ design history; decision numbers such as D22 refer to it.
 | `kc_agents/` | Nemotron agents that act in the game world; see `kc_agents/README.md` |
 | `tight_setup_hold_pins.txt` | Vivado table of the 68 `u_bridge` FIFO and calibration-sync pins with tight setup and hold (clocks `clk50_unbuf`, `clk_pll_i`) |
 
+## Bank companion
+
+With the existing bank configuration in place, run `python host/kchost.py` and
+open http://127.0.0.1:8000. The Wallets card includes a native-canvas player KCN
+chart fed by the page's existing `/events` stream; no separate dashboard,
+Node.js, npm install, or extra wallet configuration is needed.
+
+The chart starts with one observation, adds a point only when the player's
+balance changes, and retains the latest 120 observations until the page reloads.
+World, HUD, speech, and settlement-only updates do not consume chart history.
+These are game-ledger balances, including queued payments, not reconstructed
+on-chain history. Existing ledger settlement badges and devnet transaction
+links remain available. The chart is read-only; companion game/bank controls
+are unchanged.
+
 ## Checks
 
 ```sh
@@ -168,6 +183,21 @@ and divergence stack are written in EX, and every mask writer flushes behind
 it. ERR halts report the faulting instruction's own PC. While a VTRACE x0
 walk is in flight, the next custom-1 instruction waits in EX, and world
 accesses and MMIO stores wait in MEM.
+
+- **BTB** (`rtl/core_pipe/btb.sv`): 64 entries of distributed RAM, looked up
+  from the fetch PC, with 2-bit counters. A hit predicted taken fetches the
+  target next; ID checks the target and EX redirects only on a wrong guess.
+  Only conditional branches and JAL are predicted.
+- **dmem window** (`rtl/mem/dmem_win.sv`, `rtl/core_pipe/win_lsu.sv`): dmem
+  0x6000 to 0x7FFF, where crt0 puts the eight 1 KB lane stacks, is 8 banks
+  of distributed RAM (bank = address bits 12:10) on the pipelined core, so
+  an 8-lane spill or reload is one cycle with no load tail. Same addresses
+  and values as the dmem BRAM, which still holds the rest. It is initialized
+  from `kc_dmem.hex` at build time; `fpga/patch_bit.sh` refuses images that
+  change that range.
+- **MUL** writes its product straight into WB and is forwarded from WB only
+  (mul-use bubble); **QRCP** (`rtl/core_pipe/qrcp_pipe.sv`) does its two
+  Newton steps in two MEM cycles, bit-exact with `rtl/core/qrcp.sv`.
 
 ```sh
 make tb-core-pipe-<t>          # any tb/core test on the pipelined core

@@ -138,6 +138,16 @@ package kc_isa_pkg;
     localparam logic [3:0]  REG_MMIO     = 4'h5;
     localparam logic [3:0]  REG_PAL      = 4'h6;
 
+    // dmem window (pipelined core only, rtl/mem/dmem_win.sv): dmem offsets
+    // 0x6000 to 0x7FFF, where crt0 puts the per-lane 1 KB stacks, live in
+    // DWIN_BANKS distributed-RAM banks of DWIN_DEPTH words instead of the
+    // dmem BRAM. Bank = addr[12:10], word in the bank = addr[9:2], so the
+    // same stack slot of every lane falls in a different bank. Invisible to
+    // software: same addresses, same values (dmem aliases every 32 KB).
+    localparam int unsigned DWIN_BANKS     = 8;
+    localparam int unsigned DWIN_DEPTH     = 256;
+    localparam int unsigned DWIN_BASE_WORD = 32'h1800;   // dmem word index of 0x6000
+
     // ------------------------------------------------------------------
     // MMIO offsets from MMIO_BASE
     // ------------------------------------------------------------------
@@ -292,6 +302,11 @@ package kc_isa_pkg;
     // Fetch outside instruction memory (0x0000_0000 to 0x0000_7FFF).
     function automatic logic is_fetch_outside_imem(input logic [31:0] pc);
         return pc >= (IMEM_BASE + IMEM_BYTES);
+    endfunction
+
+    // A data address inside the dmem window (any 32 KB alias of it).
+    function automatic logic is_dwin(input logic [31:0] addr);
+        return (addr[31:28] == REG_DMEM) && (addr[14:13] == 2'b11);
     endfunction
 
 endpackage

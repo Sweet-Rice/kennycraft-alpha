@@ -6,12 +6,14 @@
    scalar lane 4; one under M = 0x0C decided by lane 2; one under M = 0 where
    lanes disagree and lane 0 decides. Each outcome is recorded after MASKALL
    as 1 (taken) or 2 (not taken) in every lane.
-   Cases 1..9 sit at 0x100 + 0x40*k as MASKSET, then the faulting branch at
+   Cases 1..10 sit at 0x100 + 0x40*k as MASKSET, then the faulting branch at
    +4: BEQ, BNE, BLT, BGE, BLTU, BGEU with lane-dependent outcomes under the
    full mask (1..6), a branch whose two active lanes of 0x24 disagree (7), a
    divergent branch with a misaligned target, which is ERR.DIVERGE only (8),
    and a uniform taken branch with a misaligned target under M = 0xF0, which
-   is ERR.ILLEGAL (D16) (9). */
+   is ERR.ILLEGAL (D16) (9). Case 10 is a loop back edge (at +12) taken by
+   every lane for at least nine passes, so core_pipe's BTB predicts it
+   taken, until the last active lane falls out: ERR.DIVERGE at the branch. */
 #include "kc_test.h"
 #include "kc_lanes.h"
 
@@ -87,6 +89,12 @@ _start:
     .org 0x340                  /* 9: M = 0xF0, BNE s0, x0, +6: taken, misaligned */
     MASKSET(s5)
     .word 0x00041363
+    NOT_REACHED
+    .org 0x380                  /* 10: predicted-taken back edge diverges */
+    MASKSET(s4)
+    li    t1, 16
+1:  addi  t1, t1, -1
+    bge   t1, s0, 1b            /* lane l taken while t1 >= l */
     NOT_REACHED
 
     .org 0x400

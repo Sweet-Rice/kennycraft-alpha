@@ -59,7 +59,7 @@ Environment variables for `kc_host` (`host/hal_host.c`): `KC_DDR_FILL=random|zer
 | `src/fixed.[ch]` | Q16.16, `qrcp` (1/x: computed seed + Newton, branch-free, no table by default), `qsin`, `sel()` |
 | `src/trace.[ch]` | `ray_setup` + `kc_trace` with the exact VTRACE contract. `vtrace_ref` = C reference for one ray; `KC_VTRACE=1` maps `kc_trace` onto the ray unit |
 | `src/render.[ch]` | Ray-tracing kernel. 4x2 block per lane pass (D15), blocks in rows; frame state and the ray in registers, one LBU + one SB per pixel. Each VTRACE walk overlaps the next block's ray setup (asynchronous VTRACE), and blocks under the hotbar are not traced. Pixel byte per spec |
-| `src/entity.[ch]` | Villager (trader, contractor), pig and zombie box models (flat colors) that walk to a target; drawn by the ray tracer |
+| `src/entity.[ch]` | Villager (trader, contractor), chicken and zombie box models (flat colors) that walk to a target; drawn by the ray tracer |
 | `src/kc_libc.c` | memcpy/memset for the freestanding chip build |
 | `src/kc_lanes.h` | LANEID/LMASK/BALLOT/MASKGET/MASKSET/MASKALL: software for 1 lane, `.insn` for 8; `qrcp_hw` (QRCP `.insn`) on 8 lanes only |
 | `src/terrain.[ch]` | Deterministic terrain + trees from absolute coordinates; generates one chunk into its window slot |
@@ -103,7 +103,7 @@ The table holds eight entities; invalid kinds/facings or a full table return -1.
 `entity_clear()` empties it; `entity_count()` reports its size.
 
 `entity_move(id, x, z)` sets a walk target; `entity_tick(dt)` (lane 0, once per frame)
-steps each entity toward it at its kind's speed (pig 1.0, zombie 1.2, villagers
+steps each entity toward it at its kind's speed (chicken 1.0, zombie 1.2, villagers
 1.5 blocks/s), turns it to face the direction of travel and stands it on the column's
 top non-tree block (leaves and logs are skipped, so mobs walk under canopies).
 No collision or pathfinding: the laptop plans the route.
@@ -113,14 +113,14 @@ screen rectangle per entity. `kc_render_frame` tests each 4x2 block against thos
 rectangles and ray traces the boxes only where one overlaps; with no entities it runs
 the plain world kernel.
 
-Colors reuse the existing palette: villagers (five boxes) have light-dirt skin with a
-dark-dirt nose and black eyes painted flush on the face; trader robes are brick, contractor robes light wood. The pig is sand with
-a brick snout and black eyes. The zombie has light-grass skin, a dark-stone shirt
+Colors reuse the existing palette: villagers have light-dirt skin and dark-grass
+eyes; trader robes are brick, contractor robes light wood. The chicken is white with
+a brick comb and wattle, a planks beak and light-wood legs. The zombie has light-grass skin, a dark-stone shirt
 and near-black pants/eyes.
 
 `make models` checks visibility, palette colors, terrain occlusion, behind-camera
 rejection, table limits and walking (target, facing, ground under a canopy).
-It saves `base`, `m0_models`, `m1_trader`, `m1_contractor`, `m1_pig`, `m1_zombie`,
+It saves `base`, `m0_models`, `m1_trader`, `m1_contractor`, `m1_chicken`, `m1_zombie`,
 `buried` and `behind` as PNG and raw `.fb` files in `out/models/`.
 
 ## CR6 link

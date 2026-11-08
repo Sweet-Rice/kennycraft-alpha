@@ -4,7 +4,7 @@ Laptop-side agents that act in the game world. Three sizes:
 
 | Who | Brain | Model |
 |---|---|---|
-| Pigs, zombies | Rules (wander, flee, chase) | none |
+| Chickens, zombies | Rules (wander, flee, chase) | none |
 | Villagers (trader, contractor) within 24 blocks of the player | One JSON decision per call, 2 villagers per call, memory of the last 3 actions; rules on any timeout (3 s), error or bad answer | Nemotron Nano, local (`llama-server` on the laptop GPU) |
 | Builder contractor, when hired | Multi-step tool agent: survey, plan, price, quote, build, inspect, get paid | Nemotron Super (build.nvidia.com or a Brev box) |
 
