@@ -20,6 +20,11 @@
 #define KEY_E     0x65   // talk to the villager in front of you (CR6 INTERACT)
 #define KEY_Y     0x79   // accept the quote on the HUD (CR6 CONFIRM)
 #define KEY_N     0x6E   // decline it
+// Mouse look: one key-down byte per step (scripts/kc.py sends them from pointer motion).
+#define MOUSE_LEFT  0x14
+#define MOUSE_RIGHT 0x15
+#define MOUSE_UP    0x16
+#define MOUSE_DOWN  0x17
 
 typedef struct {
     q16 pos[3];          // feet center, absolute blocks

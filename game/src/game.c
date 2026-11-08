@@ -19,6 +19,7 @@ _Static_assert(WORLD_CHUNKS * CHUNK_W < 32767, "aim / place are int16");
 #define FALL_MAX    Q16(40.0)
 #define LOOK_RATE   Q16(330.0)     // angle units per second (~116 deg/s)
 #define PITCH_MAX   Q16(235.0)     // ~83 deg
+#define MOUSE_STEP  Q16(3.0)       // angle units per mouse-look byte (~1 deg); sensitivity knob
 #define HALF_W      Q16(0.3)       // player box 0.6 x 1.8 x 0.6
 #define HEIGHT      Q16(1.8)
 #define EYE         Q16(1.62)
@@ -155,6 +156,10 @@ static void game_key(uint8_t b) {
     case KEY_BREAK: if (down) kc_me.want_break = 1; return;   // done in pick_and_edit()
     case KEY_PLACE: if (down) kc_me.want_place = 1; return;
     case KEY_E: case KEY_Y: case KEY_N: if (down) cr6_key(b & 0x7F); return;
+    case MOUSE_LEFT:  if (down) kc_me.yaw = (kc_me.yaw - MOUSE_STEP) & (Q16_INT(ANG_FULL) - 1); return;
+    case MOUSE_RIGHT: if (down) kc_me.yaw = (kc_me.yaw + MOUSE_STEP) & (Q16_INT(ANG_FULL) - 1); return;
+    case MOUSE_UP:    if (down) kc_me.pitch = iclamp(kc_me.pitch + MOUSE_STEP, -PITCH_MAX, PITCH_MAX); return;
+    case MOUSE_DOWN:  if (down) kc_me.pitch = iclamp(kc_me.pitch - MOUSE_STEP, -PITCH_MAX, PITCH_MAX); return;
     default:
         if ((b & 0x7F) >= '1' && (b & 0x7F) <= '9' && down) kc_me.selected = (uint8_t)((b & 0x7F) - '1');
         return;

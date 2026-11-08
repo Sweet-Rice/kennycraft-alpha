@@ -764,8 +764,30 @@ static int cmd_cr6(void) {
     return failures ? 1 : 0;
 }
 
+// KC_RAW=<file> writes every frame there as raw RGB888, w*h*3 bytes (scripts/kc.py --host).
+static void write_raw(const char *path, int w, int h) {
+    static uint8_t rgb[320 * 240 * 3];
+    char tmp[600];
+    const uint8_t *fb = host_front_buffer();
+    const uint16_t *pal = host_palette();
+    for (int y = 0, i = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            uint16_t c = pal[fb[y * FB_STRIDE + x]];
+            rgb[i++] = (uint8_t)(((c >> 8) & 15) * 17);
+            rgb[i++] = (uint8_t)(((c >> 4) & 15) * 17);
+            rgb[i++] = (uint8_t)((c & 15) * 17);
+        }
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    FILE *f = fopen(tmp, "wb");
+    if (!f) return;
+    fwrite(rgb, 1, (size_t)w * h * 3, f);
+    fclose(f);
+    rename(tmp, path);                                 // the reader never sees half a frame
+}
+
 static int cmd_link(void) {
     char path[512], tmp[512];
+    const char *raw = getenv("KC_RAW");
     snprintf(path, sizeof path, "%s/live.png", outdir);
     snprintf(tmp, sizeof tmp, "%s/live.tmp.png", outdir);
     fcntl(0, F_SETFL, fcntl(0, F_GETFL) | O_NONBLOCK);
@@ -778,8 +800,9 @@ static int cmd_link(void) {
         if (k == 0) return 0;                              // kc-host closed the pipe
         step_frames(1);
         fflush(stdout);
+        int w = KC_RP->width, h = KC_RP->height;
+        if (raw) write_raw(raw, w, h);
         if ((n & 3) == 0) {
-            int w = KC_RP->width, h = KC_RP->height;
             png_write_fb(tmp, host_front_buffer(), host_palette(), w, h, w == 160 ? 4 : 2);
             rename(tmp, path);
         }
