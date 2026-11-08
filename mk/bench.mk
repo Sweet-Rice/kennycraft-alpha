@@ -56,16 +56,19 @@ STAGE ?= 0
 DDR ?= 1
 # CHIP_TOP=top builds rtl/top.sv, bench_chip (the default before Stage 2) the
 # same RTL without the board clocking and without the ray unit; both take
-# LANES and HAS_DIV_STACK, top also HAS_RAY_UNIT and HAS_QRCP (Stage 2 runs on
-# top, with QRCP like the Stage 2 bitstream). The harness reads the lane count
-# from the built core.
+# LANES and HAS_DIV_STACK, top also HAS_RAY_UNIT, HAS_QRCP and FB_COUNT (Stage 2
+# runs on top, with QRCP and three framebuffers like the Stage 2 bitstream,
+# D22/D24; bench_chip always has two). The harness reads the lane count
+# from the built core and gets the framebuffer count as KC_FB_COUNT.
 LANES ?= $(if $(filter 1 2,$(STAGE)),8,1)
 HAS_DIV_STACK ?= $(if $(filter 1 2,$(STAGE)),1,0)
 HAS_RAY_UNIT ?= $(if $(filter 2,$(STAGE)),1,0)
 HAS_QRCP ?= $(if $(filter 2,$(STAGE)),1,0)
+FB_COUNT ?= $(if $(filter 2,$(STAGE)),3,2)
 CHIP_TOP ?= $(if $(filter 2,$(STAGE)),top,bench_chip)
+CHIP_FB_COUNT = $(if $(filter top,$(CHIP_TOP)),$(FB_COUNT),2)
 CHIP_PARAMS = -GLANES=$(LANES) -GHAS_DIV_STACK="1'b$(HAS_DIV_STACK)" \
-	$(if $(filter top,$(CHIP_TOP)),-GHAS_RAY_UNIT="1'b$(HAS_RAY_UNIT)" -GHAS_QRCP="1'b$(HAS_QRCP)")
+	$(if $(filter top,$(CHIP_TOP)),-GHAS_RAY_UNIT="1'b$(HAS_RAY_UNIT)" -GHAS_QRCP="1'b$(HAS_QRCP)" -GFB_COUNT=$(FB_COUNT))
 ifeq ($(STAGE)$(CHIP_TOP),2bench_chip)
 $(error STAGE=2 needs CHIP_TOP=top: bench_chip has no ray unit, so custom-1 would halt ERR.ILLEGAL)
 endif
@@ -113,7 +116,7 @@ vl-build: sw
 	$(VERILATOR) $(VL_FLAGS) $(VL_TRACE) --Mdir $(VL_MDIR) --top-module $(CHIP_TOP) $(CHIP_PARAMS) \
 		-GIMEM_HEX='"out/kc_imem.hex"' -GDMEM_HEX='"out/kc_dmem.hex"' \
 		-GPAL_HEX='"$(if $(PAL_HEX),$(abspath $(PAL_HEX)))"' -GTEX_HEX='"$(if $(TEX_HEX),$(abspath $(TEX_HEX)))"' \
-		-CFLAGS "$(HARNESS_CFLAGS) -DCHIP_TOP=$(CHIP_TOP)" $(SDL_LDFLAGS) \
+		-CFLAGS "$(HARNESS_CFLAGS) -DCHIP_TOP=$(CHIP_TOP) -DKC_FB_COUNT=$(CHIP_FB_COUNT)" $(SDL_LDFLAGS) \
 		tb/harness/public.vlt $(RTL_FILES) $(CHIP_FILE) $(VL_STUBS) $(abspath $(HARNESS_CPP))
 
 vl: vl-build
@@ -128,7 +131,9 @@ TESTS_1 = t_laneid t_mask t_ballot t_maskgetset t_lsu_order t_branch_uniform \
 	t_divstack_overflow
 TESTS_DDR = t_chunk_roundtrip t_slot_valid t_ring
 TESTS_2 = t_vtrace t_qrcp
-TESTS = $(TESTS_0)
+# t_fbswap checks double buffering; with three framebuffers (the Stage 2 top,
+# D24) t_fbswap3 replaces it.
+TESTS = $(if $(filter 3,$(CHIP_FB_COUNT)),$(patsubst t_fbswap,t_fbswap3,$(TESTS_0)),$(TESTS_0))
 ifeq ($(DDR),1)
 TESTS += $(TESTS_DDR)
 endif
