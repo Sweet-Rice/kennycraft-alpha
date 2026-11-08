@@ -15,13 +15,17 @@
 # (verilated.o, verilated_timing.o, verilated_threads.o), built once in
 # $(VLRT) from a one-line module with the same flags, instead of
 # recompiling it per testbench (most of each small test's build time).
+# $(VLRT)/key records the Verilator version and install and those flags;
+# the runtime is rebuilt whenever the key changes.
 
 VERILATOR     ?= verilator
 VL_BUILD_JOBS ?= 0
 OBJ           := obj_dir
 VLRT          := $(OBJ)/vlrt
 VLRT_OBJS     := $(addprefix $(abspath $(VLRT))/,verilated.o verilated_timing.o verilated_threads.o)
-VL_TB_BASE    := --binary --timing --build-jobs $(VL_BUILD_JOBS) --verilate-jobs 1 -Wno-fatal
+VL_TB_FLAGS   := --binary --timing --verilate-jobs 1 -Wno-fatal
+VL_TB_BASE    := $(VL_TB_FLAGS) --build-jobs $(VL_BUILD_JOBS)
+VLRT_KEY      := $(shell $(VERILATOR) --version) $(shell $(VERILATOR) --getenv VERILATOR_ROOT) $(VL_TB_FLAGS)
 VL_TB         ?= $(VL_TB_BASE) -MAKEFLAGS VK_GLOBAL_OBJS= -LDFLAGS "$(VLRT_OBJS)"
 # Testbenches with their own C++ main (clocks driven from C++, no --timing),
 # long runs, so their C++ is built at -O3 (Verilator's default is -Os)
@@ -39,14 +43,18 @@ endif
 TB_TARGETS :=
 include $(wildcard tb/*/tb.mk)
 
-.PHONY: check check-all clean $(TB_TARGETS)
+.PHONY: check check-all clean FORCE $(TB_TARGETS)
 
-# Built before any testbench (order-only: the runtime never goes stale
-# within one Verilator install; `make clean` removes it).
+# Built before any testbench that links it.
 $(TB_TARGETS): | $(VLRT_OBJS)
 
-$(VLRT_OBJS) &:
+$(VLRT)/key: FORCE
 	@mkdir -p $(VLRT)
+	@echo '$(VLRT_KEY)' > $@.new
+	@if cmp -s $@.new $@; then rm $@.new; else mv $@.new $@; fi
+
+$(VLRT_OBJS) &: $(VLRT)/key
+	rm -f $(VLRT)/*.o $(VLRT)/*.d $(VLRT)/V*
 	printf 'module vlrt;\n  initial #1 $$finish;\nendmodule\n' > $(VLRT)/vlrt.sv
 	$(VERILATOR) $(VL_TB_BASE) --top-module vlrt -Mdir $(VLRT) $(VLRT)/vlrt.sv
 
