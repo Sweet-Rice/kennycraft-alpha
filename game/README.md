@@ -17,9 +17,18 @@ make atlas-edit # copy gen/textures_atlas.png to assets/textures.png for editing
 make clean      # rm -rf build out gen
 ```
 
+Run these commands from `game/`. Use Linux (including WSL) for the laptop
+frontend: `host/main_host.c` uses `clock_nanosleep` with `TIMER_ABSTIME`,
+which is unavailable on native macOS. Asset generation needs Python 3; editable
+or custom texture atlases also need Pillow. Chip builds need RISC-V-capable clang
+and a compatible linker (lld in the command below); checks use `llvm-objdump`
+and `llvm-nm` on `PATH`. `llvm-size` is optional, for section-size diagnostics.
+macOS can cross-build the chip images with the full LLVM toolchain using
+`make chip chip8 CHIP_CC="clang -fuse-ld=lld"`.
+
 `CC` (default `cc`) builds `kc_host`; `CHIP_CC` (default `clang`) builds the chip ELFs. The chip build compiles the lane-0 game files (`arena.c terrain.c chunks.c game.c kc_main.c cr6.c`) with `-Os` and the kernel files with `-O2`; IMEM is 32 KB. `build/`, `out/`, `gen/` and `assets/` are gitignored.
 
-Both chip targets run `tools/chip_check.sh` (no `div`/`rem`, float, libgcc calls, `ecall` or CSR instructions; prints section sizes) and `tools/stack_check.sh`; `chip8` also runs `tools/lane_lint.sh` (`qrcp`, `ray_setup`, `kc_shade_pixel`, `kc_shade_pixel_ent`, `ent_box_hit` must have no branches, `vtrace_ref` exactly two uniform ones).
+Both chip targets run `tools/chip_check.sh` (no `div`/`rem`, float, libgcc calls, `ecall` or CSR instructions; prints section sizes) and `tools/stack_check.sh`; `chip8` also runs `tools/lane_lint.sh`. That script checks the named symbols `qrcp`, `ray_setup`, `kc_shade_pixel`, `kc_shade_pixel_ent`, `ent_box_hit` and `vtrace_ref` only when present: zero branches for the first five, exactly two uniform branches for `vtrace_ref`. It is not an exhaustive audit of every current kernel function.
 
 `tools/stack_check.sh` computes the worst-case stack depth of each call chain that runs on a lane (`main` on lane 0, `kc_render_frame` on lanes 1-7) from the ELF's prologues (`addi sp,sp,-N`) and call graph, against the 1 KB lane stack (limit: second argument or `STACK_LIMIT`, default 1024). It also fails on recursion, on calls it cannot resolve (indirect, or not to a function start) and on unsized stack adjustments. Nothing catches an overflow on the chip (lane n runs into lane n+1's stack, lane 7 into the statics), so keep big locals out of anything the kernel calls.
 
@@ -69,7 +78,7 @@ Environment variables for `kc_host` (`host/hal_host.c`): `KC_DDR_FILL=random|zer
 | `src/cr6.[ch]` | CR6 UART command link with the laptop (lane 0): framing, commands, STATUS/EVENT replies, HUD |
 | `src/kc_main.[ch]` | Init, frame loop, `kc_draw_world`, resolution and step cap setters; `main()` for the chip |
 | `src/kc_budget.h` | Compile-time check of the 192 KB rendering budget |
-| `chip/bench/` | `kc.ld` and `crt0.S` used by the chip build, copied from the bench (`sw/`); `arena.[ch]` and `gpu.h` are copies not compiled here. `crt0.S` and `arena.[ch]` still match `sw/`; `sw/kc.ld` and `sw/gpu.h` have changed since |
+| `chip/bench/` | `kc.ld` and `crt0.S` used by the chip build, derived from `sw/`; game startup now restores `.data` from a separate DMEM load copy on every reset before clearing `.bss`. `arena.[ch]` and `gpu.h` are copies not compiled here; `arena.[ch]` still match `sw/` |
 | `host/hal_host.[ch]` | Memory-map emulation: world window with WIN_ORIGIN and SLOT_VALID, DDR3 chunk engine, double framebuffer, UART RX/TX, CYCLES |
 | `host/png.c` | PNG writer |
 | `host/main_host.c` | Headless front-end (`kc_host` commands below) |
@@ -108,12 +117,13 @@ steps each entity toward it at its kind's speed (chicken 1.0, zombie 1.2, villag
 top non-tree block (leaves and logs are skipped, so mobs walk under canopies).
 No collision or pathfinding: the laptop plans the route.
 
-`kc_draw_world()` calls `entity_prepare()`, which builds window-relative boxes after `write_camera()`, plus one
-screen rectangle per entity. `kc_render_frame` tests each 4x2 block against those
-rectangles and ray traces the boxes only where one overlaps; with no entities it runs
-the plain world kernel.
+`kc_draw_world()` calls `entity_prepare()` after `write_camera()`. It builds
+eye-relative model-part boxes, per-box screen bounds, and per-block-row spans,
+column bitmasks and box bins. `kc_render_frame` uses the plain world loop outside
+the entity rows; inside them, only eligible 4x2 blocks enter entity compositing,
+which scans the row's boxes and skips boxes hidden by nearer world hits.
 
-Colors reuse the existing palette: villagers have light-dirt skin and dark-grass
+Colors reuse the existing palette: villagers have light-dirt skin and near-black
 eyes; trader robes are brick, contractor robes light wood. The chicken is white with
 a brick comb and wattle, a planks beak and light-wood legs. The zombie has light-grass skin, a dark-stone shirt
 and near-black pants/eyes.
@@ -167,20 +177,28 @@ It saves `base`, `m0_models`, `m1_trader`, `m1_contractor`, `m1_chicken`, `m1_zo
 
 ## Memory budget (data memory, 32 KB)
 
-Measured on `build/kc_chip.elf` (`llvm-nm -S`, symbol types b/B/d/D/r/R); layout from `chip/bench/kc.ld` and `crt0.S`:
+Measured on `build/kc_chip.elf` with LLVM 23.1.5 clang/lld at upstream `7315b19`
+(default build options), using `llvm-nm -S` and `llvm-readelf -S -l`; layout from
+`chip/bench/kc.ld` and `crt0.S`. Compiler versions and build options change the
+footprint; these are not measurements of the Stage 2 build.
 
 | Item | Bytes |
 |---|---|
 | Reserved shared state 0x1000_0000–0x1000_00FF (camera block 48 + render params 80) | 256 |
 | 1/x and sine (computed, no tables) | 0 |
 | Per-frame arena (.bss) | 8,192 |
-| Entity boxes, records, screen rects, counts (.bss) | 2,860 |
+| Entity boxes, records, row bins, spans, bitmasks and state (.bss) | 14,288 |
 | Chunk slot tables, dirty mask, tag key (.bss) | 118 |
-| Everything else (.rodata + .data + .bss) | 711 |
+| Everything else (.rodata + .data + .bss) | 1,647 |
+| Section padding and warm-reset `.data` load copy | 23 |
 | Lane stacks, 8 x 1 KB (0x1000_6000–0x1000_7FFF) | 8,192 |
-| **Total** | **~19.9 KB of 32 KB** |
+| **Total** | **32,716 of 32,768 bytes (52 bytes spare)** |
 
-`KC_GEN_BITMAP=1` adds the 8 KB `generated` bitmap: +8,192 bytes.
+The `.data` load copy lives after `.bss` and is restored on every chip reset;
+the linker asserts that it ends before the lane stacks at 0x1000_6000.
+`KC_GEN_BITMAP=1` adds an 8,192-byte bitmap, so it does not fit this measured
+configuration with the default 8 KB arena. Reduce other allocations before
+enabling it.
 
 No malloc anywhere: every structure is a fixed-size static array, sized at compile time.
 
@@ -190,16 +208,21 @@ Everything is ray traced: one ray per pixel through the voxel grid (`render.c`, 
 
 ### Memory: 192 KB for rendering and real-time updates (checked at compile time)
 
-`src/kc_budget.h` sums every buffer and fails the build over 192 KB, and also if the two 160×120 framebuffers would not fit inside it. Chunk storage through the memory API (up to 256 MB) is outside the budget.
+`src/kc_budget.h` checks its `BUDGET_TOTAL` formula against 192 KiB, including a
+second assertion with two 160x120 framebuffers added. This is not complete
+buffer accounting: its entity formula counts 5,004 bytes, while the linked
+entity state above occupies 14,288 bytes. In particular, it omits the 8,640-byte
+`ent_bin` and 120-byte `ent_bin_n` row-bin arrays. Use the ELF for actual DMEM
+use. Chunk storage through the memory API (up to 256 MB) is outside this formula.
 
-| Buffer | Size |
+| Component counted by `BUDGET_TOTAL` | Size (KiB) |
 |---|---|
-| World window, 1 copy, 4 bits per block | 64.0 KB |
-| Textures (1 byte per texel) + palette (RGB444, 12 bits per entry) | 12.4 KB |
-| Chunk slot tables + tag key | 0.1 KB |
-| Entity boxes + eight records + rects + counts | 2.7 KB |
-| **Total** | **79.2 KB of 192** |
-| + two 160×120 framebuffers (`KC_BUDGET_COUNT_FB=1`) | 116.7 KB |
+| World window, 1 copy, 4 bits per block | 64.0 |
+| Textures (1 byte per texel) + palette (RGB444, 12 bits per entry) | 12.4 |
+| Chunk slot tables + tag key | 0.1 |
+| Entity formula (not the full linked entity state) | 4.9 |
+| **Total** | **81.4 of 192** |
+| + two 160x120 framebuffers (`KC_BUDGET_COUNT_FB=1`) | 118.9 |
 
 Chunk storage:
 - World: 256 × 256 chunks of 16 × 32 × 16; BRAM holds a 4 × 4-chunk window, chunk (cx, cz) in slot (cx & 3, cz & 3). `world_update` keeps the player 24-40 blocks from every window edge.

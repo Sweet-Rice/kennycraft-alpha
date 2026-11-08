@@ -47,6 +47,10 @@ are unchanged.
 
 ## Checks
 
+Top-level targets require GNU Make 4.3+ for grouped targets (`&:`); macOS's
+system Make 3.81 is too old. Use `gmake` there when installed. Set `JOBS`
+explicitly if `nproc` is unavailable.
+
 ```sh
 make check                                     # every target registered by a tb/*/tb.mk, JOBS (default nproc) at a time
 make clean                                     # removes obj_dir/ and out/
@@ -88,8 +92,9 @@ Requires the pinned RISC-V GCC (`RISCV_PREFIX`, default the AMD 2026.1
 `riscv64-unknown-elf-`; Zmmul, D5), Verilator 5.020 and Python with Pillow.
 SDL3 with `pkg-config` is optional: without it the harness builds headless and
 needs `--headless`. `make golden-check` also needs clang (`GAME_CHIP_CC`) and
-`zig cc` (`HOST_CC`); `make keys` needs pyserial and pygame. All bench outputs
-go under the ignored `out/` directory.
+`zig cc` (`HOST_CC`); `make keys` needs pyserial and pygame. Harness outputs
+default to the ignored root `out/`; golden reference frames are generated in
+`game/out/shots/`, with game build products in `game/build/` and assets in `game/gen/`.
 
 | Target | Behavior |
 | --- | --- |
@@ -110,9 +115,13 @@ go under the ignored `out/` directory.
 ```sh
 make vl RUN_ARGS="--headless --frames 3 --keys tb/harness/fixture/keys.txt --trace out/pattern.trace"
 make vl RUN_ARGS="--headless --frames 3 --png-dir out/pattern"
-make vl-fixture RUN_ARGS="--headless --frames 5 --record out/keys.txt"
+make vl-fixture RUN_ARGS="--record out/keys.txt"
 make vl TRACE=1 RUN_ARGS="--headless --frames 1 --vcd out/chip.vcd --vcd-window 100:200"
 ```
+
+Recording needs an SDL3-enabled build and live window input; focus the window,
+press/release keys, then use Escape or close the window to finish. `--headless`
+disables live input, and `--record` does not copy events from a `--keys` replay.
 
 Production uses `out/vl/kcvl`; the independent fixture uses `out/vl-fixture/kcvl`.
 `--vcd` needs `TRACE=1`, which builds kcvl with waveform support (a slower model);
