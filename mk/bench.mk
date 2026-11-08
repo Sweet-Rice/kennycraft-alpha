@@ -78,7 +78,9 @@ SDL_LIBS := $(shell pkg-config --libs sdl3 2>/dev/null)
 KC_SDL := $(if $(SDL_LIBS),1,0)
 # Verilator's wrapper drops an empty argument, so never pass -LDFLAGS "".
 SDL_LDFLAGS = $(if $(SDL_LIBS),-LDFLAGS "$(SDL_LIBS)")
-VL_FLAGS = --cc --exe --build -j 0 --verilate-jobs 1 -Wall --prefix Vkc -o kcvl
+# The model's C++ at -O3 (Verilator's default is -Os): the golden runs are long.
+VL_FLAGS = --cc --exe --build -j 0 --verilate-jobs 1 -Wall --prefix Vkc -o kcvl \
+	-MAKEFLAGS OPT_FAST=-O3 -MAKEFLAGS OPT_GLOBAL=-O3
 # TRACE=1 builds kcvl with VCD support (--vcd / --vcd-window); without it the
 # model skips the per-signal activity tracking and runs faster. The fixture
 # always has it: check-fixture tests the VCD window.
