@@ -153,4 +153,10 @@ module t_pipe_stress_tb;
         $display("PASS: t_pipe_stress (LANES = %0d, PIPELINED = %0d)", LANES, PIPELINED);
         $finish;
     end
+
+// tb-core-pipe-t_pipe_stress-ack builds this testbench with
+// +define+KC_TB_ICACHE_FETCH: core_pipe's I-cache fetch (HAS_ICACHE) on the
+// imem BRAM with imem_ack dropped on a pseudo-random schedule inside
+// core_pipe (rtl/core_pipe/core_pipe.sv, ICF); the retire trace must equal
+// the multi-cycle core's.
 endmodule

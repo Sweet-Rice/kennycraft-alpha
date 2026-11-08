@@ -29,7 +29,8 @@
 //        (rtl/core_pipe/lsu_pipe.sv), one per LSU bus access (one per group
 //        of coalesced lanes), plus one (a store's tail) or two (a load's
 //        read data, registered in the LSU), except a store whose bus lanes
-//        all go to dmem or the framebuffer (no extra cycle); MUL 2;
+//        all go to dmem, the framebuffer or (HAS_ICACHE) the scratch BRAM
+//        (no extra cycle); MUL 2;
 //        everything else 1.
 //        Retirement happens here
 //   WB   every lane writes rd
@@ -99,19 +100,22 @@ module core_pipe
     parameter logic [31:0] RESET_VEC     = IMEM_BASE,
     parameter bit          HAS_DIV_STACK = 1'b0,
     parameter bit          HAS_RAY_UNIT  = 1'b0,
-    parameter bit          HAS_QRCP      = 1'b0
+    parameter bit          HAS_QRCP      = 1'b0,
+    parameter bit          HAS_ICACHE    = 1'b0
 ) (
     input  logic                 clk,
     input  logic                 rst,
 
     output logic [31:0]          imem_addr,
     input  logic [31:0]          imem_rdata,
+    input  logic                 imem_ack,   // HAS_ICACHE: imem_rdata is valid
 
     output logic                 bus_req,
     output logic                 bus_we,
     output logic [31:0]          bus_addr,
     output logic [3:0]           bus_be,
     output logic [31:0]          bus_wdata,
+    output logic [31:0]          bus_pf_addr,   // next cycle's likely bus_addr (lsu_pipe)
     input  logic                 bus_ready,
     input  logic [31:0]          bus_rdata,
 
@@ -172,15 +176,40 @@ module core_pipe
     // IF / F2 / ID
     // ------------------------------------------------------------------
     logic [31:0] pc_f, q_pc, q_hold, q_inst, d_pc, d_raw, d_hold, d_inst;
+    // ICF: the I-cache fetch is built (HAS_ICACHE). KC_TB_ICACHE_FETCH, a
+    // testbench-only define (tb-core-pipe-t_pipe_stress-ack), builds it on
+    // the imem BRAM with imem_ack also dropped about one cycle in four by
+    // an LFSR: the BRAM reads whatever is presented, so an acknowledged
+    // word is always right, and the fetch unit's hold / re-present path runs.
+    logic f_ack;
+`ifdef KC_TB_ICACHE_FETCH
+    localparam bit ICF = 1'b1;
+    logic [31:0] tb_lfsr;
+    always_ff @(posedge clk)
+        if (rst) tb_lfsr <= 32'h1D87_2C35;
+        else     tb_lfsr <= {tb_lfsr[30:0], tb_lfsr[31] ^ tb_lfsr[21] ^ tb_lfsr[1] ^ tb_lfsr[0]};
+    assign f_ack = imem_ack && (tb_lfsr[3] || tb_lfsr[17]);
+`else
+    localparam bit ICF = HAS_ICACHE;
+    assign f_ack = imem_ack;
+`endif
     logic        q_valid, d_valid, d_hold_v, d_ready;
+    // F2's word (HAS_ICACHE, g_ifetch below; constants otherwise): q_hv
+    // q_hold has it, q_ok it is here, q_adv F2 moves on (hands it, or
+    // nothing, to ID and takes pc_f), q_miss it is missing
+    logic        q_hv, q_ok, q_adv, q_miss, f_wait, f_stale;
+    logic [31:0] q_nx;
 
     // IF, F2 and ID advance together (d_ready) and wait together, so one
     // flag says both hold their instruction: q_hold and d_hold load every
-    // cycle until the first cycle they wait, then keep it.
+    // cycle until the first cycle they wait, then keep it. With HAS_ICACHE
+    // F2 also waits for its word (q_hv: q_hold has it).
     assign imem_addr = pc_f;
-    assign q_inst    = d_hold_v ? q_hold : imem_rdata;
+    assign q_inst    = q_hv ? q_hold : imem_rdata;
     assign d_inst    = d_hold_v ? d_hold : d_raw;
     assign d_ready   = !d_valid || (adv && !lu);
+    assign q_adv     = d_ready && (!q_valid || q_ok);
+    assign q_miss    = q_valid && !q_ok;
 
     // Branch target buffer: the prediction for pc_f (rtl/core_pipe/btb.sv)
     logic        f_hit, f_pred, q_hit, q_pred, d_hit, d_pred, e_hit, e_pred, e_pok;
@@ -193,11 +222,14 @@ module core_pipe
     // pc_f: a redirect writes it (m_next, the cycle the redirecting
     // instruction is in MEM), otherwise it steps with ID (to the predicted
     // target or pc_f + 4) until a halt stops fetching. After a halt pc_f
-    // is never decoded again, and it stops moving once stop is set.
+    // is never decoded again, and it stops moving once stop is set. With
+    // HAS_ICACHE a missing F2 word sends pc_f back to q_pc (f_wait), and
+    // F2 moving on then steps it to q_nx, q's own next PC.
     always_ff @(posedge clk) begin
-        if (rst)                   pc_f <= RESET_VEC;
-        else if (flush)            pc_f <= m_next;
-        else if (d_ready && !stop) pc_f <= f_pred ? f_tgt : pc_f + 32'd4;
+        if (rst)                    pc_f <= RESET_VEC;
+        else if (flush)             pc_f <= m_next;
+        else if (q_adv && !stop)    pc_f <= f_wait ? q_nx : (f_pred ? f_tgt : pc_f + 32'd4);
+        else if (q_miss && !f_wait) pc_f <= q_pc;
     end
 
     // d_off is the predicted target minus d_pc: ID's check d_pc + d_imm ==
@@ -214,18 +246,22 @@ module core_pipe
             d_hold_v <= 1'b0;
             if (m_hlt) stop <= 1'b1;
         end else if (d_ready) begin
-            q_pc     <= pc_f;
-            q_hit    <= f_hit;
-            q_pred   <= f_pred;
-            q_ctr    <= f_ctr;
-            q_off    <= f_tgt - pc_f;
-            q_valid  <= !stop;
+            if (q_adv && !f_wait) begin
+                q_pc     <= pc_f;
+                q_hit    <= f_hit;
+                q_pred   <= f_pred;
+                q_ctr    <= f_ctr;
+                q_off    <= f_tgt - pc_f;
+                q_valid  <= !stop;
+            end else if (q_adv) begin
+                q_valid  <= 1'b0;   // pc_f was q_pc: nothing behind q yet
+            end
             d_pc     <= q_pc;
             d_hit    <= q_hit;
             d_pred   <= q_pred;
             d_ctr    <= q_ctr;
             d_off    <= q_off;
-            d_valid  <= q_valid;
+            d_valid  <= q_valid && q_ok;
             d_hold_v <= 1'b0;
         end else begin
             d_hold_v <= 1'b1;
@@ -234,10 +270,52 @@ module core_pipe
 
     always_ff @(posedge clk) begin
         d_raw <= q_inst;
-        if (!d_hold_v) begin
-            q_hold <= imem_rdata;
-            d_hold <= d_raw;
+        if (!q_hv)     q_hold <= imem_rdata;
+        if (!d_hold_v) d_hold <= d_raw;
+    end
+
+    // I-cache fetch (HAS_ICACHE). imem_rdata is F2's word when imem_ack is
+    // high and the address presented last cycle was q_pc. Normally it was;
+    // when the word is missing (q_miss) pc_f goes back to q_pc and stays
+    // there (f_wait) until the word comes, ignoring the answer of the one
+    // cycle after (f_stale: it is for the address presented in the miss
+    // cycle). The word is latched in q_hold (q_hv) if ID waits. When F2
+    // moves on in f_wait, ID gets q, F2 a bubble and pc_f q_nx (the next PC
+    // chosen when q was fetched, so q's prediction stays the one followed):
+    // a miss costs the cycles until imem_ack plus three. A fetch above
+    // 0x0FFF_FFFF needs no answer (its fault halts in EX). A redirect
+    // (flush) cancels all of it.
+    if (ICF) begin : g_ifetch
+        assign q_ok = q_hv || is_fetch_outside_icache(q_pc) || (f_ack && !f_stale);
+
+        always_ff @(posedge clk) begin
+            if (rst || flush) begin
+                q_hv    <= 1'b0;
+                f_wait  <= 1'b0;
+                f_stale <= 1'b0;
+            end else begin
+                f_stale <= q_miss && !f_wait;
+                if (q_adv) begin
+                    q_hv   <= 1'b0;
+                    f_wait <= 1'b0;
+                end else begin
+                    if (q_ok)   q_hv   <= 1'b1;
+                    if (q_miss) f_wait <= 1'b1;
+                end
+            end
+            if (q_adv && !f_wait) q_nx <= f_pred ? f_tgt : pc_f + 32'd4;
         end
+    end else begin : g_no_ifetch
+        assign q_ok    = 1'b1;
+        assign q_hv    = d_hold_v;
+        assign f_wait  = 1'b0;
+        assign f_stale = 1'b0;
+        assign q_nx    = '0;
+
+        /* verilator lint_off UNUSEDSIGNAL */
+        logic unused_ifetch;
+        /* verilator lint_on UNUSEDSIGNAL */
+        assign unused_ifetch = f_ack ^ (^q_nx) ^ f_stale;
     end
 
     logic [3:0]  d_alu_ctrl;
@@ -292,7 +370,8 @@ module core_pipe
         if (adv) begin
             e_pc         <= d_pc;
             e_inst       <= d_inst;
-            e_fault      <= d_illegal || is_fetch_outside_imem(d_pc);
+            e_fault      <= d_illegal || (ICF ? is_fetch_outside_icache(d_pc)
+                                              : is_fetch_outside_imem(d_pc));
             e_alu_ctrl   <= d_alu_ctrl;
             e_alu_a_pc   <= d_alu_a_pc;
             e_alu_b_sel  <= d_alu_b_sel;
@@ -716,7 +795,7 @@ module core_pipe
         end
     end
 
-    btb u_btb (
+    btb #(.HAS_ICACHE(ICF)) u_btb (
         .clk, .rst,
         .f_pc(pc_f), .f_hit, .f_taken(f_pred), .f_ctr, .f_target(f_tgt),
         .u_we(u_req && !m_halt), .u_pc(m_pc), .u_target(u_tgt), .u_hit, .u_ctr,
@@ -733,9 +812,10 @@ module core_pipe
     // two cycles after, when its data leaves the LSU's read register) and
     // the dmem window serves its last lanes (or has none).
     //
-    // A store whose bus lanes all go to dmem or the framebuffer is done in
+    // A store whose bus lanes all go to dmem or the framebuffer (or the
+    // scratch BRAM, which HAS_ICACHE builds come with) is done in
     // the cycle its last group goes out (st_fast): rtl/soc/decoder.sv answers
-    // ready = req for both (BRAM / strobe ports) and vt_block never holds
+    // ready = req for each (BRAM / strobe ports) and vt_block never holds
     // them, so such a store sends one group per cycle, the first in MEM's
     // second cycle (rtl/core_pipe/lsu_pipe.sv loads its request register in
     // the first). Loads keep the extra cycles (their data arrives then); a
@@ -785,13 +865,13 @@ module core_pipe
 
     // The misaligned check is EX's (mis above). The LSU registers the bus
     // request (rtl/core_pipe/lsu_pipe.sv).
-    lsu_pipe #(.LANES(LANES)) u_lsu (
+    lsu_pipe #(.LANES(LANES), .HAS_SCRATCH(HAS_ICACHE)) u_lsu (
         .clk, .rst,
         .start(e_lsu_go), .active(mask),
         .go(m_walk), .hold(vt_block), .is_store(m_is_store), .funct3(m_funct3),
         .addr(l_res), .rs2(l_mrs2), .done(lsu_done), .skip(win_lane), .idle(lsu_idle),
         .idle_nx(lsu_idle_nx), .fast_nx(lsu_fast_nx),
-        .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,
+        .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_pf_addr, .bus_ready, .bus_rdata,
         .ld_cap, .ld_value
     );
 
@@ -849,7 +929,7 @@ module core_pipe
     // multi-cycle core, or, with no bus lane left, in the cycle the window
     // serves its last lanes; m_sret marks it retired. A store with a world,
     // texture, MMIO or unmapped lane then spends one more cycle in MEM; a
-    // dmem or framebuffer store leaves in its retiring cycle (m_bfast is
+    // dmem, framebuffer or scratch store leaves in its retiring cycle (m_bfast is
     // st_fast, which implies lsu_done, so m_done and st_ret rise together
     // and m_sret never sets).
     logic st_ret;

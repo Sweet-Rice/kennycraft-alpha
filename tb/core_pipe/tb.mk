@@ -170,6 +170,26 @@ tracediff-core-pipe-t_pipe_stress: tb-core-pipe-t_pipe_stress-ref tb-core-pipe-t
 	python3 tb/core_pipe/tracediff_pipe.py --tail $(CORE_PIPE_TAIL) t_pipe_stress@pipe \
 	    $(call core_bin,t_pipe_stress_tb) $(call core_bin,t_pipe_stress_tb,_pipe)
 
+# The same on core_pipe with HAS_ICACHE = 1 and imem_ack dropped on a
+# pseudo-random schedule (KC_ACK_STALL in t_pipe_stress_tb.sv): the fetch
+# unit's hold / re-present path, traced against the multi-cycle core.
+tb-core-pipe-t_pipe_stress-ack: $(CORE_PIPE_STRESS_HEX)
+	@mkdir -p $(OBJ)
+	$(call CORE_PIPE_VL,t_pipe_stress_tb,_ack,t_pipe_stress_tb,$(CORE_S2Q) $(CORE_PIPE_TB) +define+KC_TB_ICACHE_FETCH)
+	$(call core_bin,t_pipe_stress_tb,_ack) $(PLUSARGS)
+
+tracediff-core-pipe-t_pipe_stress-ack: tb-core-pipe-t_pipe_stress-ref tb-core-pipe-t_pipe_stress-ack
+	python3 tb/core_pipe/tracediff_pipe.py --tail $(CORE_PIPE_TAIL) t_pipe_stress@ack \
+	    $(call core_bin,t_pipe_stress_tb) $(call core_bin,t_pipe_stress_tb,_ack)
+
+# I-cache unit test (rtl/mem/icache.sv, tb/core_pipe/t_icache_tb.sv): random
+# fetch stream against a reference memory with random refill latencies.
+tb-core-pipe-t_icache:
+	@mkdir -p $(OBJ)
+	$(VERILATOR) $(VL_TB) -Mdir $(OBJ)/core_t_icache_tb --top-module t_icache_tb \
+	    rtl/mem/icache.sv tb/core_pipe/t_icache_tb.sv
+	$(OBJ)/core_t_icache_tb/Vt_icache_tb $(PLUSARGS)
+
 # dmem window (tb/core_pipe/sw/t_dwin.S, t_dwin_tb.sv): loads and stores in
 # dmem 0x6000..0x7FFF, which core_pipe serves from distributed RAM, on both
 # cores, with the memory checked through dmem_rd and the traces compared.

@@ -57,7 +57,7 @@ TOP_TIMEOUT   ?= 20
 TOP_ARGS      ?=
 TOP_RTL    := rtl/kc_isa_pkg.sv $(wildcard rtl/core/*.sv) $(wildcard rtl/core_pipe/*.sv) $(wildcard rtl/mem/*.sv) \
               $(wildcard rtl/soc/*.sv) $(wildcard rtl/display/*.sv) \
-              rtl/ddr/chunk_engine.sv rtl/ddr/ddr_bridge.sv rtl/ddr/world_remap.sv \
+              rtl/ddr/chunk_engine.sv rtl/ddr/ddr_bridge.sv rtl/ddr/ddr_line_bridge.sv rtl/ddr/world_remap.sv \
               rtl/ddr/ddr_model.sv rtl/ddr/ddr_clk.sv tb/ddr/xpm_sim.sv tb/ddr/unisim_sim.sv \
               rtl/vtrace/vtrace.sv rtl/top.sv
 TOP_IMAGES := kc_imem.hex kc_dmem.hex textures.hex palette.hex

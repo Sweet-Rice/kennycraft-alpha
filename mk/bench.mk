@@ -117,13 +117,21 @@ check-fixture: vl-fixture-build
 	$(PYTHON) scripts/check_harness.py
 
 .PHONY: vl vl-build
-vl-build: sw
+# VL_IMEM_HEX / VL_DMEM_HEX name the images kcvl loads (relative to its working
+# directory) and VL_EXTRA adds Verilator arguments (mk/doom.mk sets all three).
+VL_IMEM_HEX ?= out/kc_imem.hex
+VL_DMEM_HEX ?= out/kc_dmem.hex
+VL_EXTRA ?=
+define VL_MODEL_RECIPE
 	@mkdir -p $(VL_MDIR)
-	$(VERILATOR) $(VL_FLAGS) $(VL_TRACE) --Mdir $(VL_MDIR) --top-module $(CHIP_TOP) $(CHIP_PARAMS) \
-		-GIMEM_HEX='"out/kc_imem.hex"' -GDMEM_HEX='"out/kc_dmem.hex"' \
+	$(VERILATOR) $(VL_FLAGS) $(VL_TRACE) --Mdir $(VL_MDIR) --top-module $(CHIP_TOP) $(CHIP_PARAMS) $(VL_EXTRA) \
+		-GIMEM_HEX='"$(VL_IMEM_HEX)"' -GDMEM_HEX='"$(VL_DMEM_HEX)"' \
 		-GPAL_HEX='"$(if $(PAL_HEX),$(abspath $(PAL_HEX)))"' -GTEX_HEX='"$(if $(TEX_HEX),$(abspath $(TEX_HEX)))"' \
 		-CFLAGS "$(HARNESS_CFLAGS) -DCHIP_TOP=$(CHIP_TOP) -DKC_FB_COUNT=$(CHIP_FB_COUNT)" $(SDL_LDFLAGS) \
 		tb/harness/public.vlt $(RTL_FILES) $(CHIP_FILE) $(VL_STUBS) $(abspath $(HARNESS_CPP))
+endef
+vl-build: sw
+	$(VL_MODEL_RECIPE)
 
 vl: vl-build
 	$(VL_MDIR)/kcvl $(RUN_ARGS)

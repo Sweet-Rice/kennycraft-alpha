@@ -48,6 +48,46 @@ module ddr_model #(
     return (mem.exists(beat) != 0) ? mem[beat] : 128'd0;
   endfunction
 
+  // +ddr_manifest=<file>: each line "<hex DDR3 byte address> <path>" loads
+  // that raw binary file at that address (DDR3 byte a = file byte a - base,
+  // byte a in bits [8 (a % 16) +: 8] of beat a / 16). Without it, nothing.
+  initial begin
+    string manifest, path;
+    int    mf, bf, c, n;
+    logic [31:0]  base, a;
+    logic [23:0]  beat;
+    logic [127:0] d;
+    if ($value$plusargs("ddr_manifest=%s", manifest)) begin
+      mf = $fopen(manifest, "r");
+      if (mf == 0) $fatal(1, "ddr_model: cannot open %s", manifest);
+      while (!$feof(mf)) begin
+        n = $fscanf(mf, "%h %s\n", base, path);
+        if (n != 2) break;
+        bf = $fopen(path, "rb");
+        if (bf == 0) $fatal(1, "ddr_model: cannot open %s", path);
+        a    = base;
+        beat = a[27:4];
+        d    = peek(beat);
+        c    = $fgetc(bf);
+        while (c != -1) begin
+          if (a[31:28] != 4'h0) $fatal(1, "ddr_model: %s runs past 256 MB", path);
+          if (a[27:4] != beat) begin
+            poke(beat, d);
+            beat = a[27:4];
+            d    = peek(beat);
+          end
+          d[8 * a[3:0] +: 8] = 8'(c);
+          a = a + 1;
+          c = $fgetc(bf);
+        end
+        poke(beat, d);
+        $fclose(bf);
+        $display("ddr_model: %0s at 0x%07h (%0d bytes)", path, base, a - base);
+      end
+      $fclose(mf);
+    end
+  end
+
   int unsigned cyc;
   int unsigned calib_cnt;
   logic [15:0] lfsr;

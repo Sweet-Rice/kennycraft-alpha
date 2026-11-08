@@ -47,7 +47,8 @@ Options parse(int argc, char** argv) {
             if (++i >= argc) throw std::runtime_error(arg + " needs a value");
             return argv[i];
         };
-        if (arg == "--headless") o.headless = true;
+        if (!arg.empty() && arg[0] == '+') continue;  // plusarg for the model (e.g. +ddr_manifest=)
+        else if (arg == "--headless") o.headless = true;
         else if (arg == "--expect-pass") o.expect_pass = true;
         else if (arg == "--frames") { o.frames = number(value()); if (!o.frames) throw std::runtime_error("--frames must be positive"); }
         else if (arg == "--max-cycles") { o.max_cycles = number(value()); if (!o.max_cycles) throw std::runtime_error("--max-cycles must be positive"); }
@@ -80,7 +81,7 @@ Options parse(int argc, char** argv) {
         } else if (arg == "--help") {
             std::cout << "kcvl [--headless] [--frames N] [--max-cycles N] [--keys FILE] [--record FILE]\n"
                          "     [--png-dir DIR] [--expect-pass] [--expect-err NAME[@PC]]\n"
-                         "     [--trace FILE] [--vcd FILE --vcd-window START:END]\n"
+                         "     [--trace FILE] [--vcd FILE --vcd-window START:END] [+PLUSARG...]\n"
                          "Frames are the RTL back buffer and palette at each swap the RTL accepts;\n"
                          "live keys reach the UART at those swaps, like a --keys replay.\n";
             std::exit(0);

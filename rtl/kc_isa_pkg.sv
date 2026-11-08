@@ -304,6 +304,14 @@ package kc_isa_pkg;
         return pc >= (IMEM_BASE + IMEM_BYTES);
     endfunction
 
+    // Fetch outside the instruction space of a core with the I-cache
+    // (HAS_ICACHE = 1): imem below 0x8000, DDR3 through the I-cache up to
+    // 0x0FFF_FFFF.
+    localparam int unsigned ICACHE_FETCH_BITS = 28;
+    function automatic logic is_fetch_outside_icache(input logic [31:0] pc);
+        return pc[31:ICACHE_FETCH_BITS] != '0;
+    endfunction
+
     // A data address inside the dmem window (any 32 KB alias of it).
     function automatic logic is_dwin(input logic [31:0] addr);
         return (addr[31:28] == REG_DMEM) && (addr[14:13] == 2'b11);

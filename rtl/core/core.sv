@@ -96,13 +96,15 @@ module core
     parameter logic [31:0] RESET_VEC     = IMEM_BASE,
     parameter bit          HAS_DIV_STACK = 1'b0,
     parameter bit          HAS_RAY_UNIT  = 1'b0,
-    parameter bit          HAS_QRCP      = 1'b0
+    parameter bit          HAS_QRCP      = 1'b0,
+    parameter bit          HAS_ICACHE    = 1'b0   // unsupported here: core_pipe only
 ) (
     input  logic                 clk,
     input  logic                 rst,
 
     output logic [31:0]          imem_addr,
     input  logic [31:0]          imem_rdata,
+    input  logic                 imem_ack,   // HAS_ICACHE only; ignored here
 
     output logic                 bus_req,
     output logic                 bus_we,
@@ -133,6 +135,17 @@ module core
     if (LANES < 1 || LANES > 8) begin : g_lanes_check
         $error("core: LANES must be 1 to 8");
     end
+
+    // The multi-cycle core expects imem_rdata every cycle (imem_ack = 1):
+    // the I-cache fetch (imem_ack, fetch above imem) is core_pipe's only.
+    if (HAS_ICACHE) begin : g_icache_check
+        $error("core: HAS_ICACHE needs PIPELINED = 1 (core_pipe)");
+    end
+
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic unused_ack;
+    /* verilator lint_on UNUSEDSIGNAL */
+    assign unused_ack = imem_ack;
 
     localparam int LW = (LANES > 1) ? $clog2(LANES) : 1;
 

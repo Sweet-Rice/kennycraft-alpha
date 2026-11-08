@@ -224,11 +224,21 @@ module bench_chip #(
         .vt_cfg_data   (),
         .vt_start      (),
         .vt_max_steps  (),
+        .ddr_cmd_valid (),
+        .ddr_cmd_store (),
+        .ddr_cmd_line  (),
+        .ddr_wr_valid  (),
+        .ddr_wr_data   (),
+        .ddr_rd_ready  (),
         /* verilator lint_on PINCONNECTEMPTY */
         .vt_done       (1'b0),
         .vt_result     (vt_result),
         .vt_hit_cell   (vt_hit_cell),
-        .vt_t_hit      (vt_t_hit)
+        .vt_t_hit      (vt_t_hit),
+        .ddr_cmd_ready (1'b0),
+        .ddr_wr_ready  (1'b0),
+        .ddr_rd_valid  (1'b0),
+        .ddr_rd_data   ('0)
     );
 
     // ------------------------------------------------------------------

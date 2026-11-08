@@ -15,6 +15,12 @@
 //          game/gen/textures.hex)
 //   fb, palette, FB_SWAP, VSYNC, FRAME_COUNT, FB_MODE  ports to display (P1)
 //   0x2C..0x3C  ddr_reg_* port to the chunk engine (P2b)
+//   HAS_DDR_MEM = 1 (Doom on the board, PIPELINED = 1 only): fetches at
+//          0x8000..0x0FFF_FFFF go to rtl/mem/icache.sv (the core's imem_ack
+//          waits for it), region 0x7 is a 64 KB scratch BRAM and region 0x8
+//          the D-cache (rtl/mem/dcache.sv) over DDR3; both caches refill
+//          through rtl/soc/line_arb.sv on the ddr_* line port (to
+//          rtl/ddr/ddr_line_bridge.sv). HAS_DDR_MEM = 0: ddr_* are tied off.
 //   vt_*   HAS_RAY_UNIT = 1: the core's custom-1 port to the ray unit
 //          (rtl/vtrace/vtrace.sv in rtl/top.sv); 0 / ignored otherwise
 module kc_soc
@@ -31,7 +37,8 @@ module kc_soc
     parameter bit    HAS_RAY_UNIT  = 1'b0,  // custom-1 ray unit (vt_* ports)
     parameter bit    HAS_QRCP      = 1'b0,  // QRCP in every lane (D22)
     parameter bit    PIPELINED     = 1'b0,  // 5-stage core_pipe instead of core
-    parameter int    FB_RD_LAT     = 1      // fb port A read latency (display FB_RD_LAT)
+    parameter int    FB_RD_LAT     = 1,     // fb port A read latency (display FB_RD_LAT)
+    parameter bit    HAS_DDR_MEM   = 1'b0   // I-cache, D-cache, scratch over DDR3 (Doom)
 ) (
     input  logic        clk,
     input  logic        rst,
@@ -86,8 +93,24 @@ module kc_soc
     input  logic             vt_done,
     input  logic [15:0]      vt_result   [LANES],
     input  logic [16:0]      vt_hit_cell [LANES],
-    input  logic [31:0]      vt_t_hit    [LANES]
+    input  logic [31:0]      vt_t_hit    [LANES],
+
+    // DDR3 line port to rtl/ddr/ddr_line_bridge.sv (HAS_DDR_MEM = 1)
+    output logic             ddr_cmd_valid,
+    input  logic             ddr_cmd_ready,
+    output logic             ddr_cmd_store,
+    output logic [23:0]      ddr_cmd_line,
+    output logic             ddr_wr_valid,
+    input  logic             ddr_wr_ready,
+    output logic [127:0]     ddr_wr_data,
+    input  logic             ddr_rd_valid,
+    output logic             ddr_rd_ready,
+    input  logic [127:0]     ddr_rd_data
 );
+
+    if (HAS_DDR_MEM && !PIPELINED) begin : g_bad_ddr_mem
+        $error("kc_soc: HAS_DDR_MEM = 1 needs PIPELINED = 1 (the multi-cycle core has no I-cache fetch)");
+    end
 
     localparam int IMEM_WORDS = IMEM_BYTES / 4;
     localparam int DMEM_WORDS = DMEM_BYTES / 4;
@@ -95,9 +118,13 @@ module kc_soc
     // ------------------------------------------------------------------
     // Core
     // ------------------------------------------------------------------
-    logic [31:0]          imem_addr, imem_rdata;
+    logic [31:0]          imem_addr, imem_rdata, imem_bram_rdata;
+    logic                 imem_ack;
     logic                 bus_req, bus_we, bus_ready;
     logic [31:0]          bus_addr, bus_wdata, bus_rdata;
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic [31:0]          bus_pf_addr;   // the D-cache's read hint, index bits only
+    /* verilator lint_on UNUSEDSIGNAL */
     logic [3:0]           bus_be;
     logic [ERR_WIDTH-1:0] err_set;
     logic [31:0]          err_pc, pc;
@@ -113,10 +140,10 @@ module kc_soc
     // rtl/core_pipe), PIPELINED = 0 the multi-cycle core.
     if (PIPELINED) begin : g_core
         core_pipe #(.LANES(LANES), .HAS_DIV_STACK(HAS_DIV_STACK), .HAS_RAY_UNIT(HAS_RAY_UNIT),
-                    .HAS_QRCP(HAS_QRCP)) u_core (
+                    .HAS_QRCP(HAS_QRCP), .HAS_ICACHE(HAS_DDR_MEM)) u_core (
             .clk, .rst,
-            .imem_addr, .imem_rdata,
-            .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,
+            .imem_addr, .imem_rdata, .imem_ack,
+            .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_pf_addr, .bus_ready, .bus_rdata,
             .err_set, .err_pc, .halted(err_led), .pc,
             .vt_cfg_we, .vt_cfg_field, .vt_lane_mask, .vt_cfg_data, .vt_start, .vt_max_steps,
             .vt_done, .vt_result, .vt_hit_cell, .vt_t_hit,
@@ -124,14 +151,15 @@ module kc_soc
         );
     end else begin : g_core
         core #(.LANES(LANES), .HAS_DIV_STACK(HAS_DIV_STACK), .HAS_RAY_UNIT(HAS_RAY_UNIT),
-               .HAS_QRCP(HAS_QRCP)) u_core (
+               .HAS_QRCP(HAS_QRCP), .HAS_ICACHE(HAS_DDR_MEM)) u_core (
             .clk, .rst,
-            .imem_addr, .imem_rdata,
+            .imem_addr, .imem_rdata, .imem_ack,
             .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,
             .err_set, .err_pc, .halted(err_led), .pc,
             .vt_cfg_we, .vt_cfg_field, .vt_lane_mask, .vt_cfg_data, .vt_start, .vt_max_steps,
             .vt_done, .vt_result, .vt_hit_cell, .vt_t_hit
         );
+        assign bus_pf_addr = bus_addr;
         /* verilator lint_off UNUSEDSIGNAL */
         logic unused_win;
         /* verilator lint_on UNUSEDSIGNAL */
@@ -151,7 +179,7 @@ module kc_soc
     // ------------------------------------------------------------------
     memory_arr #(.W(32), .D(IMEM_WORDS), .INIT_FILE(IMEM_HEX)) u_imem (
         .clk, .we(4'b0), .addr(imem_addr[$clog2(IMEM_BYTES)-1:2]),
-        .wdata(32'b0), .rdata(imem_rdata)
+        .wdata(32'b0), .rdata(imem_bram_rdata)
     );
 
     logic [3:0]  dmem_we;
@@ -182,7 +210,15 @@ module kc_soc
     logic [7:0]  mmio_addr;
     logic [31:0] mmio_wdata, mmio_rdata;
 
-    decoder #(.FB_RD_LAT(FB_RD_LAT)) u_decoder (
+    logic [3:0]   scr_we;
+    logic [13:0]  scr_addr;
+    logic [31:0]  scr_wdata, scr_rdata;
+    logic         dc_req, dc_we, dc_ready;
+    logic [27:0]  dc_addr;
+    logic [3:0]   dc_be;
+    logic [31:0]  dc_wdata, dc_rdata;
+
+    decoder #(.FB_RD_LAT(FB_RD_LAT), .HAS_DDR_MEM(HAS_DDR_MEM)) u_decoder (
         .clk, .rst,
         .req(bus_req), .we(bus_we), .addr(bus_addr), .be(bus_be), .wdata(bus_wdata),
         .ready(bus_ready), .rdata(bus_rdata),
@@ -192,8 +228,78 @@ module kc_soc
         .tex_req, .tex_we, .tex_addr, .tex_wdata, .tex_ready, .tex_rdata,
         .fb_we, .fb_re, .fb_be, .fb_addr, .fb_wdata, .fb_rdata,
         .mmio_req, .mmio_we, .mmio_addr, .mmio_wdata, .mmio_ready, .mmio_rdata,
-        .pal_we, .pal_addr, .pal_wdata
+        .pal_we, .pal_addr, .pal_wdata,
+        .scr_we, .scr_addr, .scr_wdata, .scr_rdata,
+        .dc_req, .dc_we, .dc_addr, .dc_be, .dc_wdata, .dc_ready, .dc_rdata
     );
+
+    // ------------------------------------------------------------------
+    // DDR3 memory (HAS_DDR_MEM = 1): fetch mux, I-cache, D-cache, scratch
+    // ------------------------------------------------------------------
+    if (HAS_DDR_MEM) begin : g_ddr_mem
+        // A fetch below 0x8000 reads the imem BRAM, 0x8000..0x0FFF_FFFF the
+        // I-cache; above that the BRAM answers (ack 1) and the core halts on
+        // the fetch outside instruction memory. The mux follows the address
+        // the core presented in the previous cycle (the BRAM / I-cache latency).
+        logic        fetch_ic, fetch_ic_q, ic_ack;
+        logic [31:0] ic_rdata;
+        logic        i_req, i_gnt, i_valid, d_req, d_we, d_gnt, d_valid;
+        logic [27:4] i_addr, d_addr;
+        logic [127:0] i_data, d_wdata, d_data;
+
+        assign fetch_ic = (imem_addr[31:28] == 4'h0) && (imem_addr[27:15] != '0);
+        always_ff @(posedge clk) fetch_ic_q <= !rst && fetch_ic;
+
+        assign imem_rdata = fetch_ic_q ? ic_rdata : imem_bram_rdata;
+        assign imem_ack   = fetch_ic_q ? ic_ack : 1'b1;
+
+        icache u_icache (
+            .clk, .rst,
+            .req(fetch_ic), .addr(imem_addr), .rdata(ic_rdata), .ack(ic_ack),
+            .rf_req(i_req), .rf_addr(i_addr), .rf_gnt(i_gnt), .rf_valid(i_valid), .rf_data(i_data)
+        );
+
+        dcache u_dcache (
+            .clk, .rst,
+            .req(dc_req), .we(dc_we), .addr(dc_addr), .be(dc_be), .wdata(dc_wdata),
+            .ready(dc_ready), .rdata(dc_rdata), .pf_addr(bus_pf_addr[14:4]),
+            .lp_req(d_req), .lp_we(d_we), .lp_addr(d_addr), .lp_wdata(d_wdata),
+            .lp_gnt(d_gnt), .lp_valid(d_valid), .lp_rdata(d_data)
+        );
+
+        line_arb u_line_arb (
+            .clk, .rst,
+            .i_req, .i_addr, .i_gnt, .i_valid, .i_data,
+            .d_req, .d_we, .d_addr, .d_wdata, .d_gnt, .d_valid, .d_data,
+            .cmd_valid(ddr_cmd_valid), .cmd_ready(ddr_cmd_ready), .cmd_store(ddr_cmd_store),
+            .cmd_line(ddr_cmd_line), .wr_valid(ddr_wr_valid), .wr_ready(ddr_wr_ready),
+            .wr_data(ddr_wr_data), .rd_valid(ddr_rd_valid), .rd_ready(ddr_rd_ready),
+            .rd_data(ddr_rd_data)
+        );
+
+        memory_arr #(.W(32), .D(16384)) u_scratch (
+            .clk, .we(scr_we), .addr(scr_addr), .wdata(scr_wdata), .rdata(scr_rdata)
+        );
+    end else begin : g_no_ddr_mem
+        assign imem_rdata    = imem_bram_rdata;
+        assign imem_ack      = 1'b1;
+        assign dc_ready      = dc_req;
+        assign dc_rdata      = '0;
+        assign scr_rdata     = '0;
+        assign ddr_cmd_valid = 1'b0;
+        assign ddr_cmd_store = 1'b0;
+        assign ddr_cmd_line  = '0;
+        assign ddr_wr_valid  = 1'b0;
+        assign ddr_wr_data   = '0;
+        assign ddr_rd_ready  = 1'b0;
+
+        /* verilator lint_off UNUSEDSIGNAL */
+        logic unused_ddr_mem;
+        /* verilator lint_on UNUSEDSIGNAL */
+        assign unused_ddr_mem = ddr_cmd_ready ^ ddr_wr_ready ^ ddr_rd_valid ^ (^ddr_rd_data) ^
+                                (^scr_we) ^ (^scr_addr) ^ (^scr_wdata) ^ dc_we ^ (^dc_addr) ^
+                                (^dc_be) ^ (^dc_wdata);
+    end
 
     // ------------------------------------------------------------------
     // World: internal stub or external port

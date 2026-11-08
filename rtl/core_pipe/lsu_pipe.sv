@@ -28,14 +28,18 @@
 //            last group accepted now (q empties and is not loaded again; a
 //            load's accept puts read data in flight instead).
 //   fast_nx  next cycle, the bus accepts the last group of a store whose
-//            bus lanes all go to dmem or the framebuffer: the lanes left
-//            pending are all in one dmem or framebuffer word (they are the
-//            group q loads now) and none of the store's bus lanes was outside
-//            dmem and the framebuffer (nc). rtl/soc/decoder.sv answers
-//            ready = req for both and hold never stops them, so such a store
+//            bus lanes all go to coalescing regions (coal: dmem, the
+//            framebuffer and, HAS_SCRATCH, the scratch BRAM): the lanes left
+//            pending are all in one such word (they are the group q loads
+//            now) and none of the store's bus lanes was outside them (nc).
+//            rtl/soc/decoder.sv answers ready = req for all three and hold
+//            never stops them, so such a store
 //            loads one group per cycle and the bus accepts each the cycle
 //            after. fast_nx reads the address registers and pending, not the
 //            priority encoder.
+//
+// bus_pf_addr (a hint, see below) lets the D-cache read the line of q's next
+// address a cycle early.
 //
 // Loads. The bus returns read data the cycle after an access is accepted;
 // rdata_q registers it, so the data reaches the lanes two cycles after the
@@ -52,7 +56,10 @@
 module lsu_pipe
     import kc_isa_pkg::*;
 #(
-    parameter int LANES = 1
+    parameter int LANES = 1,
+    // Region 0x7 is the scratch BRAM (HAS_DDR_MEM, rtl/soc/kc_soc.sv): its
+    // lanes coalesce like dmem's and the framebuffer's
+    parameter bit HAS_SCRATCH = 1'b0
 ) (
     input  logic              clk,
     input  logic              rst,
@@ -79,6 +86,7 @@ module lsu_pipe
     output logic [31:0]       bus_addr,
     output logic [3:0]        bus_be,
     output logic [31:0]       bus_wdata,
+    output logic [31:0]       bus_pf_addr,
     input  logic              bus_ready,
     input  logic [31:0]       bus_rdata,
 
@@ -97,7 +105,8 @@ module lsu_pipe
     logic [31:0]      wd_l [LANES];
 
     for (genvar i = 0; i < LANES; i++) begin : g_lane
-        assign coal[i] = (addr[i][31:28] == REG_DMEM) || (addr[i][31:28] == REG_FB);
+        assign coal[i] = (addr[i][31:28] == REG_DMEM) || (addr[i][31:28] == REG_FB) ||
+                         (HAS_SCRATCH && (addr[i][31:28] == 4'h7));
         assign mmio[i] = (addr[i][31:28] == REG_MMIO);
 
         always_comb begin
@@ -186,6 +195,13 @@ module lsu_pipe
     assign bus_addr  = q_addr;
     assign bus_be    = q_be;
     assign bus_wdata = q_wdata;
+
+    // bus_pf_addr: the address q most likely holds next cycle, for slaves
+    // that read a registered memory one cycle ahead (rtl/mem/dcache.sv):
+    // the next group's lane while lanes are pending (q loads it now, or as
+    // soon as the bus accepts q), else q's own. From registers (pending, the
+    // address registers, q) only, never from bus_ready.
+    assign bus_pf_addr = (pend != '0) ? addr[nxt] : q_addr;
 
     assign accept  = bus_req && bus_ready;
     assign load    = go && (!q_v || accept);
