@@ -82,6 +82,7 @@ Environment variables for `kc_host` (`host/hal_host.c`): `KC_DDR_FILL=random|zer
 | `src/chunks.[ch]` | Issue #2 memory API: world_update/get/set, chunk_load/store tickets, slot_valid, window_origin; tags inside the DDR3 chunks replace the 8 KB generated bitmap (`KC_GEN_BITMAP=1` brings it back) |
 | `src/arena.[ch]` | Per-frame 8 KB arena (`sw/arena.[ch]` with an overridable `ARENA_SIZE`) |
 | `src/game.[ch]` | Keys, physics, picking, place/break, camera, crosshair, selection box + hotbar |
+| `src/hud.[ch]` | HUD drawing shared by the CR6 bank HUD and the performance overlay: 3x5 font, rects, divide-free numbers |
 | `src/cr6.[ch]` | CR6 UART command link with the laptop (lane 0): framing, commands, STATUS/EVENT replies, HUD |
 | `src/kc_main.[ch]` | Init, frame loop, `kc_draw_world`, resolution and step cap setters; `main()` for the chip |
 | `src/kc_budget.h` | Compile-time check of the 192 KB rendering budget |
@@ -182,6 +183,7 @@ This differs from ordinary floor-following movement under an awning.
 
 ## Numbers
 
+- Performance overlay: press **F** in game (`kc.py` and `kc_live.py` send it) for frames per second, top right, from the last frame's CYCLES (20 ns ticks). It costs nothing while off. It is built for the Stage 2 chip and the laptop only: the Stage 0/1 chip builds have no code memory to spare, and `KC_FIXED_DT` builds keep CYCLES off the screen.
 - Software DDA loop (`vtrace_ref`): 53 RV32I instructions per step on `kc_chip8.elf`, 49 on `kc_chip.elf`, counted in `llvm-objdump -d`.
 - The default cap is 64 (`-DKC_MAX_STEPS`). At that cap the 160×120 spawn shot (`g0_spawn`) is 297,672 steps.
 - Stage 2 frame time, measured with `make tb-top-t_top_frame TOP_ELF=kc_chip8_vtrace TOP_SWAPS=6` (add `PIPELINED=1` for the pipelined core): the core cycles between FB_SWAPs at the spawn pose, no entities. The multi-cycle core (`top_s2`) runs at 50 MHz, the pipelined core at 50 MHz (`top_s2p`) or 100 MHz (`top_s2p100`).

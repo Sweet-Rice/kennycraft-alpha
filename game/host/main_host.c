@@ -490,6 +490,22 @@ static int cmd_play(void) {
               "walking east from the overworld reaches the wall and stops there");
     }
 
+#if !KC_FIXED_DT
+    printf("performance overlay\n");
+    {
+        static uint8_t off[320 * 240];
+        step_frames(4);
+        memcpy(off, host_front_buffer(), sizeof off);
+        key(KEY_F, 1); key(KEY_F, 0);
+        step_frames(2);
+        check(memcmp(off, host_front_buffer(), sizeof off) != 0, "F shows the performance overlay");
+        save_frame("p10_perf");
+        key(KEY_F, 1); key(KEY_F, 0);
+        step_frames(2);
+        check(!memcmp(off, host_front_buffer(), sizeof off), "F again hides it: the frame matches the one before");
+    }
+#endif
+
     printf("tag visibility\n");
     check(tag_leaks() == 0, "window settled: every y = 0 cell of every valid slot is bedrock");
     printf("  %llu frame swaps and %llu world_updates with tag-matched loads checked\n",

@@ -14,6 +14,7 @@
 #include "entity.h"
 #include "render.h"
 #include "kc_hal.h"
+#include "hud.h"
 
 enum { HELLO = 0x01, BYE = 0x02, PLACE = 0x10, BREAK = 0x11, FILL = 0x12, SPAWN = 0x20, MOVE = 0x21,
        Q_PLAYER = 0x30, Q_BLOCKS = 0x31, Q_ENTITY = 0x33, SET_BALANCE = 0x40, SET_QUOTE = 0x41, SET_CONTRACT = 0x42,
@@ -258,72 +259,28 @@ void cr6_key(uint8_t code) {
 }
 
 // ---------------------------------------------------------------- HUD --------------------
-// 3x5 glyphs, rows top to bottom, 3 bits each (bit 2 = left column).
-static const uint16_t font[] = {
-    0x7B6F, 0x2C97, 0x73E7, 0x73CF, 0x5BC9, 0x79CF, 0x79EF, 0x7249, 0x7BEF, 0x7BCF,   // 0-9
-    0x5BAD, 0x7927, 0x6B6D, 0x5BD2, 0x12A4, 0x72C2,                                  // K C N Y / ?
-};
-static int32_t glyph(char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    return c == 'K' ? 10 : c == 'C' ? 11 : c == 'N' ? 12 : c == 'Y' ? 13 : c == '/' ? 14 : c == '?' ? 15 : -1;
-}
-
-static void put(int32_t x, int32_t y, uint8_t v) { hal_fb_put((uint32_t)(y * FB_STRIDE + x), v); }
-
-static void rect(int32_t x, int32_t y, int32_t w, int32_t h, uint8_t c) {
-    for (int32_t j = 0; j < h; j++)
-        for (int32_t i = 0; i < w; i++) put(x + i, y + j, c);
-}
-
-// Text on a black plate, s = pixel scale. Returns the width drawn.
-static int32_t text(int32_t x, int32_t y, int32_t s, const char *str, uint8_t c) {
-    int32_t n = 0;
-    while (str[n]) n++;
-    rect(x - s, y - s, n * 4 * s + s, 7 * s, PIX(COLOR_BLACK, 0, 0));
-    for (int32_t i = 0; i < n; i++) {
-        int32_t g = glyph(str[i]);
-        if (g < 0) continue;
-        for (int32_t r = 0; r < 5; r++)
-            for (int32_t col = 0; col < 3; col++)
-                if ((font[g] >> (14 - r * 3 - col)) & 1) rect(x + (i * 4 + col) * s, y + r * s, s, s, c);
-    }
-    return n * 4 * s;
-}
-
-// Decimal without a divide (the chip has no DIV): subtract powers of ten.
-static char *num(char *o, uint32_t v) {
-    static const uint16_t p10[] = { 10000, 1000, 100, 10, 1 };
-    int32_t any = 0;
-    for (int32_t i = 0; i < 5; i++) {
-        char d = '0';
-        while (v >= p10[i]) { v -= p10[i]; d++; }
-        if (d != '0' || any || i == 4) { *o++ = d; any = 1; }
-    }
-    return o;
-}
-
 void cr6_draw_hud(int32_t W) {
     if (!linked) return;
     int32_t s = W == 320 ? 2 : 1, y = 3 * s;
     uint8_t white = PIX(COLOR_WHITE, 0, 0), gold = PIX(kc_face_color[B_SAND * 3], 0, 0);
-    char b[16], *o = num(b, hud_kcn);
+    char b[16], *o = hud_num(b, hud_kcn);
     *o++ = ' '; *o++ = 'K'; *o++ = 'C'; *o++ = 'N'; *o = 0;
-    text(3 * s, y, s, b, gold);
+    hud_text(3 * s, y, s, b, gold);
     y += 8 * s;
     if (quote_id) {
-        o = num(b, quote_kcn);
+        o = hud_num(b, quote_kcn);
         const char *q = "? Y/N";
         while (*q) *o++ = *q++;
         *o = 0;
-        text(3 * s, y, s, b, white);
+        hud_text(3 * s, y, s, b, white);
         y += 8 * s;
     }
     for (int32_t t = 0; t < 3; t++) {                          // builder, miner, farmer
         uint32_t st = contract[t] >> 6, prog = contract[t] & 63;
         if (!st) continue;
         uint8_t fill = st == 3 ? PIX(kc_face_color[B_GRASS * 3], 0, 0) : white;
-        rect(2 * s, y, 34 * s, 4 * s, PIX(COLOR_BLACK, 0, 0));
-        rect(3 * s, y + s, (int32_t)(st == 3 ? 32 : (prog * 32) >> 6) * s, 2 * s, fill);
+        hud_rect(2 * s, y, 34 * s, 4 * s, PIX(COLOR_BLACK, 0, 0));
+        hud_rect(3 * s, y + s, (int32_t)(st == 3 ? 32 : (prog * 32) >> 6) * s, 2 * s, fill);
         y += 6 * s;
     }
 }

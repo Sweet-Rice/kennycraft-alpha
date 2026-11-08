@@ -29,6 +29,8 @@
 #define KC_DT_FIXED 5243       // Q16(0.08 s): one frame at 12.5 fps
 #endif
 
+uint32_t kc_frame_cycles;
+
 #if !KC_FIXED_DT
 static uint32_t last_cycles;
 #endif
@@ -79,6 +81,7 @@ void kc_frame(void) {
 #else
     uint32_t now = hal_mmio_r(MMIO_CYCLES);
     q16 dt = (q16)(((uint64_t)(now - last_cycles) * DT_K) >> 32);
+    kc_frame_cycles = now - last_cycles;
     last_cycles = now;
 #endif
     move_player(imin(dt, DT_MAX));                     // 4.

@@ -6,8 +6,22 @@
 #include "trace.h"
 #include "render.h"
 #include "cr6.h"
+#include "hud.h"
+#include "kc_main.h"
 #include "kc_hal.h"
 #include "kc_tables.h"
+
+// The performance overlay is built for the Stage 2 chip and the laptop only: the Stage 0/1
+// chip builds have no IMEM to spare, and KC_FIXED_DT builds keep CYCLES off the screen.
+#if (defined(KC_CHIP) && !KC_VTRACE) || KC_FIXED_DT
+#define KC_PERF_HUD 0
+#else
+#define KC_PERF_HUD 1
+#endif
+
+#if KC_PERF_HUD
+static uint8_t perf_on;   // F toggles the overlay
+#endif
 
 kc_player kc_me;
 _Static_assert(WORLD_CHUNKS * CHUNK_W < 32767, "aim / place are int16");
@@ -284,6 +298,9 @@ static void game_key(uint8_t b) {
     case KEY_PLACE: if (down) kc_me.want_place = 1; return;
     case KEY_E: case KEY_Y: case KEY_N: if (down) cr6_key(b & 0x7F); return;
     case KEY_P: if (down && !landing) travel(); return;
+#if KC_PERF_HUD
+    case KEY_F: if (down) perf_on ^= 1; return;
+#endif
     case MOUSE_LEFT:  if (down) kc_me.yaw = (kc_me.yaw - MOUSE_STEP) & (Q16_INT(ANG_FULL) - 1); return;
     case MOUSE_RIGHT: if (down) kc_me.yaw = (kc_me.yaw + MOUSE_STEP) & (Q16_INT(ANG_FULL) - 1); return;
     case MOUSE_UP:    if (down) kc_me.pitch = iclamp(kc_me.pitch + MOUSE_STEP, -PITCH_MAX, PITCH_MAX); return;
@@ -451,6 +468,20 @@ static void draw_aim_box(int32_t W, int32_t H, uint8_t c) {
     }
 }
 
+#if KC_PERF_HUD
+// Performance overlay, top right: frames per second from the last frame's CYCLES (20 ns ticks).
+static void draw_perf(int32_t W) {
+    uint32_t f = kc_frame_cycles;
+    if (!perf_on || !f) return;
+    int32_t s = W == 320 ? 2 : 1;
+    uint32_t n = 50000000u + (f >> 1), fps = 0;   // 1 s of CYCLES / f, rounded; no DIV on the chip,
+    while (n >= f) { n -= f; fps++; }            // and fps is a few hundred at most
+    char b[10], *o = hud_num(b, fps);
+    o[0] = ' '; o[1] = 'F'; o[2] = 'P'; o[3] = 'S'; o[4] = 0;
+    hud_text(W - (int32_t)(o + 4 - b) * 4 * s - 3 * s, 3 * s, s, b, PIX(COLOR_WHITE, 0, 0));
+}
+#endif
+
 void game_draw_overlay(void) {
     int32_t W = KC_RP->width, H = KC_RP->height;
     uint8_t white = PIX(COLOR_WHITE, 0, 0), black = PIX(COLOR_BLACK, 0, 0);
@@ -478,4 +509,7 @@ void game_draw_overlay(void) {
             }
     }
     cr6_draw_hud(W);
+#if KC_PERF_HUD
+    draw_perf(W);
+#endif
 }
