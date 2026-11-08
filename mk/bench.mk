@@ -186,9 +186,19 @@ golden-check:
 	$(MAKE) vl-build VL_MDIR=$(GOLDEN_VL) PAL_HEX=game/gen/palette.hex TEX_HEX=game/gen/textures.hex
 	$(PYTHON) scripts/golden.py --binary $(GOLDEN_VL)/kcvl --cc "$(GAME_CHIP_CC)" --objcopy "$(OBJCOPY)" \
 		--lanes $(LANES)
+# tracediff: REF= is a git ref (a temporary worktree in out/ref) or a checkout
+# directory (built in place in out/vl-tracediff). The reference is built with
+# this chip configuration plus REF_MAKE="NAME=VALUE ...", and both kcvl runs
+# get IMAGES=<dir>'s kc_imem.hex and kc_dmem.hex (default out/, PROG's).
+REF_MAKE ?=
+IMAGES ?= out
+TRACEDIFF_CONFIG = STAGE=$(STAGE) DDR=$(DDR) LANES=$(LANES) HAS_DIV_STACK=$(HAS_DIV_STACK) \
+	HAS_RAY_UNIT=$(HAS_RAY_UNIT) HAS_QRCP=$(HAS_QRCP) FB_COUNT=$(FB_COUNT) CHIP_TOP=$(CHIP_TOP)
 tracediff: vl-build
 	@test -n "$(REF)" || { echo "tracediff: set REF=" >&2; exit 5; }
-	$(PYTHON) scripts/compare_ref.py --ref "$(REF)" --frames $(if $(FRAMES),$(FRAMES),5) $(if $(KEYS),--keys "$(KEYS)") $(PALETTE_ARGS) $(TEXTURE_ARGS)
+	$(PYTHON) scripts/compare_ref.py --ref "$(REF)" --frames $(if $(FRAMES),$(FRAMES),5) $(if $(KEYS),--keys "$(KEYS)") \
+		--binary $(VL_MDIR)/kcvl --images "$(IMAGES)" $(foreach v,$(TRACEDIFF_CONFIG) $(REF_MAKE),--make-var "$(v)") \
+		$(PALETTE_ARGS) $(TEXTURE_ARGS)
 
 .PHONY: board keys
 board: check
