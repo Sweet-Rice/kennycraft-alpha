@@ -31,7 +31,7 @@ needs `--headless`. `make golden-check` also needs clang and `zig cc`;
 
 | Target | Behavior |
 | --- | --- |
-| `make check-bench` | Fixture checks, every self-checking test at Stage 0 (LANES = 1), Stage 1 (LANES = 8, divergence stack) and Stage 2 (plus the VTRACE ray unit, on `rtl/top.sv`), and the golden shots (part of `make check`) |
+| `make check-bench` | Fixture checks, every self-checking test at Stage 0 (LANES = 1), Stage 1 (LANES = 8, divergence stack) and Stage 2 (plus the VTRACE ray unit and triple buffering, on `rtl/top.sv`), and the golden shots (part of `make check`) |
 | `make sw [PROG="sources.c"]` | Build ELF, disassembly, map and two 8192-word memory images |
 | `make arena-host` | Compile the allocator for the host with `HOST_CC` |
 | `make vl [RUN_ARGS="..."]` | Run the Verilated RTL; SDL3 window, UART and keyboard when built with SDL3 |
@@ -48,18 +48,31 @@ needs `--headless`. `make golden-check` also needs clang and `zig cc`;
 make vl RUN_ARGS="--headless --frames 3 --keys tb/harness/fixture/keys.txt --trace out/pattern.trace"
 make vl RUN_ARGS="--headless --frames 3 --png-dir out/pattern"
 make vl-fixture RUN_ARGS="--headless --frames 5 --record out/keys.txt"
+make vl TRACE=1 RUN_ARGS="--headless --frames 1 --vcd out/chip.vcd --vcd-window 100:200"
 ```
 
 Production uses `out/vl/kcvl`; the independent fixture uses `out/vl-fixture/kcvl`.
+`--vcd` needs `TRACE=1`, which builds kcvl with waveform support (a slower model);
+the fixture always has it.
 `STAGE=0 DDR=1` is the default; `STAGE=1` builds 8 lanes with the divergence
 stack. `STAGE=2` adds the ray unit (`HAS_RAY_UNIT=1`), the per-lane QRCP unit
-(`HAS_QRCP=1`) and `t_vtrace`, and builds
-`CHIP_TOP=top`. The default `CHIP_TOP=bench_chip` below Stage 2 wires the shipped
+(`HAS_QRCP=1`), three framebuffers (`FB_COUNT=3`, triple buffering, D24; the
+test `t_fbswap3` replaces the double-buffering `t_fbswap`) and `t_vtrace`, and builds
+`CHIP_TOP=top`, the same configuration as the Stage 2 bitstream (`top_s2`).
+The default `CHIP_TOP=bench_chip` below Stage 2 wires the shipped
 RTL like `rtl/top.sv` without the ray unit, takes `LANES` and `HAS_DIV_STACK`, and
 has stub clocks (reset releases at once, `ui_clk` is the core clock).
 `CHIP_TOP=top` builds the board top with the same stubs. `PAL_HEX=` and `TEX_HEX=`
-load build-time assets, and frames are read from the RTL framebuffer and palette.
+load build-time assets, and frames are read from the RTL framebuffer (the
+CPU's draw buffer) and palette.
 Keys, live or replayed, reach the UART only when the RTL accepts an FB_SWAP.
+
+With `FB_COUNT=3` a store of 1 to FB_SWAP makes the draw buffer the ready
+frame (replacing an older ready frame that vblank has not shown yet) and
+hands the CPU a free buffer within about 10 core cycles; the ready frame
+becomes the front buffer at the next vblank. FB_SWAP reads 1 only during
+that hand-over, so the game's `while (FB_SWAP) {}` before the kernel is
+unchanged and frames take their render time instead of whole refreshes.
 
 Traces compare exact retired instructions and register writes, not cycles.
 Different-CPI MMIO polling and `CYCLES` reads can legitimately change those

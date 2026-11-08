@@ -56,7 +56,7 @@ typedef struct {
     int32_t max_steps;          // DDA step cap, 1..255
     int32_t sky_k;              // sky row index = (py * sky_k) >> 16, 0..15
     int32_t fog_d[3];           // fog level n starts at t >= fog_d[n-1] (Q16 blocks)
-    int32_t right[3], up[3];    // unit camera axes (rasterizer), Q16
+    int32_t right[3], up[3];    // unit camera axes, Q16
     int32_t focal;              // pixels per unit of tangent, Q16
     int32_t corner_x, corner_z; // committed window corner (absolute blocks) for the kernel
 } kc_rparams;                   // 64 bytes, ends at 0x1000_0070
