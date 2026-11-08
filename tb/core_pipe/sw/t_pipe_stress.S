@@ -47,7 +47,13 @@
    Registered ray-unit strobes: VGET of the cell right after the VSET that
    writes it (full mask and under 0x5A); eight VSETs back to back, VTRACE x0
    right after the last, VGET right after VTRACE x0, VSET right after VGET,
-   VTRACE rd right after that VSET and VGET right after it. */
+   VTRACE rd right after that VSET and VGET right after it.
+   Registered redirect (core_pipe flushes the cycle after a redirecting
+   instruction leaves EX, so the next one reaches EX and is killed there):
+   a store, an illegal word, a mask writer, VGET while a walk is in flight
+   (which would hold EX) and a predicted target's store after the last
+   pass of a loop, each in that EX slot, must have no effect; after a mask
+   writer or DIF (redirect to pc + 4) the killed DIF/DENDIF runs once. */
 #include "kc_test.h"
 #include "kc_lanes.h"
 #define VSET(f, rs)    .insn r 0x2B, 0, f, x0, rs, x0
@@ -55,8 +61,11 @@
 #define VGET(rd, f)    .insn r 0x2B, 2, f, rd, x0, x0
 #define SLOW           nop; nop; nop
 #define RES(k)         (32 * (k) - 2048)   /* 0x10001000 + 4 * lane + 32 * k */
+/* slots 64 and up, from gp: 0x10003000 + 4 * lane + 32 * (k - 64) */
+#define RES2(k)        (32 * ((k) - 64) - 2048)
 /* s11 |= res[k] ^ reg (t6 scratch) */
 #define CHECK(k, reg)  lw t6, RES(k)(s2); SLOW; xor t6, t6, reg; SLOW; or s11, s11, t6
+#define CHECK2(k, reg) lw t6, RES2(k)(gp); SLOW; xor t6, t6, reg; SLOW; or s11, s11, t6
 
     .section .text.start
     .globl _start
@@ -66,6 +75,8 @@ _start:
     slli  s1, s0, 2
     li    s2, 0x10001800
     add   s2, s2, s1            /* per-lane scratch: s2 = 0x10001800 + 4 * lane */
+    li    gp, 0x10003800
+    add   gp, gp, s1            /* slots 64 and up: gp = 0x10003800 + 4 * lane */
     li    s9, 0
     li    s11, 0
 
@@ -545,6 +556,47 @@ fast_jal_link:
     VGET(a3, 1)
     add   a1, a1, a2
     xor   a1, a1, a3
+    /* registered redirect: the instruction right after a redirect is
+       killed in EX, the one after it in ID */
+    addi  t0, s0, 0xD1
+    sw    t0, RES2(64)(gp)
+    beq   x0, x0, 30f           /* BTB miss: redirect */
+    sw    s0, RES2(64)(gp)       /* killed in EX: res[59] keeps 0xD1 + lane */
+    li    s11, 0xbad            /* killed in ID */
+30: j     31f
+    .word 0                     /* illegal, killed in EX */
+    .word 0                     /* illegal, killed in ID */
+31: li    t2, 0
+    li    t3, 0x0F
+    MASKSET(t3)
+    la    t0, 32f
+    jalr  ra, 0(t0)
+    MASKALL                     /* killed in EX: the mask stays 0x0F */
+    li    s11, 0xbad            /* killed in ID */
+32: MASKGET(t2)                 /* 0x0F in every lane (MASKGET is uniform) */
+    MASKALL
+    sw    t2, RES2(65)(gp)
+    /* a mask writer, then DIF: DIF is killed in EX, then runs once (one
+       push), so DENDIF restores the full mask */
+    andi  t5, s0, 1
+    MASKALL
+    DIF(t5, 33f)
+33: DENDIF
+    MASKGET(t4)
+    sw    t4, RES2(66)(gp)
+    /* loop head store as the predicted target of a back edge that falls
+       through: killed in EX on the last pass, res[62] keeps 1 */
+    li    t0, 3
+34: sw    t0, RES2(67)(gp)
+    addi  t0, t0, -1
+    bnez  t0, 34b
+    /* VGET while a walk is in flight, killed in EX after a jump */
+    li    t2, 12
+    VTRACE(x0, t2)
+    j     35f
+    VGET(a0, 3)                 /* killed in EX: must not hold the pipe */
+    li    s11, 0xbad            /* killed in ID */
+35: VGET(a1, 3)
     sw    a1, RES(63)(s2)
 
     /* ---------------- slow pass ---------------- */
@@ -1087,6 +1139,28 @@ fast_jal_link:
     add   a1, a1, a2
     SLOW
     xor   a1, a1, a3
+    addi  t0, s0, 0xD1
+    SLOW
+    CHECK2(64, t0)
+    li    t2, 0
+    li    t3, 0x0F
+    SLOW
+    MASKSET(t3)
+    MASKGET(t2)
+    MASKALL
+    SLOW
+    CHECK2(65, t2)
+    MASKGET(t4)
+    SLOW
+    CHECK2(66, t4)
+    li    t0, 1
+    SLOW
+    CHECK2(67, t0)
+    li    t2, 12
+    SLOW
+    VTRACE(x0, t2)
+    SLOW
+    VGET(a1, 3)
     SLOW
     CHECK(63, a1)
 

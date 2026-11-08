@@ -7,7 +7,8 @@
 // op, through a store and load address, MUL under the partial mask 0x5A,
 // whose inactive lanes keep their old rd, the predicted loops, the stores
 // that leave MEM at their accept, the window bank-conflict and mixed stores
-// of slots 59 to 61, and VGET of the cell right after VSET, slot 62). At
+// of slots 59 to 61, VGET of the cell right after VSET (slot 62), and the
+// instructions killed in EX by the registered redirect, slots 64 to 67). At
 // each FB_SWAP request every
 // lane's framebuffer word must hold the store before it, not the one after.
 // Built for both cores; tracediff-core-pipe-t_pipe_stress compares their
@@ -31,8 +32,11 @@ module t_pipe_stress_tb;
         end
     endtask
 
+    // Slots 0 to 63 from 0x1000_1000, 64 and up from 0x1000_3000 (the
+    // program's s2 and gp bases), 4 bytes per lane, 32 per slot.
     function automatic logic [31:0] res(input int l, input int k);
-        return dmem_rd(SCRATCH + 32'(4 * l) + 32'(32 * k));
+        return (k < 64) ? dmem_rd(SCRATCH + 32'(4 * l) + 32'(32 * k))
+                        : dmem_rd(32'h1000_3000 + 32'(4 * l) + 32'(32 * (k - 64)));
     endfunction
 
     // The program's framebuffer store, FB_SWAP store, framebuffer store:
@@ -111,6 +115,11 @@ module t_pipe_stress_tb;
             base = 32'(l) * 32'h841 + 32'd1;
             expect32($sformatf("lane %0d VSET 0 then VGET 0", l), res(l, 62),
                      p5a[l] ? 3 * base + 32'h222 : 2 * base);
+            expect32($sformatf("lane %0d SW killed in EX", l), res(l, 64), 32'(l + 32'hD1));
+            // MASKGET writes every lane (uniform), so all lanes see 0x0F
+            expect32($sformatf("lane %0d MASKALL killed in EX", l), res(l, 65), 32'h0F);
+            expect32($sformatf("lane %0d DIF killed in EX, run once", l), res(l, 66), 32'(full));
+            expect32($sformatf("lane %0d loop head SW killed in EX", l), res(l, 67), 32'd1);
         end
         expect32("FB_SWAP requests (fast, slow)", 32'(swap_req_count), 32'd2);
         expect32("mask at the end", 32'(`KC_CORE.mask), 32'd1);
