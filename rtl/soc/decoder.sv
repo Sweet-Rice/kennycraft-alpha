@@ -9,7 +9,11 @@
 //   0x2  world   byte port (world_*), split by byte_bridge, 17-bit index
 //   0x3  tex     byte port (tex_*), split by byte_bridge, 14-bit index
 //   0x4  fb      word port with byte enables to the back framebuffer (fb_*),
-//                15-bit word index addr[16:2], always ready
+//                15-bit word index addr[16:2]. Stores are always ready; a
+//                load is ready in its FB_RD_LAT-th cycle of req (the
+//                framebuffer's port A read latency, display FB_RD_LAT: 1, or
+//                3 on the 100 MHz pipelined build), re-reading the same word
+//                each cycle, so its data is on fb_rdata the cycle after ready
 //   0x5  mmio    register port (mmio_*), byte offset addr[7:0]
 //   0x6  palette write only, one entry per word: pal_addr = addr[9:2], low 12 bits
 //   0x7..0xF     unmapped: loads read 0, stores are dropped, no error (0x7
@@ -19,7 +23,9 @@
 // LW/SW work there too (four accesses) and LB/SB take one.
 module decoder
     import kc_isa_pkg::*;
-(
+#(
+    parameter int FB_RD_LAT = 1    // framebuffer port A read latency, 1..4 (display: 1 or 3)
+) (
     input  logic        clk,
     input  logic        rst,
 
@@ -58,7 +64,7 @@ module decoder
     input  logic        tex_ready,
     input  logic [7:0]  tex_rdata,
 
-    // Back framebuffer (P1 display core-side port, 1-cycle read latency)
+    // Back framebuffer (P1 display core-side port, FB_RD_LAT-cycle read latency)
     output logic        fb_we,
     output logic        fb_re,
     output logic [3:0]  fb_be,
@@ -104,7 +110,8 @@ module decoder
     assign dmem_addr  = addr[14:2];
     assign dmem_wdata = wdata;
 
-    // The framebuffer port is strobe based and always ready.
+    // The framebuffer port is strobe based; stores are always ready, loads
+    // wait FB_RD_LAT - 1 cycles (fb_rd_ok).
     assign fb_we      = req && we && (sel == R_FB);
     assign fb_re      = req && !we && (sel == R_FB);
     assign fb_be      = be;
@@ -142,6 +149,28 @@ module decoder
         .b_ready(tex_ready), .b_rdata(tex_rdata)
     );
 
+    // fb load wait: fb_wait counts the cycles this load has had fb_re high;
+    // it clears on the accept, so a load right behind it starts again at 0.
+    logic fb_rd_ok;
+
+    if (FB_RD_LAT == 1) begin : g_fb_rd1
+        assign fb_rd_ok = 1'b1;
+    end else begin : g_fb_wait
+        logic [1:0] fb_wait;
+
+        if (FB_RD_LAT < 1 || FB_RD_LAT > 4) begin : g_bad_lat
+            $error("decoder: FB_RD_LAT must be 1..4");
+        end
+
+        assign fb_rd_ok = (fb_wait == 2'(FB_RD_LAT - 1));
+
+        always_ff @(posedge clk) begin
+            if (rst)                    fb_wait <= '0;
+            else if (fb_re && !fb_rd_ok) fb_wait <= fb_wait + 2'd1;
+            else                        fb_wait <= '0;
+        end
+    end
+
     // ------------------------------------------------------------------
     // Handshake and read mux
     // ------------------------------------------------------------------
@@ -150,6 +179,7 @@ module decoder
             R_WORLD: ready = world_bus_ready;
             R_TEX:   ready = tex_bus_ready;
             R_MMIO:  ready = mmio_ready;
+            R_FB:    ready = req && (we || fb_rd_ok);
             default: ready = req;
         endcase
     end

@@ -14,8 +14,15 @@
 //
 // Register writes use wdata as the LSU drives it (byte and halfword stores are
 // replicated across the word), so SB/SH/SW to a register offset all work.
+//
+// CYCLES counts 20 ns ticks: every core cycle at 50 MHz, every second one
+// with CYCLE_DIV = 2 (the 100 MHz core clock), so software that converts
+// CYCLES to time with a 50 MHz rate runs unchanged.
 module mmio
     import kc_isa_pkg::*;
+#(
+    parameter int CYCLE_DIV = 1      // core cycles per CYCLES tick: 1 or 2
+)
 (
     input  logic        clk,
     input  logic        rst,
@@ -64,7 +71,12 @@ module mmio
     logic        acc;       // local register access accepted this cycle
     logic [31:0] rdata_q;   // registered read data
 
+    if (CYCLE_DIV != 1 && CYCLE_DIV != 2) begin : g_div_check
+        $error("mmio: CYCLE_DIV must be 1 or 2 (a 50 or 100 MHz core clock)");
+    end
+
     logic [31:0]          cycles;
+    logic                 tick;     // CYCLE_DIV = 2: odd core cycle
     logic [ERR_WIDTH-1:0] err;
     logic [ERR_WIDTH-1:0] err_clr;
     logic [31:0]          err_pc;
@@ -91,10 +103,12 @@ module mmio
     always_ff @(posedge clk) begin
         if (rst) begin
             cycles  <= '0;
+            tick    <= 1'b0;
             leds    <= '0;
             fb_mode <= 1'b0;
         end else begin
-            cycles <= cycles + 32'd1;
+            tick <= (CYCLE_DIV == 2) && !tick;
+            if (CYCLE_DIV == 1 || tick) cycles <= cycles + 32'd1;
             if (acc && we) begin
                 if (off == MMIO_LEDS)    leds    <= wdata[7:0];
                 if (off == MMIO_FB_MODE) fb_mode <= wdata[0];
