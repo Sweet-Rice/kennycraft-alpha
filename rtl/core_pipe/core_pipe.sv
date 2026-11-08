@@ -20,7 +20,9 @@
 //        for it. QRCP 3 cycles (two steps, result), VTRACE rd
 //        (rd != x0) until done plus one, loads and stores with an active
 //        lane: one cycle per LSU bus access (one per group of coalesced
-//        lanes) plus one; MUL and everything else 1. Retirement happens here
+//        lanes) plus one, except a store whose last group goes to dmem or
+//        the framebuffer (no extra cycle); MUL and everything else 1.
+//        Retirement happens here
 //   WB   every lane writes rd
 //
 // Hazards. Forwarding MEM -> EX and WB -> EX for every lane, gated by that
@@ -548,6 +550,7 @@ module core_pipe
     logic [ERR_WIDTH-1:0] m_err;
     logic [31:0]          m_pc, m_inst, m_next;
     logic                 m_walk, m_sret, m_vt_tail, m_mem, lsu_done, lsu_idle, win_fin;
+    logic                 lsu_last, st_fast;
     logic                 retire_valid;
 
     always_ff @(posedge clk) begin
@@ -619,9 +622,20 @@ module core_pipe
     // after its last access: a load's data arrives then) and the dmem window
     // serves its last lanes (or has none). Both come from registers, so
     // bus_ready never reaches m_done.
+    //
+    // A store whose last group goes to dmem or the framebuffer is done in
+    // the cycle that group goes out (st_fast): rtl/soc/decoder.sv answers
+    // ready = req for both (BRAM / strobe ports), so bus_req alone means the
+    // accept, and bus_req, last and bus_addr come from registers. bus_req
+    // carries !vt_block, so a held access never ends MEM. Loads keep the
+    // extra cycle (their data arrives then); world, texture, MMIO, palette
+    // and unmapped stores keep waiting for lsu_idle.
+    assign st_fast = m_is_store && bus_req && lsu_last &&
+                     ((bus_addr[31:28] == REG_DMEM) || (bus_addr[31:28] == REG_FB));
+
     always_comb begin
         if (m_halt)          m_done = 1'b1;
-        else if (m_mem)      m_done = lsu_idle && win_fin;
+        else if (m_mem)      m_done = (lsu_idle || st_fast) && win_fin;
         else if (m_qr)       m_done = (m_cnt == 3'd2);
         else if (m_vt)       m_done = m_vt_tail;
         else                 m_done = 1'b1;
@@ -649,7 +663,7 @@ module core_pipe
         .clk, .rst,
         .start(e_lsu_go), .active(mask),
         .go(m_walk && !vt_block), .is_store(m_is_store), .funct3(m_funct3),
-        .addr(l_res), .rs2(l_mrs2), .done(lsu_done), .skip(win_lane), .idle(lsu_idle),
+        .addr(l_res), .rs2(l_mrs2), .done(lsu_done), .last(lsu_last), .skip(win_lane), .idle(lsu_idle),
         .ex_addr_lo(lsu_lo), .misaligned(lsu_mis),
         .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,
         .ld_cap, .ld_value
@@ -706,9 +720,11 @@ module core_pipe
     assign state = halted ? 4'd6 : (m_walk && !lsu_idle) ? 4'd4 : 4'd0;
 
     // A store retires in the cycle the bus accepts its last lane, as on the
-    // multi-cycle core (then MEM spends one more cycle), or, with no bus lane
-    // left, in the cycle the window serves its last lanes; m_sret marks it
-    // retired.
+    // multi-cycle core, or, with no bus lane left, in the cycle the window
+    // serves its last lanes; m_sret marks it retired. A world, texture, MMIO
+    // or unmapped store then spends one more cycle in MEM; a dmem or
+    // framebuffer store leaves in its retiring cycle (st_fast implies
+    // lsu_done, so m_done and st_ret rise together and m_sret never sets).
     logic st_ret;
     assign st_ret = !m_sret && (lsu_done || lsu_idle) && win_fin;
 

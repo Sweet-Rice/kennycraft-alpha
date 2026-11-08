@@ -5,7 +5,8 @@
 // misaligned active lane) loads the pending set with the active mask. While go
 // is high (the core's MEM state) a priority encoder picks the lowest pending
 // lane, cur, and the bus access serves the group of pending lanes that goes
-// with it; each bus_req && bus_ready retires that group. done marks the
+// with it; each bus_req && bus_ready retires that group. last marks the last
+// group (no pending lane outside it), from registers only; done marks the
 // accepting cycle of the last group. Inactive lanes make no access.
 //
 // Coalescing. When cur targets dmem or the framebuffer (word ports without
@@ -57,6 +58,7 @@ module lsu
     input  logic [31:0]       addr  [LANES],
     input  logic [31:0]       rs2   [LANES],
     output logic              done,
+    output logic              last,
 
     // Lanes the bus never serves (core_pipe: the dmem window lanes, which
     // rtl/core_pipe/win_lsu.sv serves; '0 on the multi-cycle core), from
@@ -156,8 +158,9 @@ module lsu
     assign cur_bit = LANES'(1) << cur;
     assign merge   = (pend & mmio) == '0;
     assign group   = merge ? (pend & eq[cur]) : cur_bit;
+    assign last    = (pend & ~group) == '0;
     assign accept  = bus_req && bus_ready;
-    assign done    = accept && ((pend & ~group) == '0);
+    assign done    = accept && last;
 
     always_ff @(posedge clk) begin
         if (rst)          pending <= '0;

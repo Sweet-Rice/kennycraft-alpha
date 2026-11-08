@@ -10,6 +10,9 @@
 //   MASKALL (mask writers flush like taken branches)    CPI_MASK
 //   load                                                LD_BASE + bus
 //   store                                               ST_BASE + bus
+//   store to dmem or the framebuffer                    ST_BASE + bus - ST_FAST
+// (core_pipe ends a store's MEM in the cycle the bus accepts its last group
+// when that group goes to an always-ready port: dmem or the framebuffer.)
 // Slots 8 and 10 run each copy once, so the BTB has no entry for it and the
 // taken branch or JAL flushes (CPI_TAKEN). Slots 25 and 26 time loops (LI,
 // N passes of ADDI (+ JAL) + BNEZ, the back edge taken N - 1 times): the
@@ -18,7 +21,7 @@
 // predicted taken but falls through (CPI_TAKEN: flush 2).
 // The defaults are the pipelined core's; the multi-cycle core passes with
 // -GCPI_ALU=3 -GCPI_MUL=4 -GCPI_TAKEN=3 -GCPI_PRED=3 -GCPI_MASK=3
-// -GLD_BASE=3 -GST_BASE=2.
+// -GLD_BASE=3 -GST_BASE=2 -GST_FAST=0.
 module t_cpi_pipe_tb;
     parameter string IMEM_HEX = "";
     parameter string DMEM_HEX = "";
@@ -29,6 +32,7 @@ module t_cpi_pipe_tb;
     parameter int    CPI_MASK  = 3;
     parameter int    LD_BASE   = 1;   // load: M cycles beyond the bus cycles
     parameter int    ST_BASE   = 1;   // store: same
+    parameter int    ST_FAST   = 1;   // store to dmem / fb: cycles fewer
     `include "soc_harness.svh"
 
     localparam int          N       = 32;
@@ -61,7 +65,8 @@ module t_cpi_pipe_tb;
             24:             return CPI_MASK;
             11, 12, 15, 16: return LD_BASE + 1;
             17, 20:         return LD_BASE + 4;   // four byte reads
-            13, 14, 18, 21: return ST_BASE + 1;
+            13, 14, 21:     return ST_BASE + 1 - ST_FAST;
+            18:             return ST_BASE + 1;
             19:             return ST_BASE + 4;   // four byte writes
             default:        return CPI_ALU;
         endcase

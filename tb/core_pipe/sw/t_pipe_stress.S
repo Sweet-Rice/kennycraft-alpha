@@ -31,14 +31,20 @@
    target, so two predictions in a row) with its link used right after, a
    branch right after MASKSET whose outcome depends on the new scalar lane,
    and a predicted back edge on a just-loaded counter whose target is a
-   load used right after. */
+   load used right after.
+   Stores that leave MEM in the cycle their last group goes to dmem or the
+   framebuffer: a load of the same word right after (dmem and framebuffer,
+   one, two and eight groups), a store right after, a mask writer and a
+   taken branch right after, a framebuffer store then an FB_SWAP store (the
+   testbench checks the framebuffer at swap_req), and dmem window lanes
+   mixed with bus lanes (the window done first, and the bus done first). */
 #include "kc_test.h"
 #include "kc_lanes.h"
 #define VSET(f, rs)    .insn r 0x2B, 0, f, x0, rs, x0
 #define VTRACE(rd, rs) .insn r 0x2B, 1, 0, rd, rs, x0
 #define VGET(rd, f)    .insn r 0x2B, 2, f, rd, x0, x0
 #define SLOW           nop; nop; nop
-#define RES(k)         (256 + 32 * (k))
+#define RES(k)         (32 * (k) - 2048)   /* 0x10001000 + 4 * lane + 32 * k */
 /* s11 |= res[k] ^ reg (t6 scratch) */
 #define CHECK(k, reg)  lw t6, RES(k)(s2); SLOW; xor t6, t6, reg; SLOW; or s11, s11, t6
 
@@ -48,8 +54,8 @@ _start:
     MASKALL
     LANEID(s0)
     slli  s1, s0, 2
-    li    s2, 0x10001000
-    add   s2, s2, s1            /* per-lane scratch: s2 = 0x10001000 + 4 * lane */
+    li    s2, 0x10001800
+    add   s2, s2, s1            /* per-lane scratch: s2 = 0x10001800 + 4 * lane */
     li    s9, 0
     li    s11, 0
 
@@ -339,6 +345,113 @@ fast_jal_link:
     bnez  t0, 24b
     sw    t1, RES(44)(s2)
 
+    /* stores that leave MEM at their last group's accept (dmem, framebuffer) */
+    li    s4, 0x800
+    add   s4, s4, s2            /* per-lane dmem word: s4 = s2 + 0x800 */
+    li    s3, 0x10001900
+    add   s3, s3, s0            /* per-lane dmem byte: 0x10001900 + lane */
+    li    s5, 0x40000100
+    add   s5, s5, s1            /* per-lane framebuffer word */
+    li    s6, 0x40000140
+    add   s6, s6, s0            /* per-lane framebuffer byte */
+    /* store, then a load of the same word: dmem eight groups, one group
+       (every lane on one word, the highest lane wins), two groups (bytes) */
+    addi  t0, s0, 0x31
+    sw    t0, 0(s4)
+    lw    t1, 0(s4)
+    li    a0, 0x10001A00
+    addi  t2, s0, 0x41
+    sw    t2, 0(a0)
+    lw    t3, 0(a0)
+    addi  t4, s0, 0x51
+    sb    t4, 0(s3)
+    lbu   t5, 0(s3)
+    sw    t1, RES(45)(s2)
+    sw    t3, RES(46)(s2)
+    sw    t5, RES(47)(s2)
+    /* framebuffer: eight groups, two groups */
+    addi  t0, s0, 0x61
+    sw    t0, 0(s5)
+    lw    t1, 0(s5)
+    addi  t2, s0, 0x71
+    sb    t2, 0(s6)
+    lbu   t3, 0(s6)
+    sw    t1, RES(48)(s2)
+    sw    t3, RES(49)(s2)
+    /* store then store: same words, then dmem then framebuffer */
+    addi  t0, s0, 0x81
+    addi  t1, s0, 0x91
+    sw    t0, 32(s4)
+    sw    t1, 32(s4)
+    sw    t0, 64(s4)
+    sw    t1, 32(s5)
+    lw    t2, 32(s4)
+    lw    t3, 64(s4)
+    lw    t4, 32(s5)
+    sw    t2, RES(50)(s2)
+    sw    t3, RES(51)(s2)
+    sw    t4, RES(52)(s2)
+    /* store, then a mask writer and a taken branch; store, then a jump */
+    li    t1, 0
+    li    t3, 0x0F
+    addi  t0, s0, 0xA1
+    sw    t0, 96(s4)
+    MASKSET(t3)
+    beq   x0, x0, 9f
+    li    s11, 0xbad
+9:  lw    t1, 96(s4)            /* lanes 0 to 3 only */
+    MASKALL
+    lw    t2, 96(s4)
+    sw    t0, 128(s4)
+    j     10f
+    li    s11, 0xbad
+10: lw    t4, 128(s4)
+    sw    t1, RES(53)(s2)
+    sw    t2, RES(54)(s2)
+    sw    t4, RES(55)(s2)
+    /* framebuffer store, FB_SWAP store (1 from lane 0 only), framebuffer
+       store: the testbench checks every lane's first value at swap_req */
+    seqz  t1, s0
+    li    a0, MMIO_BASE
+    addi  t0, s0, 0x11
+    addi  t2, s0, 0x21
+    li    s7, 0x40000180
+    add   s7, s7, s1
+    sw    t0, 0(s7)
+    sw    t1, MMIO_FB_SWAP(a0)
+    sw    t2, 0(s7)
+    lw    t3, 0(s7)
+    sw    t3, RES(56)(s2)
+    /* dmem window lanes (even) mixed with bus lanes (odd). First a window
+       bank per lane (window done in one cycle, bus in four groups), then
+       every window lane in bank 0 (four cycles) and the bus lanes on one
+       word (one group) */
+    andi  t0, s0, 1
+    neg   t0, t0                /* -1 in odd lanes */
+    li    a0, 0x10006040
+    slli  t1, s0, 10
+    add   a0, a0, t1            /* window: 0x10006040 + 0x400 * lane */
+    addi  a1, s4, 160           /* bus: own dmem word */
+    xor   t2, a1, a0
+    and   t2, t2, t0
+    xor   s8, a0, t2
+    addi  t3, s0, 0xB1
+    sw    t3, 0(s8)
+    lw    t4, 0(s8)
+    sw    t4, RES(57)(s2)
+    li    a0, 0x10006080
+    add   a0, a0, s1            /* window bank 0, a word per lane */
+    srli  t1, s0, 1
+    li    a1, 0x10001A40
+    add   a1, a1, t1            /* bus: a byte each of one word */
+    xor   t2, a1, a0
+    and   t2, t2, t0
+    xor   s8, a0, t2
+    addi  t3, s0, 0xC1
+    sb    t3, 0(s8)
+    lbu   t4, 0(s8)
+    sw    t4, RES(58)(s2)
+
     /* ---------------- slow pass ---------------- */
     li    s9, 0
     SLOW
@@ -620,6 +733,148 @@ fast_jal_link:
     slli  t1, t1, 2
     SLOW
     CHECK(44, t1)
+    li    s4, 0x800
+    SLOW
+    add   s4, s4, s2
+    li    s3, 0x10001900
+    SLOW
+    add   s3, s3, s0
+    li    s5, 0x40000100
+    SLOW
+    add   s5, s5, s1
+    li    s6, 0x40000140
+    SLOW
+    add   s6, s6, s0
+    addi  t0, s0, 0x31
+    SLOW
+    sw    t0, 0(s4)
+    SLOW
+    lw    t1, 0(s4)
+    SLOW
+    CHECK(45, t1)
+    li    a0, 0x10001A00
+    addi  t2, s0, 0x41
+    SLOW
+    sw    t2, 0(a0)
+    SLOW
+    lw    t3, 0(a0)
+    SLOW
+    CHECK(46, t3)
+    addi  t4, s0, 0x51
+    SLOW
+    sb    t4, 0(s3)
+    SLOW
+    lbu   t5, 0(s3)
+    SLOW
+    CHECK(47, t5)
+    addi  t0, s0, 0x61
+    SLOW
+    sw    t0, 0(s5)
+    SLOW
+    lw    t1, 0(s5)
+    SLOW
+    CHECK(48, t1)
+    addi  t2, s0, 0x71
+    SLOW
+    sb    t2, 0(s6)
+    SLOW
+    lbu   t3, 0(s6)
+    SLOW
+    CHECK(49, t3)
+    addi  t0, s0, 0x81
+    addi  t1, s0, 0x91
+    SLOW
+    sw    t0, 32(s4)
+    SLOW
+    sw    t1, 32(s4)
+    SLOW
+    sw    t0, 64(s4)
+    SLOW
+    sw    t1, 32(s5)
+    SLOW
+    lw    t2, 32(s4)
+    lw    t3, 64(s4)
+    lw    t4, 32(s5)
+    SLOW
+    CHECK(50, t2)
+    CHECK(51, t3)
+    CHECK(52, t4)
+    li    t1, 0
+    li    t3, 0x0F
+    addi  t0, s0, 0xA1
+    SLOW
+    sw    t0, 96(s4)
+    SLOW
+    MASKSET(t3)
+    lw    t1, 96(s4)
+    SLOW
+    MASKALL
+    lw    t2, 96(s4)
+    SLOW
+    sw    t0, 128(s4)
+    SLOW
+    lw    t4, 128(s4)
+    SLOW
+    CHECK(53, t1)
+    CHECK(54, t2)
+    CHECK(55, t4)
+    seqz  t1, s0
+    li    a0, MMIO_BASE
+    addi  t0, s0, 0x11
+    addi  t2, s0, 0x21
+    li    s7, 0x40000180
+    SLOW
+    add   s7, s7, s1
+    SLOW
+    sw    t0, 0(s7)
+    SLOW
+    sw    t1, MMIO_FB_SWAP(a0)
+    SLOW
+    sw    t2, 0(s7)
+    SLOW
+    lw    t3, 0(s7)
+    SLOW
+    CHECK(56, t3)
+    andi  t0, s0, 1
+    SLOW
+    neg   t0, t0
+    li    a0, 0x10006040
+    slli  t1, s0, 10
+    SLOW
+    add   a0, a0, t1
+    addi  a1, s4, 160
+    SLOW
+    xor   t2, a1, a0
+    SLOW
+    and   t2, t2, t0
+    SLOW
+    xor   s8, a0, t2
+    addi  t3, s0, 0xB1
+    SLOW
+    sw    t3, 0(s8)
+    SLOW
+    lw    t4, 0(s8)
+    SLOW
+    CHECK(57, t4)
+    li    a0, 0x10006080
+    srli  t1, s0, 1
+    li    a1, 0x10001A40
+    SLOW
+    add   a0, a0, s1
+    add   a1, a1, t1
+    SLOW
+    xor   t2, a1, a0
+    SLOW
+    and   t2, t2, t0
+    SLOW
+    xor   s8, a0, t2
+    addi  t3, s0, 0xC1
+    SLOW
+    sb    t3, 0(s8)
+    SLOW
+    lbu   t4, 0(s8)
+    SLOW
+    CHECK(58, t4)
 
     li    t1, 1
     MASKSET(t1)
