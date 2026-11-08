@@ -32,7 +32,9 @@
 // leaves MEM in one cycle. vt_pend is high from vt_start until vt_done; while
 // it is high a custom-1 instruction waits in EX (e_vt_hold: EX, ID and IF
 // hold, MEM gets a bubble), so VSET cannot change the rays, a second VTRACE
-// cannot start and VGET reads the finished results.
+// cannot start and VGET reads the finished results; and a lane's world access
+// or MMIO store waits in MEM (vt_block, bus_req low), since the ray unit owns
+// the world port while busy and WIN_ORIGIN / SLOT_VALID steer its reads.
 //
 // Retirement (the retire_* wires, pc). An instruction retires in its last
 // MEM cycle, a store with an active lane in the cycle the bus accepts its
@@ -425,9 +427,10 @@ module core_pipe
     // ------------------------------------------------------------------
     // Ray unit (custom-1)
     // ------------------------------------------------------------------
+    logic vt_pend;    // a walk is in flight: from vt_start to vt_done
+
     if (HAS_RAY_UNIT) begin : g_ray
         logic [7:0] cap;
-        logic       vt_pend;
 
         assign e_vtrace  = e_is_ray && (e_funct3 == F3_VTRACE);
         assign e_vget    = e_is_ray && (e_funct3 == F3_VGET);
@@ -463,6 +466,7 @@ module core_pipe
         assign e_vtrace     = 1'b0;
         assign e_vget       = 1'b0;
         assign e_vt_hold    = 1'b0;
+        assign vt_pend      = 1'b0;
         assign e_nowr       = 1'b0;
         assign vt_lane_mask = '0;
         assign vt_cfg_we    = 1'b0;
@@ -556,12 +560,22 @@ module core_pipe
     logic [1:0] lsu_lo [LANES];
     always_comb for (int i = 0; i < LANES; i++) lsu_lo[i] = 2'b00;
 
+    // While a walk is in flight the current lane's access waits (bus_req
+    // low) if it touches the world, whose port A the ray unit owns while
+    // busy, or is an MMIO store, which could move WIN_ORIGIN or SLOT_VALID
+    // under the walk. vt_pend, m_walk and m_is_store are registers and
+    // bus_addr is the LSU's lane mux of res, so bus_ready still feeds only
+    // registered state. No access is in progress when a walk starts.
+    logic vt_block;
+    assign vt_block = vt_pend && ((bus_addr[31:28] == REG_WORLD) ||
+                                  ((bus_addr[31:28] == REG_MMIO) && m_is_store));
+
     // The misaligned check is EX's (mis above); the LSU's own check would
     // look at MEM's funct3.
     lsu #(.LANES(LANES)) u_lsu (
         .clk, .rst,
         .start(e_lsu_go), .active(mask),
-        .go(m_walk), .is_store(m_is_store), .funct3(m_funct3),
+        .go(m_walk && !vt_block), .is_store(m_is_store), .funct3(m_funct3),
         .addr(l_res), .rs2(l_mrs2), .done(lsu_done),
         .ex_addr_lo(lsu_lo), .misaligned(lsu_mis),
         .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,

@@ -56,7 +56,10 @@
 // vt_pend is high from a vt_start until the ray unit's vt_done. The
 // interlock makes an asynchronous walk invisible: while vt_pend is high a
 // custom-1 instruction waits in EX (no strobe), so VSET cannot change the
-// rays, a second VTRACE cannot start and VGET reads the finished results.
+// rays, a second VTRACE cannot start and VGET reads the finished results;
+// and a lane's world access or MMIO store waits in MEM (bus_req low), since
+// the ray unit owns the world port while busy and WIN_ORIGIN / SLOT_VALID
+// steer its reads.
 //
 // QRCP (D22, HAS_QRCP = 1; illegal otherwise) runs rtl/core/qrcp.sv in every
 // lane: the unit latches its rs1 in EX, QR steps it through qr_ph 0..3 and
@@ -345,11 +348,10 @@ module core
     // ------------------------------------------------------------------
     // Ray unit (custom-1)
     // ------------------------------------------------------------------
-    logic ex_vtrace, ex_vt_wait;
+    logic ex_vtrace, ex_vt_wait, vt_pend;
 
     if (HAS_RAY_UNIT) begin : g_ray
         logic [7:0] cap;
-        logic       vt_pend;
 
         assign ex_vtrace = ex_is_ray && (ex_funct3 == F3_VTRACE);
         assign ex_vt_wait = ex_is_ray && vt_pend;
@@ -384,6 +386,7 @@ module core
     end else begin : g_no_ray
         assign ex_vtrace    = 1'b0;
         assign ex_vt_wait   = 1'b0;
+        assign vt_pend      = 1'b0;
         assign vt_lane_mask = '0;
         assign vt_cfg_we    = 1'b0;
         assign vt_cfg_field = '0;
@@ -409,7 +412,7 @@ module core
     // ------------------------------------------------------------------
     // MEM: LSU (lane order, same-word lanes coalesced)
     // ------------------------------------------------------------------
-    logic ex_mem, ex_illegal, lsu_done;
+    logic ex_mem, ex_illegal, lsu_done, vt_block;
 
     assign ex_mem     = (ex_is_load || ex_is_store) && (mask != '0);
     // A taken jump to a target with bit 1 set halts at the jump (D16): a
@@ -420,10 +423,17 @@ module core
                         ((ex_mem && ((mis & mask) != '0)) || (take && target[1]));
     assign ex_halt    = ex_diverge || ex_divstack || ex_illegal;
 
+    // While a walk is in flight the current lane's access waits (bus_req
+    // low) if it touches the world, whose port A the ray unit owns while
+    // busy, or is an MMIO store, which could move WIN_ORIGIN or SLOT_VALID
+    // under the walk. No access is in progress when a walk starts.
+    assign vt_block = vt_pend && ((bus_addr[31:28] == REG_WORLD) ||
+                                  ((bus_addr[31:28] == REG_MMIO) && ex_is_store));
+
     lsu #(.LANES(LANES)) u_lsu (
         .clk, .rst,
         .start((state == S_EX) && ex_mem && !ex_halt), .active(mask),
-        .go(state == S_MEM), .is_store(ex_is_store), .funct3(ex_funct3),
+        .go((state == S_MEM) && !vt_block), .is_store(ex_is_store), .funct3(ex_funct3),
         .addr(l_res), .rs2(l_rs2), .done(lsu_done),
         .ex_addr_lo(l_addr_lo), .misaligned(mis),
         .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,
