@@ -9,16 +9,18 @@
 #   kc_chip8_vtrace  8 lanes, ray tracer on the VTRACE unit (Kennedy's
 #                    KC_VTRACE = 1 kc_trace; Stage 2 core: HAS_RAY_UNIT = 1)
 # The raster builds link with chip/stub_kc.ld (kc.ld + the D17 GPU memory).
-# game/Makefile has no target for kc_chip8_vtrace yet, so it is built here
-# like kc_chip8 (game's CHIP_CC, CHIP_FLAGS and SRC) plus -DKC_VTRACE=1, into
-# $(OBJ)/game_vtrace.
+# game/Makefile has no target for kc_chip8_vtrace yet, so tb/top instantiates
+# game's own CHIP_ELF macro for it (variant chip8_vtrace, -DKC_LANES=8
+# -DKC_VTRACE=1): same per-file -Os/-O2, CHIP_LDFLAGS, and the chip_check,
+# lane_lint and stack_check scripts as kc_chip8, into game/build/.
 #
 #   top-hex          memory images for rtl/top.sv, one directory per game build:
 #                    $(TOP_GEN)/<build>/kc_imem.hex, kc_dmem.hex (from the
 #                    ELF), textures.hex, palette.hex (game/gen). Run it before
 #                    a Vivado build: fpga/sources.tcl reads
-#                    $(TOP_GEN)/kc_chip8 (KC_TARGET=top, Stage 1) and
-#                    fpga/top_s0/sources.tcl $(TOP_GEN)/kc_chip (Stage 0).
+#                    $(TOP_GEN)/kc_chip8 (KC_TARGET=top, Stage 1),
+#                    fpga/top_s0/sources.tcl $(TOP_GEN)/kc_chip (Stage 0) and
+#                    fpga/top_s2/sources.tcl $(TOP_GEN)/kc_chip8_vtrace (Stage 2).
 #   tb-top-t_top_frame
 #                    rtl/top.sv with ddr_model as the MIG runs TOP_ELF (default
 #                    kc_chip, Stage 0) to its first FB_SWAP, captures the next
@@ -56,7 +58,7 @@ TOP_IMAGES := kc_imem.hex kc_dmem.hex textures.hex palette.hex
 top_lanes = $(if $(filter kc_chip8%,$(1)),8,1)
 top_div   = $(if $(filter kc_chip8%,$(1)),1,0)
 top_ray   = $(if $(filter kc_chip8_vtrace,$(1)),1,0)
-top_elf   = $(if $(filter kc_chip8_vtrace,$(1)),$(OBJ)/game_vtrace/$(1).elf,game/build/$(1).elf)
+top_elf   = game/build/$(1).elf
 
 TB_TARGETS += tb-top-t_top_frame lint-top
 
@@ -73,14 +75,14 @@ game/build/kc_chip8.elf: $(GAME_DEPS)
 game/build/kc_chip_raster.elf game/build/kc_chip8_raster.elf &: $(GAME_DEPS)
 	$(MAKE) -C game chip-raster
 
-# A variable of game/Makefile, so the VTRACE build uses the game's own flags
-# (expanded in a recipe that runs in game/).
-game_var = $$(printf 'kc-var:\n\t@echo $$(%s)\n' $(1) | \
-           $(MAKE) -s --no-print-directory -f Makefile -f - kc-var)
-$(OBJ)/game_vtrace/kc_chip8_vtrace.elf: $(GAME_DEPS) game/build/kc_chip8.elf
-	@mkdir -p $(@D)
-	cd game && $(call game_var,CHIP_CC) $(call game_var,CHIP_FLAGS) -DKC_LANES=8 -DKC_VTRACE=1 \
-	    -T chip/bench/kc.ld chip/bench/crt0.S $(call game_var,SRC) -o $(abspath $@)
+# kc_chip8_vtrace through game's own CHIP_ELF macro (fed on stdin as a second
+# makefile), then game's three chip checks on the ELF, exactly as `make chip8`.
+GAME_VTRACE_MK = $$(eval $$(call CHIP_ELF,chip8_vtrace,-DKC_LANES=8 -DKC_VTRACE=1,$$(SRC),chip/bench/kc.ld))
+game/build/kc_chip8_vtrace.elf: $(GAME_DEPS)
+	printf '%s\n' '$(GAME_VTRACE_MK)' | $(MAKE) -C game -f Makefile -f - build/kc_chip8_vtrace.elf
+	cd game && sh tools/chip_check.sh build/kc_chip8_vtrace.elf && \
+	    sh tools/lane_lint.sh build/kc_chip8_vtrace.elf && \
+	    sh tools/stack_check.sh build/kc_chip8_vtrace.elf
 
 game/gen/textures.hex game/gen/palette.hex: game/build/kc_chip.elf
 
