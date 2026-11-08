@@ -28,11 +28,12 @@
 //            last group accepted now (q empties and is not loaded again; a
 //            load's accept puts read data in flight instead).
 //   fast_nx  next cycle, the bus accepts the last group of a store whose
-//            bus lanes all go to dmem or the framebuffer: the lanes left
-//            pending are all in one dmem or framebuffer word (they are the
-//            group q loads now) and none of the store's bus lanes was outside
-//            dmem and the framebuffer (nc). rtl/soc/decoder.sv answers
-//            ready = req for both and hold never stops them, so such a store
+//            bus lanes all go to coalescing regions (coal: dmem, the
+//            framebuffer and, HAS_SCRATCH, the scratch BRAM): the lanes left
+//            pending are all in one such word (they are the group q loads
+//            now) and none of the store's bus lanes was outside them (nc).
+//            rtl/soc/decoder.sv answers ready = req for all three and hold
+//            never stops them, so such a store
 //            loads one group per cycle and the bus accepts each the cycle
 //            after. fast_nx reads the address registers and pending, not the
 //            priority encoder.
@@ -55,7 +56,10 @@
 module lsu_pipe
     import kc_isa_pkg::*;
 #(
-    parameter int LANES = 1
+    parameter int LANES = 1,
+    // Region 0x7 is the scratch BRAM (HAS_DDR_MEM, rtl/soc/kc_soc.sv): its
+    // lanes coalesce like dmem's and the framebuffer's
+    parameter bit HAS_SCRATCH = 1'b0
 ) (
     input  logic              clk,
     input  logic              rst,
@@ -101,7 +105,8 @@ module lsu_pipe
     logic [31:0]      wd_l [LANES];
 
     for (genvar i = 0; i < LANES; i++) begin : g_lane
-        assign coal[i] = (addr[i][31:28] == REG_DMEM) || (addr[i][31:28] == REG_FB);
+        assign coal[i] = (addr[i][31:28] == REG_DMEM) || (addr[i][31:28] == REG_FB) ||
+                         (HAS_SCRATCH && (addr[i][31:28] == 4'h7));
         assign mmio[i] = (addr[i][31:28] == REG_MMIO);
 
         always_comb begin

@@ -29,7 +29,8 @@
 //        (rtl/core_pipe/lsu_pipe.sv), one per LSU bus access (one per group
 //        of coalesced lanes), plus one (a store's tail) or two (a load's
 //        read data, registered in the LSU), except a store whose bus lanes
-//        all go to dmem or the framebuffer (no extra cycle); MUL 2;
+//        all go to dmem, the framebuffer or (HAS_ICACHE) the scratch BRAM
+//        (no extra cycle); MUL 2;
 //        everything else 1.
 //        Retirement happens here
 //   WB   every lane writes rd
@@ -811,9 +812,10 @@ module core_pipe
     // two cycles after, when its data leaves the LSU's read register) and
     // the dmem window serves its last lanes (or has none).
     //
-    // A store whose bus lanes all go to dmem or the framebuffer is done in
+    // A store whose bus lanes all go to dmem or the framebuffer (or the
+    // scratch BRAM, which HAS_ICACHE builds come with) is done in
     // the cycle its last group goes out (st_fast): rtl/soc/decoder.sv answers
-    // ready = req for both (BRAM / strobe ports) and vt_block never holds
+    // ready = req for each (BRAM / strobe ports) and vt_block never holds
     // them, so such a store sends one group per cycle, the first in MEM's
     // second cycle (rtl/core_pipe/lsu_pipe.sv loads its request register in
     // the first). Loads keep the extra cycles (their data arrives then); a
@@ -863,7 +865,7 @@ module core_pipe
 
     // The misaligned check is EX's (mis above). The LSU registers the bus
     // request (rtl/core_pipe/lsu_pipe.sv).
-    lsu_pipe #(.LANES(LANES)) u_lsu (
+    lsu_pipe #(.LANES(LANES), .HAS_SCRATCH(HAS_ICACHE)) u_lsu (
         .clk, .rst,
         .start(e_lsu_go), .active(mask),
         .go(m_walk), .hold(vt_block), .is_store(m_is_store), .funct3(m_funct3),
@@ -927,7 +929,7 @@ module core_pipe
     // multi-cycle core, or, with no bus lane left, in the cycle the window
     // serves its last lanes; m_sret marks it retired. A store with a world,
     // texture, MMIO or unmapped lane then spends one more cycle in MEM; a
-    // dmem or framebuffer store leaves in its retiring cycle (m_bfast is
+    // dmem, framebuffer or scratch store leaves in its retiring cycle (m_bfast is
     // st_fast, which implies lsu_done, so m_done and st_ret rise together
     // and m_sret never sets).
     logic st_ret;
