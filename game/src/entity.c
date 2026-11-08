@@ -184,11 +184,6 @@ static void screen_rect(ent_box *b) {
     b->sy0 = iclamp(y0,0,H-1); b->sy1 = iclamp(y1,0,H-1);
 }
 
-// Stage 0/1 chip builds (no VTRACE) build entity_prepare for size: their golden checks
-// compile every file at -O2 into the same 32 KB of IMEM. Stage 2 keeps speed.
-#if defined(KC_CHIP) && !KC_VTRACE
-__attribute__((minsize))
-#endif
 void entity_prepare(void) {
     ent_nboxes = 0;
     const kc_camera *cam = KC_CAM;
