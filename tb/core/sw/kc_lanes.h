@@ -9,3 +9,4 @@
 #define DIF(rs, label)  .insn b 0x5B, 0, rs, x0, label
 #define DELSE(label)    .insn b 0x5B, 1, x0, x0, label
 #define DENDIF          .insn r 0x5B, 2, 0, x0, x0, x0
+#define QRCP(rd, rs)    .insn r 0x0B, 2, 0, rd, rs, x0
