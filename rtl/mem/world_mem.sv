@@ -8,12 +8,14 @@
 //           one cycle after the address).
 //   port B  VTRACE only.
 //
-// VTRACE (WORLD_LATENCY = 2). Copy n serves lanes 4n..4n+3. vt_paddr is held
-// for two cycles; vt_phase alternates 0, 1 while vt_busy is high. In phase 0
-// ports A and B of copy n read lanes 4n and 4n+1, in phase 1 lanes 4n+2 and
-// 4n+3. The phase-0 data is captured on the phase-1 edge, so every lane's
-// vt_rdata is valid after the second edge (lanes 4n+2, 4n+3 straight from the
-// BRAM outputs, which hold until the next VTRACE read).
+// VTRACE (WORLD_LATENCY = 2). Copy n serves lanes 4n..4n+3. A VTRACE step is
+// 3 cycles (two WAITs and CHECK, vtrace.sv) from the first vt_busy cycle on,
+// with vt_paddr held through all three. vt_phase is 1 in the second cycle of
+// each step and 0 otherwise. In phase 0 ports A and B of copy n read lanes 4n
+// and 4n+1, in phase 1 lanes 4n+2 and 4n+3. The phase-0 data is captured on the
+// phase-1 edge, so every lane's vt_rdata is valid in the third cycle (CHECK;
+// lanes 4n+2, 4n+3 straight from the BRAM outputs). The CHECK cycle's phase-0
+// read repeats the first one and is never used.
 //
 // The chunk engine only drives eng_we / eng_re while vt_busy and core_req are
 // both 0 (chunk_engine grant), so it never loses port A mid-access.
@@ -43,9 +45,11 @@ module world_mem #(
 );
     localparam int COPIES = LANES / 4;
 
-    logic vt_phase = 1'b0;
+    logic [1:0] vt_cyc = 2'd0;   // cycle within the VTRACE step: 0, 1, 2
+    logic       vt_phase;
 
-    always_ff @(posedge clk) vt_phase <= vt_busy && !vt_phase;
+    always_ff @(posedge clk) vt_cyc <= (vt_busy && vt_cyc != 2'd2) ? vt_cyc + 2'd1 : 2'd0;
+    assign vt_phase = (vt_cyc == 2'd1);
 
     logic [16:0] a_addr_w;
     logic        a_we;
