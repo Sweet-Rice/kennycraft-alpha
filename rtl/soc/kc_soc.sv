@@ -102,11 +102,11 @@ module kc_soc
     logic [31:0]          err_pc, pc;
 
     // Both branches are named g_core so the core sits at g_core.u_core
-    // whichever is built. Until core_pipe is integrated, the PIPELINED
-    // branch still builds the multi-cycle core.
+    // whichever is built: PIPELINED = 1 builds the 5-stage core_pipe (P8,
+    // rtl/core_pipe), PIPELINED = 0 the multi-cycle core.
     if (PIPELINED) begin : g_core
-        core #(.LANES(LANES), .HAS_DIV_STACK(HAS_DIV_STACK), .HAS_RAY_UNIT(HAS_RAY_UNIT),
-               .HAS_QRCP(HAS_QRCP)) u_core (
+        core_pipe #(.LANES(LANES), .HAS_DIV_STACK(HAS_DIV_STACK), .HAS_RAY_UNIT(HAS_RAY_UNIT),
+                    .HAS_QRCP(HAS_QRCP)) u_core (
             .clk, .rst,
             .imem_addr, .imem_rdata,
             .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,
