@@ -12,7 +12,7 @@ int32_t ent_nboxes;
 static int16_t ent_rects[ENT_MAX][4];   // x0, y0, x1, y1 inclusive: union of one entity's boxes
 int32_t ent_nrects;
 
-enum { C_BLACK = 0, C_GRASS_L = 1, C_GRASS_D = 2, C_DIRT_L = 3,
+enum { C_BLACK = 0, C_GRASS_L = 1, C_GRASS_D = 2, C_DIRT_L = 3, C_DIRT_D = 4,
        C_STONE_D = 6, C_PLANKS = 8, C_SAND = 9, C_BRICK = 11, C_WOOD_L = 13, C_WHITE = 14 };
 #define ROBE 15
 // Local coordinates in sixteenths of a block; +z is the front.
