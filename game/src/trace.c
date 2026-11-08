@@ -41,9 +41,14 @@ void vtrace_ref(const kc_ray *r, int32_t max_steps, kc_hit *h) {
 
     int32_t steps = 0, ax = 0, neg = 0, typ = 0, hit = 0;
     q16 t = 0;
-    if (max_steps <= 0) return;                     // cap 0: done at once, results unchanged
+    // D20: BALLOT before LMASK, so the loop never ends with M = 0. A cap of 0 never enters
+    // (results unchanged), which folds the old early return into the loop test. Results go
+    // to *h every step while the lane is still live: once LMASK freezes a lane, clang may
+    // already have reused the registers holding hit/cell/t for the next step's values.
     uint32_t saved = mask_get();
-    for (;;) {
+    int32_t alive = max_steps > 0;
+    while (ballot((uint32_t)alive)) {                // uniform: "any lane still walking?"
+        lmask((uint32_t)alive);                      // finished lanes freeze their registers
         // Wiki (Tai, VTRACE "One step"): strict compares, so ties go to z, then y.
         int32_t cx = (tmx < tmy) & (tmx < tmz);
         int32_t cy = (cx ^ 1) & (tmy < tmz);
@@ -60,16 +65,13 @@ void vtrace_ref(const kc_ray *r, int32_t max_steps, kc_hit *h) {
         int32_t oob = ((uint32_t)x > 63u) | ((uint32_t)y > 31u) | ((uint32_t)z > 63u);
         typ = hal_win_get(x & 63, y & 31, z & 63);   // always a legal address
         hit = (typ != 0) & (oob ^ 1);
-        int32_t alive = ((hit | oob) ^ 1) & (steps < max_steps);
-        lmask((uint32_t)alive);                      // finished lanes freeze their registers
-        if (ballot(1) == 0) break;                   // uniform: "any lane still walking?"
+        h->res  = (uint32_t)hit | ((uint32_t)ax << 1) | ((uint32_t)neg << 3)
+                | ((uint32_t)(typ & -hit) << 4) | ((uint32_t)steps << 8);
+        h->cell = CELL_PACK(x, y, z);
+        h->t    = t;
+        alive = ((hit | oob) ^ 1) & (steps < max_steps);
     }
     mask_set(saved);
-
-    h->res  = (uint32_t)hit | ((uint32_t)ax << 1) | ((uint32_t)neg << 3)
-            | ((uint32_t)(typ & -hit) << 4) | ((uint32_t)steps << 8);
-    h->cell = CELL_PACK(x, y, z);
-    h->t    = t;
 }
 
 #if KC_VTRACE

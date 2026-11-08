@@ -20,7 +20,7 @@ KC_DEFS  := $(if $(KC_GEN_BITMAP),-DKC_GEN_BITMAP=$(KC_GEN_BITMAP)) $(if $(KC_TA
 CC       ?= cc
 CFLAGS   := -std=c11 -O2 -Wall -Wextra -Wno-unused-parameter -Isrc -Igen -Ihost $(KC_DEFS)
 CHIP_CC  ?= clang
-CHIP_FLAGS := --target=riscv32-unknown-elf -march=rv32i_zmmul -mabi=ilp32 -ffreestanding \
+CHIP_FLAGS := --target=riscv32-unknown-elf -march=rv32i_zmmul -mabi=ilp32 -O2 -ffreestanding \
               -nostdlib -fno-builtin -fno-jump-tables -Wall -Isrc -Igen -mno-relax \
               -DKC_CHIP -msmall-data-limit=0 -ffunction-sections -fdata-sections $(KC_DEFS)
 CHIP_LDFLAGS := -Wl,--gc-sections,--entry=_start
