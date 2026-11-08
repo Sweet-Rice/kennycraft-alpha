@@ -49,6 +49,8 @@ void pick_and_edit(void);          // aim with the DDA, apply J / K
 void write_camera(void);           // camera block (absolute coords) + render params
 void game_draw_overlay(void);      // crosshair + hotbar into the back framebuffer
 // 1 if the player's box overlaps any block in [x0..x1] x [y0..y1] x [z0..z1] (CR6 edits).
+// Break one block as J does (not bedrock); a frame or portal block puts out its portal.
+void game_break(int32_t x, int32_t y, int32_t z);
 // Fill a finished obsidian frame that has (x, y, z) on its rim with portal; 1 if one lit.
 int32_t portal_light(int32_t x, int32_t y, int32_t z);
 int32_t player_overlaps(int32_t x0, int32_t y0, int32_t z0, int32_t x1, int32_t y1, int32_t z1);

@@ -75,7 +75,8 @@ __attribute__((noinline)) static void octave2_row(gen_scratch *g, int32_t ax0, i
     lerp_x(g->a2 + 8, g->d2 + 8, 8, g->s3, h0[1], h0[2], h1[1], h1[2]);
 }
 
-// Nether columns: bedrock floor and roof, netherrack floor (y 1..10) and ceiling (y 24..30),
+// Nether columns: a full-height bedrock wall at x = NETHER_X0 (no walking in from the side),
+// bedrock floor and roof, netherrack floor (y 1..10) and ceiling (y 24..30),
 // lava lakes up to y 5 in the low spots, glowstone hanging from the ceiling.
 // Limit: two vnoise calls per column (8 hashes), unlike the overworld's per-chunk lerps;
 // share corners per chunk like terrain_gen_chunk if Nether generation shows up in the frame time
@@ -90,7 +91,7 @@ static void nether_gen_chunk(int32_t ax0, int32_t az0, int32_t rx0, int32_t rz0)
             int32_t glow = (hash2(ax, az, WORLD_SEED ^ 0x0E9u) & 31u) == 0;
             for (int32_t y = 0; y < WIN_Y; y++) {
                 uint8_t t = B_AIR;
-                if (y == 0 || y == WIN_Y - 1) t = B_BEDROCK;
+                if (y == 0 || y == WIN_Y - 1 || ax == NETHER_X0) t = B_BEDROCK;   // x = 3072: the wall
                 else if (y <= fl || y >= cl) t = B_NETHERRACK;
                 else if (y <= NETHER_LAVA_Y) t = B_LAVA;
                 else if (glow && y >= cl - 2) t = B_GLOWSTONE;

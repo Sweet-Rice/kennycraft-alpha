@@ -462,6 +462,32 @@ static int cmd_play(void) {
         int32_t bx = qfloor(kc_me.pos[0]);
         check(bx >= px + 1 && bx < NETHER_X0 && qfloor(kc_me.pos[2]) == pz,
               "back in the overworld at the portal, and it does not fire again until you step out");
+
+        // Breaking: a frame block puts the whole portal out; so does breaking a portal block.
+        game_break(px, py + 1, pz);
+        int32_t lit = 0;
+        for (int32_t v = 0; v < 3; v++) for (int32_t a = 1; a < 3; a++) lit += world_get(px + a, py + v, pz) == B_PORTAL;
+        check(lit == 0 && world_get(px, py + 1, pz) == B_AIR, "breaking a frame block clears all 6 portal blocks");
+        world_set(px, py + 1, pz, B_OBSIDIAN);
+        check(portal_light(px, py + 1, pz), "putting the block back relights it");
+        game_break(px + 2, py + 2, pz);
+        lit = 0;
+        for (int32_t v = 0; v < 3; v++) for (int32_t a = 1; a < 3; a++) lit += world_get(px + a, py + v, pz) == B_PORTAL;
+        check(lit == 0, "breaking one portal block clears the rest");
+
+        // The wall: x = NETHER_X0 is bedrock top to bottom, and walking east stops at it.
+        int32_t wz = qfloor(kc_me.pos[2]), wall = 1;
+        pose(Q16_INT(NETHER_X0 - 4) + Q16_HALF, Q16(30.0), Q16_INT(wz) + Q16_HALF, Q16_INT(256), 0);
+        for (int32_t y = 0; y < WIN_Y; y++) wall &= world_get(NETHER_X0, y, wz) == B_BEDROCK;
+        check(wall, "a full-height bedrock wall stands at x = 3072");
+        step_frames(60);                                   // fall onto the ground
+        key(KEY_W, 1); key(KEY_SPACE, 1);
+        step_frames(240);                                  // walk and jump east into the wall
+        key(KEY_W, 0); key(KEY_SPACE, 0);
+        step_frames(2);
+        printf("  walked east to x = %.2f\n", kc_me.pos[0] / 65536.0);
+        check(kc_me.pos[0] < Q16_INT(NETHER_X0) && kc_me.pos[0] > Q16_INT(NETHER_X0 - 1),
+              "walking east from the overworld reaches the wall and stops there");
     }
 
     printf("tag visibility\n");

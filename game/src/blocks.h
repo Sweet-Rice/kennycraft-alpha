@@ -14,7 +14,8 @@ enum {
 #define BUILD_MAX_Y    28      // highest y the player may place into; keeps the eye inside the window
 #define WORLD_SEED     0x4B43u // "KC"
 // The Nether is the east strip of the same world: chunks from here on get Nether terrain, so
-// storage, tags and the window need nothing new. Walking east past it from the overworld works.
+// storage, tags and the window need nothing new. A bedrock wall at x = NETHER_X0 keeps the two
+// apart: portals (or P) are the only way across.
 // Limit: shared coordinate space; a real dimension id in the chunk id if the strip ever matters
 #define NETHER_X0      3072
 

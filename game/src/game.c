@@ -131,10 +131,32 @@ static void update_aim(void) {
     kc_me.place[HIT_AXIS(h.res)] += (int16_t)(HIT_NEG(h.res) ? 1 : -1);   // the cell the ray came from
 }
 
+// Put out the 2 x 3 portal that holds (x, y, z): find its lower corner, then clear it.
+static void clear_portal(int32_t x, int32_t y, int32_t z) {
+    int32_t ax = world_get(x - 1, y, z) == B_PORTAL || world_get(x + 1, y, z) == B_PORTAL;
+    int32_t dx = ax, dz = !ax;
+    while (world_get(x, y - 1, z) == B_PORTAL) y--;
+    while (world_get(x - dx, y, z - dz) == B_PORTAL) { x -= dx; z -= dz; }
+    for (int32_t v = 0; v < 3; v++)
+        for (int32_t a = 0; a < 2; a++)
+            if (world_get(x + a * dx, y + v, z + a * dz) == B_PORTAL) world_set(x + a * dx, y + v, z + a * dz, B_AIR);
+}
+
+void game_break(int32_t x, int32_t y, int32_t z) {
+    uint8_t t = world_get(x, y, z);
+    if (t == B_BEDROCK) return;
+    world_set(x, y, z, B_AIR);
+    if (t == B_PORTAL) clear_portal(x, y, z);
+    if (t == B_OBSIDIAN) {                       // a frame block: put out the portal it held
+        static const int8_t n[6][3] = { {1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1} };
+        for (int32_t i = 0; i < 6; i++)
+            if (world_get(x + n[i][0], y + n[i][1], z + n[i][2]) == B_PORTAL)
+                clear_portal(x + n[i][0], y + n[i][1], z + n[i][2]);
+    }
+}
+
 static void do_break(void) {
-    if (!kc_me.aim_hit) return;
-    if (world_get(kc_me.aim[0], kc_me.aim[1], kc_me.aim[2]) == B_BEDROCK) return;
-    world_set(kc_me.aim[0], kc_me.aim[1], kc_me.aim[2], B_AIR);
+    if (kc_me.aim_hit) game_break(kc_me.aim[0], kc_me.aim[1], kc_me.aim[2]);
 }
 
 static void do_place(void) {
@@ -169,7 +191,6 @@ static void travel(void) {
 // A portal frame is obsidian around a 2 wide x 3 tall hole of air (corners optional), standing
 // along x or z. The obsidian block just placed at (x, y, z) may finish one: try every frame
 // position that has it on the rim and fill the first complete one's hole with portal.
-// Limit: breaking the frame leaves the portal blocks; clear them in do_break if that matters
 int32_t portal_light(int32_t x, int32_t y, int32_t z) {
     for (int32_t along_x = 0; along_x < 2; along_x++)
         for (int32_t oy = -4; oy <= 0; oy++)
