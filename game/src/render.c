@@ -50,7 +50,9 @@ static inline __attribute__((always_inline)) uint8_t shade(int32_t px, int32_t p
 uint8_t kc_shade_pixel(int32_t px, int32_t py)     { return shade(px, py, 0); }
 uint8_t kc_shade_pixel_ent(int32_t px, int32_t py) { return shade(px, py, 1); }
 
-void kc_render_frame(void) {
+// with_ents is a compile-time constant: 0 is the plain world loop (it unrolls as before entities
+// existed), 1 adds a per-block entity test. All lanes share a 4x2 block, so that test is uniform.
+static inline __attribute__((always_inline)) void frame(int32_t with_ents) {
     int32_t W = KC_RP->width, H = KC_RP->height;
 #if KC_LANES == 8
     int32_t lane = (int32_t)lane_id();           // called between mask_all() and mask_set(1)
@@ -60,8 +62,7 @@ void kc_render_frame(void) {
             for (int32_t b = 0; b < 8; b++) {          // eight 4x2 blocks per 8x8 tile
                 int32_t bx = tx + ((b & 1) << 2);
                 int32_t by = ty + ((b >> 1) << 1);
-                // All lanes share the 4x2 block, so this branch is uniform. No entities: one load.
-                int32_t ents = ent_nrects && ent_block(bx, by);
+                int32_t ents = with_ents && ent_block(bx, by);
 #if KC_LANES == 1
                 for (int32_t lane = 0; lane < 8; lane++) {
 #endif
@@ -74,4 +75,8 @@ void kc_render_frame(void) {
             }
         }
     }
+}
+
+void kc_render_frame(void) {
+    if (ent_nrects) frame(1); else frame(0);    // uniform: every lane reads the same count
 }
