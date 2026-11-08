@@ -764,26 +764,43 @@ static int cmd_cr6(void) {
     return failures ? 1 : 0;
 }
 
+// KC_LINK_FPS=n runs the game clock at n real frames per second (default: the old 20 fps
+// loop, 1/30 s of game time per frame). KC_REC=<dir> also saves every frame there as
+// 000000.png, ... for a smooth demo video (raw PNGs: keep <dir> on a fast disk).
 static int cmd_link(void) {
     char path[512], tmp[512];
+    const char *rec = getenv("KC_REC"), *fps_s = getenv("KC_LINK_FPS");
+    int fps = fps_s ? atoi(fps_s) : 0;
+    uint32_t step = fps > 0 ? CORE_HZ / (uint32_t)fps : CORE_HZ / 30;
+    long frame_ns = fps > 0 ? 1000000000L / fps : 50000000L;
     snprintf(path, sizeof path, "%s/live.png", outdir);
     snprintf(tmp, sizeof tmp, "%s/live.tmp.png", outdir);
     fcntl(0, F_SETFL, fcntl(0, F_GETFL) | O_NONBLOCK);
     host_uart_out(stdout, 0);
+    struct timespec next;
+    clock_gettime(CLOCK_MONOTONIC, &next);
     for (uint32_t n = 0;; n++) {
         uint8_t b[256];
         ssize_t k;
         while ((k = read(0, b, sizeof b)) > 0)
             for (ssize_t i = 0; i < k; i++) host_push_key(b[i]);
         if (k == 0) return 0;                              // kc-host closed the pipe
-        step_frames(1);
+        host_advance_cycles(step);
+        kc_frame();
         fflush(stdout);
+        int w = KC_RP->width, h = KC_RP->height;
+        if (rec) {
+            char f[600];
+            snprintf(f, sizeof f, "%s/%06u.png", rec, n);
+            png_write_fb(f, host_front_buffer(), host_palette(), w, h, 1);
+        }
         if ((n & 3) == 0) {
-            int w = KC_RP->width, h = KC_RP->height;
             png_write_fb(tmp, host_front_buffer(), host_palette(), w, h, w == 160 ? 4 : 2);
             rename(tmp, path);
         }
-        usleep(50000);
+        next.tv_nsec += frame_ns;                          // a steady clock, not sleep-after-work
+        while (next.tv_nsec >= 1000000000L) { next.tv_nsec -= 1000000000L; next.tv_sec++; }
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
     }
 }
 
