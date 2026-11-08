@@ -132,17 +132,17 @@ module display_tb;
         vs_q = vga_vs;
     end
 
-    // The front select may only change at the first pixel clock of vblank.
-    logic fs_q = 1'b0;
+    // The front buffer may only change at the first pixel clock of vblank.
+    logic [1:0] fs_q = 2'd0;
     logic [9:0] hx_q = '0, vy_q = '0;
     int flips = 0;
     always @(posedge clk_pix) begin
-        if (dut.front_sel != fs_q) begin
+        if (dut.front != fs_q) begin
             flips++;
             if (!(hx_q == 10'd0 && vy_q == 10'd480))
-                $fatal(1, "front_sel flipped at hx=%0d vy=%0d, not at the start of vblank", hx_q, vy_q);
+                $fatal(1, "front buffer changed at hx=%0d vy=%0d, not at the start of vblank", hx_q, vy_q);
         end
-        fs_q = dut.front_sel;
+        fs_q = dut.front;
         hx_q = dut.hx;
         vy_q = dut.vy;
     end
@@ -257,10 +257,10 @@ module display_tb;
         pal_fill();
         fb_fill(0);
         fb_check_readback(0);
-        if (dut.front_sel !== 1'b0) $fatal(1, "front buffer should start as buffer 0");
+        if (dut.front !== 2'd0) $fatal(1, "front buffer should start as buffer 0");
         request_swap();
         wait_swap_done();
-        if (dut.front_sel !== 1'b1) $fatal(1, "swap did not select buffer 1");
+        if (dut.front !== 2'd1) $fatal(1, "swap did not select buffer 1");
 
         // FB_MODE 0: two consecutive frames.
         wait_frames(1); check_frame("mode0_frame1", 0, 1'b0);
@@ -289,7 +289,7 @@ module display_tb;
             $fatal(1, "frame_count advanced by %0d across one vblank", frame_count - fc0);
         check_frame("swap_frame_after", 1, 1'b0);
 
-        if (flips != 2) $fatal(1, "front_sel flipped %0d times, expected 2", flips);
+        if (flips != 2) $fatal(1, "front buffer changed %0d times, expected 2", flips);
         if (frame_count < 32'd8) $fatal(1, "frame_count %0d too low", frame_count);
         $display("display_tb: PASS (%0d frames, frame_count %0d)", frames_done, frame_count);
         $finish;

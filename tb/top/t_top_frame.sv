@@ -3,8 +3,10 @@
 // unisim_sim.sv with KC_EXT_CLOCKS) and the memory images as parameters
 // (tb/top/tb.mk builds them from Kennedy's game into $(OBJ)/top_hex/<build>).
 //
-// It runs the program until FRAMES frame swaps have completed. After each
-// swap it captures the next whole frame from the VGA pins (640x480 RGB444),
+// It runs the program until FRAMES frame swaps have completed. Frame n is
+// the first frame the front buffer shows after FB_SWAP n (the display's front
+// buffer changes at a vblank once n swaps have happened): it is captured
+// from the VGA pins (640x480 RGB444),
 // writes it as <outdir>/frame<N>_vga.ppm, checks that FB_MODE 1 shows every
 // framebuffer pixel as a uniform 4x4 block, and writes the 160x120 image as
 // <outdir>/frame<N>.ppm (8-bit channels = 4-bit value x 17). UART output is
@@ -27,9 +29,9 @@
 //                 (default 0, i.e. from reset) and FB_SWAP N+1: core cycle,
 //                 PC, lane, world index, loaded value
 //
-// LANES / HAS_DIV_STACK / HAS_RAY_UNIT / HAS_QRCP pick the core (tb/top/tb.mk:
-// 1 / 0 / 0 / 0 for the one-lane game builds, 8 / 1 / 0 / 0 for the 8-lane
-// ones, 8 / 1 / 1 / 1 for kc_chip8_vtrace).
+// LANES / HAS_DIV_STACK / HAS_RAY_UNIT / HAS_QRCP / FB_COUNT pick the core and
+// display (tb/top/tb.mk: 1 / 0 / 0 / 0 / 2 for the one-lane game builds,
+// 8 / 1 / 0 / 0 / 2 for the 8-lane ones, 8 / 1 / 1 / 1 / 3 for kc_chip8_vtrace).
 //
 // The build has no --timing: tb/top/t_top_frame.cpp drives the ports, the
 // 100 MHz clk (first rising edge at 5 ns), ck_rst (released with the 20th
@@ -44,7 +46,8 @@ module t_top_frame #(
     parameter string TEX_HEX  = "textures.hex",
     parameter string PAL_HEX  = "palette.hex",
     parameter bit    HAS_RAY_UNIT  = 1'b0,
-    parameter bit    HAS_QRCP      = 1'b0
+    parameter bit    HAS_QRCP      = 1'b0,
+    parameter int    FB_COUNT      = 2
 ) (
     input logic clk,
     input logic ck_rst,
@@ -66,7 +69,7 @@ module t_top_frame #(
 
     top #(.LANES(LANES), .HAS_DIV_STACK(HAS_DIV_STACK),
           .IMEM_HEX(IMEM_HEX), .DMEM_HEX(DMEM_HEX), .TEX_HEX(TEX_HEX), .PAL_HEX(PAL_HEX),
-          .HAS_RAY_UNIT(HAS_RAY_UNIT), .HAS_QRCP(HAS_QRCP)) dut (
+          .HAS_RAY_UNIT(HAS_RAY_UNIT), .HAS_QRCP(HAS_QRCP), .FB_COUNT(FB_COUNT)) dut (
         .clk, .ck_rst, .uart_rxd_out, .uart_txd_in(1'b1), .led,
         .vga_r, .vga_g, .vga_b, .vga_hs, .vga_vs,
         .ddr3_addr, .ddr3_ba, .ddr3_cas_n, .ddr3_ck_n, .ddr3_ck_p, .ddr3_cke,
@@ -314,9 +317,11 @@ module t_top_frame #(
     always @(posedge dut.rst_core)
         if (boots > 0) $display("t_top_frame: rst_core asserted at time %0t", $time);
 
-    // Frame n (1..frames) is captured from the first end of a swap
-    // (swap_pending falling) once n FB_SWAPs have happened. PASS once every
-    // frame is written and at least +swaps FB_SWAPs have happened.
+    // Frame n (1..frames) is captured from the first change of the front
+    // buffer (at the first pixel clock of vblank) once n FB_SWAPs have
+    // happened. With FB_COUNT = 2 that is the flip the game waits for with
+    // FB_SWAP; with FB_COUNT = 3 it is the promote of the ready buffer, which
+    // FB_SWAP no longer waits for. PASS once every
     int     min_swaps = 0, frame_n = 1;
     bit     frames_done = 0, frame_wait = 0;
     longint timeout_ns = TIMEOUT_NS;
@@ -340,7 +345,7 @@ module t_top_frame #(
         check_pass();
     end
 
-    always @(negedge dut.swap_pending) if (!frames_done && !frame_wait && swaps >= frame_n) begin
+    always @(dut.u_display.front) if (!frames_done && !frame_wait && swaps >= frame_n) begin
         armed = 1; captured = 0;
         frame_wait = 1;
     end
