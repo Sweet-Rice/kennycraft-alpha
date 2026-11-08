@@ -32,7 +32,7 @@ module t_div_nested_lmask_tb;
             expect_kept(A1, 32'h51, "else body skipped");
         end
         expect_uniform(A2, 32'(FULL), "DENDIF restores the full mask");
-        expect32("stack empty", 32'(dut.u_core.g_divstack.u_divstack.sp), 32'd0);
+        expect32("stack empty", 32'(`KC_CORE.g_divstack.u_divstack.sp), 32'd0);
         $display("  then %02h, after LMASK %02h, else %02h, after MASKSET %02h, end %02h",
                  t, m1, e, ms, FULL);
         finish_test("t_div_nested_lmask");

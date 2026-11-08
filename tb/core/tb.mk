@@ -38,7 +38,8 @@
 #                           only lane 0 able to activate (LANE0_ONLY), whose
 #                           retirement trace must equal the LANES = 1 trace
 #                           (tb/core/tracediff.py)
-#   lint-core               verilator -Wall over rtl/core, rtl/mem, rtl/soc
+#   lint-core               verilator -Wall over rtl/core, rtl/core_pipe,
+#                           rtl/mem, rtl/soc
 #                           at LANES = 1, 3 and 8, with and without the
 #                           divergence stack, with the ray unit and with QRCP
 #
@@ -56,7 +57,8 @@ CORE_SW_OBJ   := $(OBJ)/core_sw
 
 CORE_RTL_CORE := $(wildcard rtl/core/*.sv)
 CORE_RTL_REST := $(wildcard rtl/mem/*.sv) $(wildcard rtl/soc/*.sv) rtl/vtrace/vtrace.sv
-CORE_RTL      := rtl/kc_isa_pkg.sv $(CORE_RTL_CORE) $(CORE_RTL_REST)
+CORE_RTL      := rtl/kc_isa_pkg.sv $(CORE_RTL_CORE) $(wildcard rtl/core_pipe/*.sv) \
+                 $(CORE_RTL_REST)
 CORE_TBS  := datapath_tb program_mem_tb
 CORE_RUNG5 := t_mask t_ballot t_maskgetset t_mask_zero
 CORE_RUNG6 := t_branch_uniform t_jalr_uniform

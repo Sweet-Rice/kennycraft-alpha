@@ -30,7 +30,7 @@ module t_mask_zero_tb;
         expect32("SW under M = 0", dmem_rd(W), 32'hCAFE_F00D);
         expect32("bus accesses to the watched words", 32'(watch_hits), 32'd0);
         expect32("UART bytes", 32'(uart_rx_q.size()), 32'd0);
-        expect32("mask at the end", 32'(dut.u_core.mask), 32'd1);
+        expect32("mask at the end", 32'(`KC_CORE.mask), 32'd1);
         finish_test("t_mask_zero");
     end
 endmodule

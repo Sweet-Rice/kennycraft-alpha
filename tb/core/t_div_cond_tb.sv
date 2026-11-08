@@ -27,7 +27,7 @@ module t_div_cond_tb;
         expect_masked(T5, FULL, 32'h66, 32'h0, "then body, rs1 = 0x100");
         expect_kept(S9, 32'h5B, "else body skipped, rs1 = 0x100");
         expect_uniform(A5, 32'(FULL), "MASKGET at the end");
-        expect32("stack empty", 32'(dut.u_core.g_divstack.u_divstack.sp), 32'd0);
+        expect32("stack empty", 32'(`KC_CORE.g_divstack.u_divstack.sp), 32'd0);
         $display("  then %02h, else %02h", t, e);
         finish_test("t_div_cond");
     end

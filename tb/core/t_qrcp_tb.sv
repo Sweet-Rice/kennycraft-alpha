@@ -43,12 +43,12 @@ module t_qrcp_tb;
     int          qrcp_seen = 0, qrcp_bad_lat = 0;
     int unsigned last_retire = 0;
     always @(posedge clk) begin
-        if (!rst && dut.u_core.retire_valid) begin
-            if (dut.u_core.retire_inst[6:0] == 7'h0B && dut.u_core.retire_inst[14:12] == 3'b010) begin
+        if (!rst && `KC_CORE.retire_valid) begin
+            if (`KC_CORE.retire_inst[6:0] == 7'h0B && `KC_CORE.retire_inst[14:12] == 3'b010) begin
                 qrcp_seen <= qrcp_seen + 1;
                 if (cycle - last_retire != QRCP_CYCLES) begin
                     $display("  FAIL QRCP at %08h retired %0d cycles after the previous instruction",
-                             dut.u_core.retire_pc, cycle - last_retire);
+                             `KC_CORE.retire_pc, cycle - last_retire);
                     qrcp_bad_lat <= qrcp_bad_lat + 1;
                 end
             end
@@ -77,7 +77,7 @@ module t_qrcp_tb;
         expect32("x0 writes", 32'(x0_writes), 32'd0);
         expect32("QRCP retired", 32'(qrcp_seen), 32'(NQRCP));
         expect32("QRCP latency errors", 32'(qrcp_bad_lat), 32'd0);
-        expect32("mask at the end", 32'(dut.u_core.mask), 32'd1);
+        expect32("mask at the end", 32'(`KC_CORE.mask), 32'd1);
 
         if (errors != 0) $fatal(1, "FAIL: t_qrcp, %0d mismatches", errors);
         $display("PASS: t_qrcp (LANES = %0d, %0d can be active, %0d QRCP of %0d cycles)",

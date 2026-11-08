@@ -18,7 +18,7 @@ module t_uart_tb;
             sent.push_back(8'(32'hA0 + i * 7));
             uart_send(sent[i]);
         end
-        if (dut.u_core.pc > 32'h10)
+        if (`KC_CORE.pc > 32'h10)
             $fatal(1, "FAIL: program left its sleep loop before the burst ended");
         for (int i = 0; i < 16; i++) expected.push_back(sent[i]);
 
