@@ -22,16 +22,19 @@
 #   tracediff-core-pipe-<t> the multi-cycle (tb-core-<t>) and pipelined builds
 #                           of the same test with +trace, retire traces
 #                           compared without cycle numbers
-#                           (tb/core_pipe/tracediff_pipe.py)
+#                           (tb/core_pipe/tracediff_pipe.py), every test
 #   lint-core-pipe          verilator -Wall over kc_soc with PIPELINED = 1 at
 #                           LANES = 1, 3 and 8 and every HAS_DIV_STACK,
 #                           HAS_RAY_UNIT, HAS_QRCP combination, one target
 #                           per run (lint-core-pipe-l<L>-d<D>r<R>q<Q>)
 #
-# Not in `make check`: tracediff-core-pipe-<t> for the tests whose trace
-# depends on timing (CORE_PIPE_TIMED). They read CYCLES or poll UART_STATUS,
-# FB_SWAP or a byte the testbench sends, so loaded values and loop counts
-# change with the CPI. Run them by hand to see the first difference.
+# Timing deltas. Some traces depend on the CPI: they read CYCLES or poll
+# UART_STATUS, FB_SWAP or a flag the testbench writes, so loaded values and
+# loop counts differ. CORE_PIPE_TD_<t> lists them per test for
+# tracediff_pipe.py: --poll ADDR:NAME turns each loop around a load from
+# ADDR into one line and prints its iteration counts on both cores; --mask
+# ADDR:NAME masks the values loaded from ADDR and everything computed from
+# them and prints both values. Nothing else may differ.
 #
 # CORE_PIPE=0 builds the same targets with PIPELINED = 0 (the multi-cycle
 # core), which checks the rules and the comparator on identical cores.
@@ -45,10 +48,25 @@ CORE_PIPE_G     := -GPIPELINED="1'b$(CORE_PIPE)"
 # Every pipelined tb build also binds core_pipe_halt_check into core_pipe
 CORE_PIPE_TB    := $(CORE_PIPE_G) tb/core_pipe/core_pipe_halt_check.sv
 # Lines at the end of the multi-cycle trace that the pipelined run may not
-# have retired yet when the testbench calls $finish (tracediff_pipe.py --tail)
-CORE_PIPE_TAIL  ?= 2
-CORE_PIPE_TIMED := t_mmio t_mmio_lanes t_mmio_lanes-l8 t_uart program_mem_tb t_cpi
+# have retired yet when the testbench calls $finish (tracediff_pipe.py
+# --tail). None so far: every testbench waits long enough after TB_DONE.
+CORE_PIPE_TAIL  ?= 0
 CORE_PIPE_NAMES :=
+
+CORE_PIPE_CYCLES   := --mask 0x5000000c:CYCLES
+CORE_PIPE_UART     := --poll 0x50000014:UART_STATUS
+# TX-busy poll before every byte of "Hello, world!\r\n"
+CORE_PIPE_TD_program_mem_tb := $(CORE_PIPE_UART)
+# 15,000-cycle CYCLES wait, then RX-available and TX-busy polls per echo
+CORE_PIPE_TD_t_uart := --poll 0x5000000c:CYCLES $(CORE_PIPE_UART)
+# FB_SWAP pending poll; CYCLES around one LW and around CHUNK_CMD
+CORE_PIPE_TD_t_mmio := --poll 0x50000000:FB_SWAP $(CORE_PIPE_CYCLES)
+# wait for the testbench's TB_SELECT flag (after it has sent "ABC"); CYCLES
+# read under every lane
+CORE_PIPE_TD_t_mmio_lanes    := --poll 0x100000f0:TB_SELECT $(CORE_PIPE_CYCLES)
+CORE_PIPE_TD_t_mmio_lanes-l8 := $(CORE_PIPE_TD_t_mmio_lanes)
+# CYCLES before and after every class
+CORE_PIPE_TD_t_cpi := $(CORE_PIPE_CYCLES)
 
 # $(call CORE_PIPE_RULES,name,tb module,obj suffix,flags,hex images[,variant])
 # for the test tb/core/tb.mk builds as tb-core-<name>. With a variant, the
@@ -70,8 +88,8 @@ tb-core-pipe-$(1): $(5)
 	$(call core_pipe_bin,$(2),$(3),$(6)) $$(PLUSARGS)
 
 tracediff-core-pipe-$(1): tb-core-$(1) tb-core-pipe-$(1)
-	python3 tb/core_pipe/tracediff_pipe.py --tail $$(CORE_PIPE_TAIL) $(1)@pipe \
-	    $$(call core_bin,$(2),$(3)) $(call core_pipe_bin,$(2),$(3),$(6))
+	python3 tb/core_pipe/tracediff_pipe.py --tail $$(CORE_PIPE_TAIL) $$(CORE_PIPE_TD_$(1)) \
+	    $(1)@pipe $$(call core_bin,$(2),$(3)) $(call core_pipe_bin,$(2),$(3),$(6))
 endef
 
 $(foreach t,$(filter-out t_cpi t_mmio,$(CORE_ALL)),$(eval $(call CORE_PIPE_RULES,$(t),$(call \
@@ -104,7 +122,6 @@ $(foreach l,1 3 8,$(foreach d,0 1,$(foreach r,0 1,$(foreach q,0 1, \
 lint-core-pipe: $(CORE_PIPE_LINT)
 
 TB_TARGETS += $(addprefix tb-core-pipe-,$(CORE_PIPE_NAMES)) lint-core-pipe \
-              $(addprefix tracediff-core-pipe-,$(filter-out $(CORE_PIPE_TIMED),$(CORE_PIPE_NAMES)))
+              $(addprefix tracediff-core-pipe-,$(CORE_PIPE_NAMES))
 
-.PHONY: $(addprefix tracediff-core-pipe-,$(filter $(CORE_PIPE_TIMED),$(CORE_PIPE_NAMES))) \
-        $(CORE_PIPE_LINT)
+.PHONY: $(CORE_PIPE_LINT)
