@@ -17,14 +17,15 @@ enum { C_BLACK = 0, C_GRASS_L = 1, C_GRASS_D = 2, C_DIRT_L = 3,
 #define ROBE 15
 // Local coordinates in sixteenths of a block; +z is the front.
 typedef struct { int8_t x0, y0, z0, x1, y1, z1; uint8_t color; } ent_part;
-static const ent_part villager_parts[7] = {
-    {-4, 0,-3, 4,24,3,ROBE},
-    {-4,24,-4, 4,34,4,C_DIRT_L},
-    {-1,25, 4, 1,29,6,C_DIRT_L},
-    {-3,29, 4,-1,30,5,C_GRASS_D},
-    { 1,29, 4, 3,30,5,C_GRASS_D},
-    {-6,15, 3, 6,19,7,ROBE},
-    {-2,15, 7, 2,19,8,C_DIRT_L},
+// The face is painted on the skull: nose and eyes are thin boxes whose fronts lie in the
+// head's front plane. ent_box_hit keeps the first box on a tie, so they come before the
+// head, and the nose before the eyes so it splits the eye bar into two eyes.
+static const ent_part villager_parts[5] = {
+    {-4, 0,-3, 4,24,3,ROBE},          // robe: torso and legs
+    {-1,25, 3, 1,29,4,C_DIRT_D},      // nose
+    {-3,28, 3, 3,29,4,C_BLACK},       // eyes
+    {-4,24,-4, 4,33,4,C_DIRT_L},      // head
+    {-7,16,-3, 7,20,7,ROBE},          // folded arms, back through the torso to join at the sides
 };
 static const ent_part chicken_parts[7] = {
     {-3, 4,-4, 3,10, 4,C_WHITE},     // body
