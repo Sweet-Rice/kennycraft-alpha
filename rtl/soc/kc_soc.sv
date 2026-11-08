@@ -243,7 +243,8 @@ module kc_soc
     logic       tx_start, tx_busy, rx_pop, rx_avail;
     logic [7:0] tx_data, rx_data;
 
-    mmio u_mmio (
+    // CYCLES ticks every 20 ns whatever the core clock (50 or 100 MHz)
+    mmio #(.CYCLE_DIV(CLK_HZ / 50_000_000)) u_mmio (
         .clk, .rst,
         .req(mmio_req), .we(mmio_we), .addr(mmio_addr[7:2]), .wdata(mmio_wdata),
         .ready(mmio_ready), .rdata(mmio_rdata),
