@@ -25,7 +25,7 @@ design history; decision numbers such as D22 refer to it.
 | `mk/bench.mk` | Bench targets (below), included by `tb/bench/tb.mk` |
 | `fpga/` | Non-project Vivado flow (`build.tcl`), per-target `sources.tcl`, constraints (`arty.xdc`, `top.xdc`, reference XDCs in `ref/`), `kc_mmi.tcl`, `hex2mem.py`, `patch_bit.sh`, `program.tcl` |
 | `build/` | `build.tcl` entry and `summarize.py` for the fpga-tools MCP build contract |
-| `host/` | Laptop-side banking host (Python): `kchost.py` serves `companion.html` and links to the chip over CR6 (`cr6.py`, with a fake chip), `bank.py` (SQLite ledger settled on Solana devnet), `nessie.py`, `agents.py`, `orchestrator.py`, tests `test_bank.py` and `test_contract.py`, `requirements.txt` |
+| `host/` | Laptop-side banking host (Python): `kchost.py` serves `companion.html` and links to the chip over CR6 (`cr6.py`, with a fake chip), `bank.py` (SQLite ledger settled on Solana devnet), `nessie.py`, and `orchestrator.py` (connects `kc_agents` to CR6 and the ledger); tests `test_bank.py` and `test_contract.py`, `requirements.txt` |
 | `game/` | The game, built for the laptop and the chip; see `game/README.md` |
 | `kc_agents/` | Nemotron agents that act in the game world; see `kc_agents/README.md` |
 | `tight_setup_hold_pins.txt` | Vivado table of the 68 `u_bridge` FIFO and calibration-sync pins with tight setup and hold (clocks `clk50_unbuf`, `clk_pll_i`) |
