@@ -25,7 +25,13 @@
    MUL -> MULH -> MULHSU -> MULHU chains; MULH/MULHSU/MULHU into ALU ops;
    dependents at distance 2; MUL and its dependent under a partial mask,
    where the inactive lanes keep their old rd. A stale operand there takes
-   a wrong path (s11), a decoy address, or a different value. */
+   a wrong path (s11), a decoy address, or a different value.
+   Branch prediction (core_pipe's BTB): a loop back edge predicted taken
+   that falls through on its last pass, JAL in a loop (the back edge's
+   target, so two predictions in a row) with its link used right after, a
+   branch right after MASKSET whose outcome depends on the new scalar lane,
+   and a predicted back edge on a just-loaded counter whose target is a
+   load used right after. */
 #include "kc_test.h"
 #include "kc_lanes.h"
 #define VSET(f, rs)    .insn r 0x2B, 0, f, x0, rs, x0
@@ -286,6 +292,52 @@ mu_jr_ok:
     MASKALL
     sw    a3, RES(39)(s2)
     sw    a5, RES(40)(s2)
+    /* BTB: loop back edge, predicted taken from the second pass on, falls
+       through on the last (predicted taken: flush) */
+    li    t0, 6
+    li    t1, 0
+20: add   t1, t1, s0
+    addi  t1, t1, 3
+    addi  t0, t0, -1
+    bnez  t0, 20b
+    sw    t1, RES(41)(s2)
+    /* BTB: JAL in a loop, link used right after; the back edge's target is
+       the JAL, so the fetch follows two predictions in a row */
+    li    t0, 5
+    li    t2, 0
+21: jal   a0, 22f
+fast_jal_link:
+    li    s11, 0xbad
+22: add   t2, t2, a0
+    addi  t0, t0, -1
+    bnez  t0, 21b
+    sw    t2, RES(42)(s2)
+    /* BTB: branch right after a mask writer. Pass k runs BLT under the mask
+       1 << k, so lane k decides: taken for k = 1..3, falls through at 4 */
+    li    t5, 1
+    li    t3, 0
+    li    t4, 4
+23: MASKALL
+    addi  t3, t3, 1
+    slli  t5, t5, 1
+    MASKSET(t5)
+    blt   s0, t4, 23b
+    MASKALL
+    add   t3, t3, t5
+    sw    t3, RES(43)(s2)
+    /* BTB: predicted back edge on a just-loaded counter (load-use), whose
+       target is a load used right after */
+    li    t0, 4
+    sw    t0, 128(s2)
+    li    t1, 0
+24: lw    t3, 0(s2)
+    add   t1, t1, t3
+    lw    t4, 128(s2)
+    addi  t4, t4, -1
+    sw    t4, 128(s2)
+    lw    t0, 128(s2)
+    bnez  t0, 24b
+    sw    t1, RES(44)(s2)
 
     /* ---------------- slow pass ---------------- */
     li    s9, 0
@@ -547,6 +599,27 @@ mu_jr_ok:
     MASKALL
     CHECK(39, a3)
     CHECK(40, a5)
+    addi  t1, s0, 3
+    SLOW
+    li    t3, 6
+    SLOW
+    mul   t1, t1, t3
+    SLOW
+    CHECK(41, t1)
+    la    t3, fast_jal_link
+    li    t4, 5
+    SLOW
+    mul   t2, t3, t4
+    SLOW
+    CHECK(42, t2)
+    li    t3, 20                /* four passes, mask bit 1 << 4 */
+    SLOW
+    CHECK(43, t3)
+    addi  t1, s0, 7
+    SLOW
+    slli  t1, t1, 2
+    SLOW
+    CHECK(44, t1)
 
     li    t1, 1
     MASKSET(t1)

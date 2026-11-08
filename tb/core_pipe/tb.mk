@@ -29,8 +29,9 @@
 #   tb-core-pipe-t_pipe_stress(-ref), tracediff-core-pipe-t_pipe_stress
 #                           tb/core_pipe/sw/t_pipe_stress.S: back-to-back
 #                           hazards (forwarding, load-use, MUL, QRCP,
-#                           VSET/VTRACE/VGET, mask writers, DIF/DELSE, JALR)
-#                           on the Stage 2 core with QRCP, self-checking, on
+#                           VSET/VTRACE/VGET, mask writers, DIF/DELSE, JALR,
+#                           BTB-predicted branches and JAL) on the Stage 2
+#                           core with QRCP, self-checking, on
 #                           both cores, traces compared
 #   tb-core-pipe-t_dwin(-ref), tracediff-core-pipe-t_dwin
 #                           tb/core_pipe/sw/t_dwin.S: loads and stores in the

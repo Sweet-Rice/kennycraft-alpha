@@ -4,10 +4,11 @@
 // and the results that do not need a model of the ray unit or QRCP (load-use,
 // BALLOT, LMASK + MASKGET under the odd-lane mask, DIF/DELSE, the presets
 // that the lanes outside the 0x5A mask keep across QRCP, MUL into an ALU
-// op, through a store and load address, and MUL under the partial mask 0x5A,
-// whose inactive lanes keep their old rd). Built for both cores;
-// tracediff-core-pipe-t_pipe_stress compares their retire traces, the only
-// pipelined trace coverage of VSET/VTRACE/VGET with forwarding.
+// op, through a store and load address, MUL under the partial mask 0x5A,
+// whose inactive lanes keep their old rd, and the predicted loops). Built for
+// both cores; tracediff-core-pipe-t_pipe_stress compares their retire
+// traces, the only pipelined trace coverage of VSET/VTRACE/VGET with
+// forwarding.
 module t_pipe_stress_tb;
     parameter string IMEM_HEX = "";
     parameter string DMEM_HEX = "";
@@ -64,6 +65,9 @@ module t_pipe_stress_tb;
                      p5a[l] ? prod : 32'(l + 'h111));
             expect32($sformatf("lane %0d MUL -> add, partial mask", l), res(l, 40),
                      p5a[l] ? prod + 32'(l) : 32'(l + 'h222));
+            expect32($sformatf("lane %0d loop, 6 passes", l), res(l, 41), 32'(6 * (l + 3)));
+            expect32($sformatf("lane %0d branch after MASKSET", l), res(l, 43), 32'd20);
+            expect32($sformatf("lane %0d loop on a loaded count", l), res(l, 44), 32'(4 * (l + 7)));
         end
         expect32("mask at the end", 32'(`KC_CORE.mask), 32'd1);
         // lane 1 is active under the partial mask 0x5A
