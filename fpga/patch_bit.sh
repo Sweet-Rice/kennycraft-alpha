@@ -7,7 +7,7 @@
 # build_dir  a KC_TARGET=top build output (top.bit, kc.mmi from fpga/build.tcl)
 # hex_dir    kc_imem.hex, kc_dmem.hex, textures.hex in the formats
 #            rtl/top.sv reads with $readmemh (`make top-hex` writes them to
-#            obj_dir/top_hex). The palette is not patchable (see
+#            obj_dir/top_hex/<build>). The palette is not patchable (see
 #            fpga/build.tcl); palette.hex changes need a rebuild.
 # out_dir    gets the MEM files and patched.bit
 # program    program patched.bit (fpga/program.tcl) under the fpga-tools MCP
