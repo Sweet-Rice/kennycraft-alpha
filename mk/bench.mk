@@ -64,6 +64,9 @@ HAS_RAY_UNIT ?= $(if $(filter 2,$(STAGE)),1,0)
 CHIP_TOP ?= $(if $(filter 2,$(STAGE)),top,bench_chip)
 CHIP_PARAMS = -GLANES=$(LANES) -GHAS_DIV_STACK="1'b$(HAS_DIV_STACK)" \
 	$(if $(filter top,$(CHIP_TOP)),-GHAS_RAY_UNIT="1'b$(HAS_RAY_UNIT)")
+ifeq ($(STAGE)$(CHIP_TOP),2bench_chip)
+$(error STAGE=2 needs CHIP_TOP=top: bench_chip has no ray unit, so custom-1 would halt ERR.ILLEGAL)
+endif
 VL_MDIR ?= out/vl
 PAL_HEX ?=
 TEX_HEX ?=
