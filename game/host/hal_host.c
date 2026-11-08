@@ -26,6 +26,10 @@ static uint8_t  rx_fifo[256];
 static uint32_t rx_head, rx_tail;
 static uint64_t cycles;
 static int      realtime;
+static FILE    *uart_out;                    // where UART_TX bytes go (NULL: stderr)
+static int      uart_quiet;
+uint8_t  host_tx[4096];                      // every UART_TX byte since host_tx_clear()
+uint32_t host_tx_n;
 static int      storage_ok = 1;
 static uint64_t t0_ns;
 host_stats      hstats;
@@ -154,7 +158,10 @@ void hal_mmio_w(uint32_t off, uint32_t v) {
     case MMIO_FB_SWAP:
         if (v & 1) { back ^= 1; frame_count++; hstats.frames++; host_on_swap(); }
         break;
-    case MMIO_UART_TX:     fputc((int)(v & 255), stderr); break;
+    case MMIO_UART_TX:
+        if (host_tx_n < sizeof host_tx) host_tx[host_tx_n++] = (uint8_t)v;
+        if (!uart_quiet) fputc((int)(v & 255), uart_out ? uart_out : stderr);
+        break;
     case MMIO_ERR:         break;
     case MMIO_LEDS:        leds = v; break;
     case MMIO_FB_MODE:     fb_mode = v & 1; break;
@@ -169,6 +176,8 @@ void hal_mmio_w(uint32_t off, uint32_t v) {
 
 // ---- host-side hooks -----------------------------------------------------------------------
 void host_push_key(uint8_t b) { rx_fifo[rx_head++ & 255] = b; }
+void host_uart_out(FILE *f, int quiet) { uart_out = f; uart_quiet = quiet; }
+void host_tx_clear(void) { host_tx_n = 0; }
 void host_advance_cycles(uint32_t c) { cycles += c; }
 
 // Reset button: chip registers go back to their reset values and CYCLES restarts. BRAM and
