@@ -21,6 +21,7 @@
 #define KEY_Y     0x79   // accept the quote on the HUD (CR6 CONFIRM)
 #define KEY_N     0x6E   // decline it
 #define KEY_P     0x70   // travel to the Nether and back
+#define KEY_F     0x66   // performance overlay on/off
 // Mouse look: one key-down byte per step (scripts/kc.py sends them from pointer motion).
 #define MOUSE_LEFT  0x14
 #define MOUSE_RIGHT 0x15
