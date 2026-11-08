@@ -13,6 +13,8 @@
 #   KC_PROF=1   per-frame cycle profile on the UART (doom/kc_prof.c)
 #   KC_VCLOCK=1 virtual clock, one tic per frame: frames depend on the frame
 #               number only, for frame-for-frame comparisons across builds
+#   KC_DETAIL=low|high       Doom's detail level (default high)
+#   KC_SCREENBLOCKS=3..11    Doom's screen size (default 10: full width, status bar)
 
 DOOM_CROSS   ?= /home/tai/AMD/2026.1/gnu/riscv/lin/bin/riscv64-unknown-elf-
 DOOM_CC      := $(DOOM_CROSS)gcc
@@ -24,6 +26,14 @@ PYTHON       ?= python3
 DOOM_ARGS    ?=
 KC_PROF      ?= 0
 KC_VCLOCK    ?= 0
+KC_DETAIL    ?= high
+KC_SCREENBLOCKS ?= 10
+ifeq ($(filter low high,$(KC_DETAIL)),)
+$(error KC_DETAIL must be low or high, not '$(KC_DETAIL)')
+endif
+ifeq ($(filter 3 4 5 6 7 8 9 10 11,$(KC_SCREENBLOCKS)),)
+$(error KC_SCREENBLOCKS must be 3..11, not '$(KC_SCREENBLOCKS)')
+endif
 
 DOOM_OUT    := out/doom
 DOOM_OBJ    := $(DOOM_OUT)/obj
@@ -49,7 +59,8 @@ DOOM_CFLAGS := $(DOOM_ARCH) -O2 -mstrict-align -ffunction-sections -fdata-sectio
     -fno-asynchronous-unwind-tables -fno-unwind-tables \
     -DCMAP256 -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 -I$(DOOM_DG)
 DOOM_ARGS_DEF := -D'KC_DOOM_ARGS=$(foreach a,$(DOOM_ARGS),"$(a)",)'
-DOOM_OPTS   := -DKC_PROF=$(KC_PROF) -DKC_VCLOCK=$(KC_VCLOCK)
+DOOM_OPTS   := -DKC_PROF=$(KC_PROF) -DKC_VCLOCK=$(KC_VCLOCK) \
+    -DKC_DETAIL_LOW=$(if $(filter low,$(KC_DETAIL)),1,0) -DKC_SCREENBLOCKS=$(KC_SCREENBLOCKS)
 # The screen buffer goes to SCRATCH BRAM without editing doomgeneric
 # (doom/doomgeneric_kc.c).
 DOOM_WRAPS  := I_InitGraphics I_FinishUpdate R_ExecuteSetViewSize R_Init \

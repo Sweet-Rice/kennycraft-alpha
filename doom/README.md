@@ -17,6 +17,8 @@ Build options (`make doom VAR=value`; each one rebuilds the platform objects and
 | Option | Default | Effect |
 | --- | --- | --- |
 | `KC_PROF=1` | 0 | per-frame cycle profile on the UART, one `kcprof` line per frame (below) |
+| `KC_DETAIL=low` | high | Doom's detail level (low: half horizontal resolution) |
+| `KC_SCREENBLOCKS=n` | 10 | Doom's screen size, 3..11 (10: full width with the status bar, 11: no status bar) |
 | `KC_VCLOCK=1` | 0 | virtual clock: time moves only on `DG_SleepMs` and by one tic (1000/35 ms) per frame, so each frame depends on the frame number alone; for frame-for-frame comparisons of builds that run at different speeds |
 
 `KC_PROF=1` reads CYCLES (core cycles in the simulation, where CORE_MHZ is 50) around the main per-frame calls and
@@ -60,7 +62,9 @@ framebuffer rows 20..219, clears rows 0..19 and 220..239, stores 1 to `FB_SWAP` 
 The bootloader's dmem is free once Doom runs (`doom/kc_mem.h`). `--wrap=R_Init` (`doom/kc_render.c`) copies the
 COLORMAP lump (34 x 256 bytes) to dmem 0x1000_0000..0x1000_21FF, points `colormaps` at the copy and rebuilds `zlight`
 from it (`scalelight` is built later by R_ExecuteSetViewSize; the rest reads `colormaps` every frame), so every light
-lookup is a BRAM read. It does not fit in SCRATCH: the screen leaves only 1,536 bytes there (0x7000_FA00..FFFF).
+lookup is a BRAM read. The table does not fit in SCRATCH: the screen leaves only 1,536 bytes there
+(0x7000_FA00..FFFF). The same wrap then applies `KC_DETAIL` and `KC_SCREENBLOCKS` as the menu would (detailLevel,
+screenblocks, the menu's screenSize, then R_SetViewSize).
 
 Sound and music are compiled out: `doom/kc_nosound.c` replaces `s_sound.c`/`i_sound.c` with no-ops, so no sound or
 music lump is ever loaded, and `sounds.c`, `memio.c`, `i_cdmus.c`, `mus2mid.c`, `gusconf.c` and every backend are not
