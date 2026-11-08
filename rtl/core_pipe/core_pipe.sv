@@ -394,10 +394,13 @@ module core_pipe
         assign e_nowr   = e_vtrace && (cap == 8'd0);
 
         assign vt_lane_mask = mask;
-        assign vt_cfg_we    = e_go && !e_halt && e_is_ray && (e_funct3 == F3_VSET);
+        // A custom-1 instruction halts only on e_fault (DIVERGE, DIVSTACK
+        // and the EX ILLEGAL cases need a branch, JALR, DIF/DELSE/DENDIF or
+        // a load/store), so the strobes skip the forward/uniform-check cone.
+        assign vt_cfg_we    = e_go && !e_fault && e_is_ray && (e_funct3 == F3_VSET);
         assign vt_cfg_field = e_field;
         assign vt_cfg_data  = l_rs1;
-        assign vt_start     = e_go && !e_halt && e_vtrace;
+        assign vt_start     = e_go && !e_fault && e_vtrace;
         assign vt_max_steps = cap;
         assign vt_wr        = m_valid && m_vt && vt_done;
 
