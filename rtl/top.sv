@@ -1,7 +1,7 @@
 // KennyCraft top level on the Digilent Arty A7-100T (Tai page, CPU Core,
 // Module hierarchy).
 //
-//   clk (E3, 100 MHz) -> BUFG -> clk_gen  50 MHz core, 25 MHz pixel
+//   clk (E3, 100 MHz) -> BUFG -> clk_gen  CORE_MHZ (50 or 100) core, 25 MHz pixel
 //                             -> ddr_clk  166.67 / 200 MHz for the MIG
 //   kc_soc      core, imem, dmem, decoder, MMIO, UART, textures
 //               (EXT_WORLD = 1: its world port goes through world_remap)
@@ -23,7 +23,8 @@
 // build), plus HAS_RAY_UNIT = 1 Stage 2; LANES = 1 without either is Stage 0
 // (KC_TARGET=top_s0). HAS_QRCP = 1 adds the per-lane QRCP unit (D22, Stage 2
 // top first). FB_COUNT = 3 gives the display three framebuffers (triple
-// buffering, D24; the Stage 2 builds) instead of two.
+// buffering, D24; the Stage 2 builds) instead of two. CORE_MHZ sets the core
+// clock (default 50; KC_TARGET=top_s2p100 builds the pipelined core at 100).
 //
 // led is the error LED: the core halted on an illegal instruction, a
 // misaligned access or a fetch outside instruction memory. The MIG owns the
@@ -39,7 +40,8 @@ module top #(
     parameter bit    HAS_RAY_UNIT  = 1'b0,
     parameter bit    HAS_QRCP      = 1'b0,
     parameter int    FB_COUNT      = 2,
-    parameter bit    PIPELINED     = 1'b0
+    parameter bit    PIPELINED     = 1'b0,
+    parameter int    CORE_MHZ      = 50     // core clock: 50 or 100 (VCO 1000 MHz / divider)
 ) (
     input  logic        clk,            // E3,  100 MHz
     input  logic        ck_rst,         // C2,  active low
@@ -82,7 +84,7 @@ module top #(
 
     BUFG u_bufg_in (.I(clk), .O(clk100));
 
-    clk_gen u_clk_gen (
+    clk_gen #(.CORE_DIV(1000 / CORE_MHZ)) u_clk_gen (
         .clk(clk100), .rst_n(ck_rst),
         .clk_core, .clk_pix, .locked(core_locked), .rst_core, .rst_pix
     );
@@ -122,7 +124,7 @@ module top #(
 
     kc_soc #(
         .LANES    (LANES),
-        .CLK_HZ   (50_000_000),
+        .CLK_HZ   (CORE_MHZ * 1_000_000),
         .BAUD     (1_000_000),
         .IMEM_HEX (IMEM_HEX),
         .DMEM_HEX (DMEM_HEX),

@@ -12,6 +12,7 @@
 #   tools/fpga_mcp.py --project <checkout> --target top_s0 build-wait
 #   tools/fpga_mcp.py --project <checkout> --target top_s2 build-wait
 #   tools/fpga_mcp.py --project <checkout> --target top_s2p build-wait
+# fpga/top_s2p100/sources.tcl is top_s2p with kc_core_mhz 100 (CORE_MHZ = 100).
 #
 # Memory images: run `make top-hex` (tb/top/tb.mk) before the build. It builds
 # Kennedy's chip programs and copies his assets into obj_dir/top_hex/<build>:
@@ -33,6 +34,7 @@ if {$kc_stage == 2} {
     set generics {LANES=1 HAS_DIV_STACK=0}
 }
 if {$kc_pipelined} { lappend generics PIPELINED=1 }
+if {[info exists kc_core_mhz]} { lappend generics CORE_MHZ=$kc_core_mhz }
 set kc_mmi 1
 foreach f {kc_imem.hex kc_dmem.hex textures.hex palette.hex} {
     if {![file exists $hex_dir/$f]} { error "$hex_dir/$f missing: run `make top-hex` first" }
