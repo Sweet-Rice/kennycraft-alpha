@@ -9,7 +9,7 @@ Laptop-side agents that act in the game world. Three sizes:
 | Builder contractor, when hired | Multi-step tool agent: survey, plan, price, quote, build, inspect, get paid | Nemotron Ultra by default, hosted or on an OpenAI-compatible server |
 | Banker and trader, through `host/` | Tool agents for confirmed currency exchanges and material trades | The same configured tool model as the builder |
 
-The model only chooses actions. Code enforces the rules: one decision moves a mob at most 8 blocks per axis and villagers stay within 16 blocks of home (`mobs.py`); the builder can't quote without a valid plan, build before escrow is funded, build more than 3 times, or get paid before the chip's blocks check out (`builder.py`); the bank clamps each builder quote to 0.5x-1.5x of the rule price (`5 + cells + 2 * breaks`), at most 200 KCN and the player's balance, and keeps a 10% fee on release (`bank.py`). Cancelling after funding but before inspect passes pays the builder for the share of blocks already placed and refunds the rest; `run` does this itself if the model stops mid-contract. Cancelling after inspect passes moves no money: the escrow stays held.
+The model only chooses actions. Code enforces the rules: one decision moves a mob at most 8 blocks per axis and villagers stay within 16 blocks of home (`mobs.py`); the builder can't quote without a valid plan, build before escrow is funded, build more than 3 times, or get paid before the chip's blocks check out (`builder.py`); the bank clamps each builder quote to 0.5x-1.5x of the plan's rule price after the player's material discount, at most 200 KCN and the player's balance, and keeps a 10% fee on release (`bank.py`). Cancelling after funding but before inspect passes pays the builder for the share of blocks already placed and refunds the rest; `run` does this itself if the model stops mid-contract. Cancelling after inspect passes moves no money: the escrow stays held.
 
 ## Files
 | File | What |
@@ -59,10 +59,12 @@ hosted Ultra for 120 seconds before retrying the primary. The fallback uses
 `NVIDIA_API_KEY` and the default Ultra model, not `NEMOTRON_MODEL`.
 
 The demo selects its model-backed builder only when `NVIDIA_API_KEY` is set.
-For a local or Brev tool server without a hosted key, run the standalone builder:
+For a local or Brev tool server without a hosted key, set `NEMOTRON_MODEL` to
+the model ID served there, then run the standalone builder:
 
 ```sh
-NEMOTRON_BASE_URL=http://127.0.0.1:8000/v1 NEMOTRON_API_KEY=local \
+NEMOTRON_MODEL="${NEMOTRON_MODEL:?set the server model ID first}" \
+  NEMOTRON_BASE_URL=http://127.0.0.1:8000/v1 NEMOTRON_API_KEY=local \
   python -m kc_agents.builder "a small plank hut"
 ```
 
