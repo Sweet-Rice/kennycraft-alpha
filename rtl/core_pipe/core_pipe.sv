@@ -116,19 +116,25 @@ module core_pipe
     assign d_inst    = d_hold_v ? d_hold : imem_rdata;
     assign d_ready   = !d_valid || (adv && !lu);
 
+    // pc_f: a redirect writes it, otherwise it steps with ID until a halt
+    // stops fetching. A halt does not touch its select: after a halt pc_f
+    // is never decoded again.
+    always_ff @(posedge clk) begin
+        if (rst)                     pc_f <= RESET_VEC;
+        else if (e_go && e_redirect) pc_f <= e_next;
+        else if (d_ready && !stop)   pc_f <= pc_f + 32'd4;
+    end
+
     always_ff @(posedge clk) begin
         if (rst) begin
-            pc_f     <= RESET_VEC;
             d_valid  <= 1'b0;
             d_hold_v <= 1'b0;
             stop     <= 1'b0;
         end else if (flush) begin
-            pc_f     <= e_next;
             d_valid  <= 1'b0;
             d_hold_v <= 1'b0;
             if (e_halt) stop <= 1'b1;
         end else if (d_ready) begin
-            if (!stop) pc_f <= pc_f + 32'd4;
             d_pc     <= pc_f;
             d_valid  <= !stop;
             d_hold_v <= 1'b0;
