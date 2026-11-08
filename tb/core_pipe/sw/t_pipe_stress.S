@@ -18,7 +18,14 @@
    loaded condition, JALR through a loaded target and use of its link,
    QRCP into an ALU op, a branch, store data, another QRCP and a JALR
    target, back-to-back QRCPs (independent and two apart), and QRCP plus a
-   dependent op under a partial mask. */
+   dependent op under a partial mask;
+   mul-use (MUL leaves MEM in one cycle and is forwarded only from WB): a
+   MUL right before a dependent ALU op (rs1 and rs2), branch (taken and not),
+   JALR target, store data, store address, load address, QRCP and VSET;
+   MUL -> MULH -> MULHSU -> MULHU chains; MULH/MULHSU/MULHU into ALU ops;
+   dependents at distance 2; MUL and its dependent under a partial mask,
+   where the inactive lanes keep their old rd. A stale operand there takes
+   a wrong path (s11), a decoy address, or a different value. */
 #include "kc_test.h"
 #include "kc_lanes.h"
 #define VSET(f, rs)    .insn r 0x2B, 0, f, x0, rs, x0
@@ -185,6 +192,100 @@ qr_jt:
     MASKALL
     sw    a3, RES(21)(s2)
     sw    a4, RES(22)(s2)
+    /* mul-use: the product reaches the WB forward only */
+    li    a0, 0x9234567B
+    xor   a0, a0, s1            /* negative, per lane */
+    li    a1, 0x6543210F
+    add   a1, a1, s0            /* positive, per lane */
+    li    a2, 0xFEDCBA98
+    sub   a2, a2, s1            /* negative, per lane */
+    li    a4, 1
+    li    t0, 0
+    mul   t0, a0, a1            /* into an ALU op, then rs2 at distance 2 */
+    add   t1, t0, a2
+    sub   t2, a2, t0
+    sw    t1, RES(23)(s2)
+    sw    t2, RES(24)(s2)
+    li    t4, 0                 /* into a branch: not taken, then taken */
+    mul   t4, a0, a1
+    bne   t4, t0, mu_br_bad
+    li    t4, 0
+    mul   t4, a1, a0
+    beq   t0, t4, mu_br_ok
+mu_br_bad:
+    li    s11, 0xbad
+mu_br_ok:
+    la    t5, mu_jr_bad         /* into a JALR target (stale: the marker) */
+    la    t4, mu_jr_ok
+    mul   t5, t4, a4
+    jalr  ra, 0(t5)
+mu_jr_bad:
+    li    s11, 0xbad
+mu_jr_ok:
+    li    t3, 0
+    mul   t3, a0, a2            /* into store data */
+    sw    t3, RES(27)(s2)
+    sw    a2, 128(s2)           /* decoy at the stale address */
+    addi  a6, s2, RES(28)
+    addi  t3, s2, 128
+    mul   t3, a6, a4            /* into a store address */
+    sw    a1, 0(t3)
+    addi  t3, s2, 128
+    mul   t3, a6, a4            /* into a load address */
+    lw    t4, 0(t3)
+    sw    t4, RES(29)(s2)
+    andi  a7, a1, 0x7FF
+    addi  a7, a7, 0x100
+    li    t3, 0x10000
+    mul   t3, a7, a7            /* into QRCP */
+    QRCP(t4, t3)
+    sw    t4, RES(30)(s2)
+    slli  a6, s0, 3
+    addi  a6, a6, 3
+    andi  a7, s0, 7
+    addi  t3, a6, 1
+    mul   t3, a6, a4            /* into VSET: start cell, step signs */
+    VSET(0, t3)
+    xori  t3, a7, 5
+    mul   t3, a7, a4
+    VSET(7, t3)
+    li    t2, 12
+    VTRACE(a3, t2)
+    VGET(a5, 0)
+    add   a3, a3, a5
+    sw    a3, RES(31)(s2)
+    mul   t0, a0, a1            /* MUL -> MUL -> MULH -> MULHSU -> MULHU */
+    mul   t1, t0, a2
+    mulh  t2, t1, t0
+    mulhsu t3, t2, a0
+    mulhu t4, a2, t3
+    sw    t4, RES(32)(s2)
+    sw    t2, RES(33)(s2)
+    mulh  t0, a0, a2            /* MULH, MULHSU, MULHU into ALU ops */
+    add   t1, t0, a1
+    mulhsu t2, a2, a1
+    sub   t3, a0, t2
+    mulhu t4, a0, a2
+    xor   t5, t4, t1
+    sw    t1, RES(34)(s2)
+    sw    t3, RES(35)(s2)
+    sw    t5, RES(36)(s2)
+    mul   t0, a1, a1            /* distance 2: rs1, store data */
+    addi  t1, a0, 1
+    xor   t2, t0, t1
+    mulhu t3, a0, a1
+    nop
+    sw    t3, RES(38)(s2)
+    sw    t2, RES(37)(s2)
+    addi  a3, s0, 0x111         /* partial mask: inactive lanes keep rd */
+    addi  a5, s0, 0x222
+    li    t3, 0x5A
+    MASKSET(t3)
+    mul   a3, a0, a1
+    add   a5, a3, s0
+    MASKALL
+    sw    a3, RES(39)(s2)
+    sw    a5, RES(40)(s2)
 
     /* ---------------- slow pass ---------------- */
     li    s9, 0
@@ -358,6 +459,94 @@ qr_jt:
     MASKALL
     CHECK(21, a3)
     CHECK(22, a4)
+    li    a0, 0x9234567B
+    li    a1, 0x6543210F
+    li    a2, 0xFEDCBA98
+    li    a4, 1
+    SLOW
+    xor   a0, a0, s1
+    add   a1, a1, s0
+    sub   a2, a2, s1
+    SLOW
+    mul   t0, a0, a1
+    mul   t3, a0, a2
+    SLOW
+    add   t1, t0, a2
+    sub   t2, a2, t0
+    SLOW
+    CHECK(23, t1)
+    CHECK(24, t2)
+    CHECK(27, t3)
+    CHECK(28, a1)
+    CHECK(29, a1)
+    andi  a7, a1, 0x7FF
+    SLOW
+    addi  a7, a7, 0x100
+    SLOW
+    mul   t3, a7, a7
+    SLOW
+    QRCP(t4, t3)
+    SLOW
+    CHECK(30, t4)
+    slli  a6, s0, 3
+    andi  a7, s0, 7
+    li    t2, 12
+    SLOW
+    addi  a6, a6, 3
+    SLOW
+    VSET(0, a6)
+    VSET(7, a7)
+    VTRACE(a3, t2)
+    SLOW
+    VGET(a5, 0)
+    SLOW
+    add   a3, a3, a5
+    SLOW
+    CHECK(31, a3)
+    mul   t0, a0, a1
+    SLOW
+    mul   t1, t0, a2
+    SLOW
+    mulh  t2, t1, t0
+    SLOW
+    mulhsu t3, t2, a0
+    SLOW
+    mulhu t4, a2, t3
+    SLOW
+    CHECK(32, t4)
+    CHECK(33, t2)
+    mulh  t0, a0, a2
+    mulhsu t2, a2, a1
+    mulhu t4, a0, a2
+    SLOW
+    add   t1, t0, a1
+    sub   t3, a0, t2
+    SLOW
+    xor   t5, t4, t1
+    SLOW
+    CHECK(34, t1)
+    CHECK(35, t3)
+    CHECK(36, t5)
+    mul   t0, a1, a1
+    addi  t1, a0, 1
+    mulhu t3, a0, a1
+    SLOW
+    xor   t2, t0, t1
+    SLOW
+    CHECK(37, t2)
+    CHECK(38, t3)
+    addi  a3, s0, 0x111
+    addi  a5, s0, 0x222
+    li    t3, 0x5A
+    SLOW
+    MASKSET(t3)
+    mul   a3, a0, a1
+    SLOW
+    add   a5, a3, s0
+    SLOW
+    MASKALL
+    CHECK(39, a3)
+    CHECK(40, a5)
 
     li    t1, 1
     MASKSET(t1)

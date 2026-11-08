@@ -3,9 +3,11 @@
 // checks, in every lane: the program's own fast-against-slow check (s11 = 0)
 // and the results that do not need a model of the ray unit or QRCP (load-use,
 // BALLOT, LMASK + MASKGET under the odd-lane mask, DIF/DELSE, the presets
-// that the lanes outside the 0x5A mask keep across QRCP). Built for both
-// cores; tracediff-core-pipe-t_pipe_stress compares their retire traces,
-// the only pipelined trace coverage of VSET/VTRACE/VGET with forwarding.
+// that the lanes outside the 0x5A mask keep across QRCP, MUL into an ALU
+// op, through a store and load address, and MUL under the partial mask 0x5A,
+// whose inactive lanes keep their old rd). Built for both cores;
+// tracediff-core-pipe-t_pipe_stress compares their retire traces, the only
+// pipelined trace coverage of VSET/VTRACE/VGET with forwarding.
 module t_pipe_stress_tb;
     parameter string IMEM_HEX = "";
     parameter string DMEM_HEX = "";
@@ -27,13 +29,15 @@ module t_pipe_stress_tb;
     endfunction
 
     initial begin
-        logic [7:0] full, odd, qm;
+        logic [7:0]  full, odd, qm, p5a;
+        logic [31:0] a0, a1, a2, prod;
         full = 8'((1 << ALANES) - 1);
         odd  = 8'hAA & full;
         qm   = 8'h5A & full;
+        p5a  = 8'h5A & full;
 
         do_reset();
-        run_until_done(20000);
+        run_until_done(40000);
         repeat (10) @(posedge clk);
 
         expect32("error LED", {31'b0, err_led}, 32'd0);
@@ -49,6 +53,17 @@ module t_pipe_stress_tb;
                 expect32($sformatf("lane %0d QRCP outside 0x5A", l), res(l, 21), 32'h5A5A_0000 | 32'(l));
                 expect32($sformatf("lane %0d QRCP use outside 0x5A", l), res(l, 22), 32'h5A5A_0000 | 32'(l));
             end
+            a0   = 32'h9234_567B ^ 32'(4 * l);
+            a1   = 32'h6543_210F + 32'(l);
+            a2   = 32'hFEDC_BA98 - 32'(4 * l);
+            prod = a0 * a1;
+            expect32($sformatf("lane %0d MUL -> add", l), res(l, 23), prod + a2);
+            expect32($sformatf("lane %0d MUL -> sw/lw address", l), res(l, 28), a1);
+            expect32($sformatf("lane %0d MUL -> lw address", l), res(l, 29), a1);
+            expect32($sformatf("lane %0d MUL, partial mask", l), res(l, 39),
+                     p5a[l] ? prod : 32'(l + 'h111));
+            expect32($sformatf("lane %0d MUL -> add, partial mask", l), res(l, 40),
+                     p5a[l] ? prod + 32'(l) : 32'(l + 'h222));
         end
         expect32("mask at the end", 32'(`KC_CORE.mask), 32'd1);
         // lane 1 is active under the partial mask 0x5A

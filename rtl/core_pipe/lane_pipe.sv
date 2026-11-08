@@ -13,14 +13,14 @@
 //        (or this lane's address for loads and stores), LUI immediate,
 //        LANEID, BALLOT / MASKGET, VGET field, or rs1 for MUL and QRCP,
 //        which run in MEM on registered operands
-//   MEM  res and the store data / multiplier operand rs2. MUL (en in MEM's
-//        first cycle, product the cycle after), QRCP (qrcp_pipe: two steps,
-//        y valid in the third cycle), the VTRACE result at the ray unit's
-//        done, and the LSU's load data (ld_cap / ld_value, held in
-//        ld_hold). fwd is MEM's result for forwarding (never a load's: the
-//        core stalls load-use instead);
-//        wdata is the value written back (the last load lane's data arrives
-//        directly in MEM's last cycle)
+//   MEM  res and the store data / multiplier operand rs2. MUL (the product
+//        of res and m_rs2, combinational, in MEM's one cycle), QRCP
+//        (qrcp_pipe: two steps, y valid in the third cycle), the VTRACE
+//        result at the ray unit's done, and the LSU's load data (ld_cap /
+//        ld_value, held in ld_hold). fwd is MEM's result for forwarding
+//        (never a load's or a MUL's: the core stalls load-use and mul-use
+//        instead); wdata is the value written back (the last load lane's
+//        data arrives directly in MEM's last cycle)
 //   WB   the register file write of the previous MEM's wdata
 module lane_pipe
     import kc_isa_pkg::*;
@@ -65,7 +65,6 @@ module lane_pipe
     // MEM
     input  logic [1:0]  mul_op,       // MEM funct3[1:0]
     input  logic        m_is_load,
-    input  logic        mul_en,       // MEM, first MUL cycle
     input  logic        m_mul,        // MEM holds a MUL
     input  logic        qr_s0,        // MEM, QRCP cycle 0 (x = res)
     input  logic        qr_s1,        // MEM, QRCP cycle 1
@@ -148,9 +147,7 @@ module lane_pipe
         if (ld_cap) ld_hold <= ld_value;
     end
 
-    mul u_mul (
-        .clk, .en(mul_en), .op(mul_op), .a(res), .b(m_rs2), .result(mul_y)
-    );
+    mul_pipe u_mul (.op(mul_op), .a(res), .b(m_rs2), .result(mul_y));
 
     if (HAS_QRCP) begin : g_qrcp
         qrcp_pipe u_qrcp (.clk, .s0(qr_s0), .s1(qr_s1), .x(res), .y(qr_y));
@@ -162,8 +159,8 @@ module lane_pipe
         /* verilator lint_on UNUSEDSIGNAL */
     end
 
-    assign fwd   = m_mul ? mul_y : m_qr ? qr_y : res;
-    assign wdata = !m_is_load ? fwd : (ld_cap ? ld_value : ld_hold);
+    assign fwd   = m_qr ? qr_y : res;
+    assign wdata = m_is_load ? (ld_cap ? ld_value : ld_hold) : m_mul ? mul_y : fwd;
 
     // ------------------------------------------------------------------
     // WB: the register file writes w_res on the edge that ends WB

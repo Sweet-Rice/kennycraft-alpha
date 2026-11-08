@@ -2,8 +2,9 @@
 // Pipelining plan and GPU Core, Pipelining notes): the same ISA, ports,
 // parameters and retired-instruction trace as the multi-cycle rtl/core/core.sv,
 // in five stages. rtl/core_pipe/lane_pipe.sv is one lane's datapath; the
-// leaf modules (alu, reg_module, mul, divstack, lsu, inst_decoder, immgen)
-// are rtl/core's, unchanged; QRCP is rtl/core_pipe/qrcp_pipe.sv.
+// leaf modules (alu, reg_module, divstack, lsu, inst_decoder, immgen) are
+// rtl/core's, unchanged; QRCP is rtl/core_pipe/qrcp_pipe.sv and the one-cycle
+// multiplier rtl/core_pipe/mul_pipe.sv.
 //
 //   IF   imem_addr = pc_f, a register (a redirect writes it: flush 2)
 //   ID   the BRAM output (or d_hold, latched in the first cycle ID waits,
@@ -14,19 +15,21 @@
 //        lane, uniform checks, divergence stack, mask, lane control, ray
 //        unit configuration and start, misaligned check
 //   MEM  the only stage that takes more than one cycle; EX, ID and IF wait
-//        for it. MUL 2 cycles, QRCP 3 (two steps, result), VTRACE rd
+//        for it. QRCP 3 cycles (two steps, result), VTRACE rd
 //        (rd != x0) until done plus one, loads and stores with an active
 //        lane: one cycle per LSU bus access (one per group of coalesced
-//        lanes) plus one. Retirement happens here
+//        lanes) plus one; MUL and everything else 1. Retirement happens here
 //   WB   every lane writes rd
 //
 // Hazards. Forwarding MEM -> EX and WB -> EX for every lane, gated by that
-// lane's write enable, so an inactive lane sees its older value. A load in
-// EX whose rd ID reads holds ID for one cycle (load-use). Branches, JAL and
-// JALR resolve in EX (predict not taken) and flush ID and IF; so do LMASK,
-// MASKSET, MASKALL, DIF, DELSE and DENDIF, so the mask and divergence stack
-// that EX reads are always those of every older instruction (Tai page, GPU
-// Core, Pipelining notes: read in ID, written in EX).
+// lane's write enable, so an inactive lane sees its older value. A load or
+// MUL in EX whose rd ID reads holds ID for one cycle (load-use, mul-use):
+// neither result is forwarded from MEM, so the reader takes it from WB.
+// Branches, JAL and JALR resolve in EX (predict not taken) and flush ID and
+// IF; so do LMASK, MASKSET, MASKALL, DIF, DELSE and DENDIF, so the mask and
+// divergence stack that EX reads are always those of every older
+// instruction (Tai page, GPU Core, Pipelining notes: read in ID, written in
+// EX).
 //
 // Asynchronous VTRACE (VTRACE x0) starts the walk in EX like VTRACE rd and
 // leaves MEM in one cycle. vt_pend is high from vt_start until vt_done; while
@@ -109,7 +112,7 @@ module core_pipe
     // Pipeline control
     // ------------------------------------------------------------------
     logic adv;        // MEM takes EX's instruction: EX, ID and IF move on
-    logic lu;         // load-use: ID waits, EX gets a bubble
+    logic lu;         // load-use / mul-use: ID waits, EX gets a bubble
     logic flush;      // EX redirects or halts: drop ID and the fetch in flight
     logic stop;       // halted: nothing more is fetched
     logic m_valid, m_done, m_ready;
@@ -187,7 +190,7 @@ module core_pipe
     assign d_rs1 = instr_rs1(d_inst);
     assign d_rs2 = instr_rs2(d_inst);
     assign d_opc = instr_opcode(d_inst);
-    // Operands an instruction reads, for the load-use stall only
+    // Operands an instruction reads, for the load-use / mul-use stall only
     assign d_uses1 = (d_opc != OPC_LUI) && (d_opc != OPC_AUIPC) && (d_opc != OPC_JAL);
     assign d_uses2 = (d_opc == OPC_BRANCH) || (d_opc == OPC_STORE) || (d_opc == OPC_OP);
 
@@ -236,7 +239,9 @@ module core_pipe
         end
     end
 
-    assign lu = d_valid && e_valid && e_is_load && e_r_we &&
+    // The product is computed in MEM's cycle and written to w_res, too late
+    // for the MEM -> EX forward, so a MUL's reader waits like a load's.
+    assign lu = d_valid && e_valid && (e_is_load || e_is_mul) && e_r_we &&
                 ((d_uses1 && (d_rs1 == e_rd)) || (d_uses2 && (d_rs2 == e_rd)));
 
     // ------------------------------------------------------------------
@@ -276,7 +281,7 @@ module core_pipe
     logic             e_vget, e_stash, e_vtrace, e_nowr;
     logic             m_is_load, m_is_store, m_mul, m_qr, m_vt;
     logic [2:0]       m_funct3, m_cnt;
-    logic             mul_en, qr_s0, qr_s1, vt_wr;
+    logic             qr_s0, qr_s1, vt_wr;
 
     // Forwarding selects, registered: fm* = m_wr && (m_rd == e_rs*) and
     // fw* = (w_rd == e_rs*) one cycle early. m_rd, m_wr's terms and e_rs*
@@ -309,7 +314,7 @@ module core_pipe
             .res_imm(e_res_imm), .is_lane(e_is_lane), .lane_y, .ray_en(e_vget),
             .ray_y(ray_y[i]), .stash(e_stash),
             .rs1(l_rs1[i]), .alu_y(l_alu[i]), .cmp(l_cmp[i]),
-            .mul_op(m_funct3[1:0]), .m_is_load, .mul_en, .m_mul, .qr_s0, .qr_s1, .m_qr,
+            .mul_op(m_funct3[1:0]), .m_is_load, .m_mul, .qr_s0, .qr_s1, .m_qr,
             .vt_wr, .vt_y(vt_y[i]), .ld_cap(l_cap[i]), .ld_value(l_ldv[i]), .m_we(m_we[i]),
             .res(l_res[i]), .m_rs2(l_mrs2[i]), .wdata(l_wdata[i]),
             .w_we(w_we[i]), .w_rd
@@ -551,9 +556,7 @@ module core_pipe
         end
     end
 
-    // MUL: the product of MEM's registered operands, ready the cycle after.
     // QRCP: two steps (qrcp_pipe), then the result in the third cycle.
-    assign mul_en = m_valid && m_mul && (m_cnt == 3'd0);
     assign qr_s0  = m_valid && m_qr && (m_cnt == 3'd0);
     assign qr_s1  = m_valid && m_qr && (m_cnt == 3'd1);
 
@@ -564,7 +567,6 @@ module core_pipe
     always_comb begin
         if (m_halt)          m_done = 1'b1;
         else if (m_mem)      m_done = lsu_idle && win_fin;
-        else if (m_mul)      m_done = (m_cnt == 3'd1);
         else if (m_qr)       m_done = (m_cnt == 3'd2);
         else if (m_vt)       m_done = m_vt_tail;
         else                 m_done = 1'b1;
