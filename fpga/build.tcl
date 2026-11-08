@@ -79,12 +79,13 @@ phys_opt_design
 route_design
 
 report_timing_summary -report_unconstrained -check_timing_verbose -file $out/timing.rpt
-# The 200 worst setup endpoints of the core clock, one path each, for
-# critical-path work (paths.rpt) and a one-line-per-path summary.
+# The worst setup endpoints of the core clock, one path each, for
+# critical-path work: 3000 in a one-line-per-path summary, the worst 300 in
+# full (paths.rpt).
 set kc_core_clk [get_clocks -quiet clk0_raw]
 if {[llength $kc_core_clk]} {
-    report_timing -group $kc_core_clk -max_paths 200 -nworst 1 -sort_by slack -path_type summary -file $out/paths_summary.rpt
-    report_timing -group $kc_core_clk -max_paths 30 -nworst 1 -sort_by slack -file $out/paths.rpt
+    report_timing -group $kc_core_clk -max_paths 3000 -nworst 1 -sort_by slack -path_type summary -file $out/paths_summary.rpt
+    report_timing -group $kc_core_clk -max_paths 300 -nworst 1 -sort_by slack -file $out/paths.rpt
 }
 report_utilization -file $out/utilization.rpt
 report_utilization -hierarchical -hierarchical_depth 4 -file $out/utilization_hier.rpt
