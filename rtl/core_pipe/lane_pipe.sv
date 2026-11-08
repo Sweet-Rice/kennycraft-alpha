@@ -14,7 +14,7 @@
 //        LANEID, BALLOT / MASKGET, VGET field, or rs1 for MUL and QRCP,
 //        which run in MEM on registered operands
 //   MEM  res and the store data / multiplier operand rs2. MUL (en in MEM's
-//        first cycle, product the cycle after), QRCP (load, then four
+//        first cycle, product the cycle after), QRCP (load, then three
 //        steps), the VTRACE result at the ray unit's done, and lane-serial
 //        load data (ld_cap / ld_value, held in ld_hold). fwd is MEM's result
 //        for forwarding (never a load's: the core stalls load-use instead);

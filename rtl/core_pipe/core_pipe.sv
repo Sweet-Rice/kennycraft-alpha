@@ -14,7 +14,7 @@
 //        lane, uniform checks, divergence stack, mask, lane control, ray
 //        unit configuration and start, misaligned check
 //   MEM  the only stage that takes more than one cycle; EX, ID and IF wait
-//        for it. MUL 2 cycles, QRCP 6 (load, four steps, result), VTRACE
+//        for it. MUL 2 cycles, QRCP 5 (load, three steps, result), VTRACE
 //        until done plus one, loads and stores with an active lane: one
 //        cycle per lane-serial bus access plus one. Retirement happens here
 //   WB   every lane writes rd
@@ -514,17 +514,17 @@ module core_pipe
     end
 
     // MUL: the product of MEM's registered operands, ready the cycle after.
-    // QRCP: load, four steps, then the result in the sixth cycle.
+    // QRCP: load, three steps, then the result in the fifth cycle.
     assign mul_en  = m_valid && m_mul && (m_cnt == 3'd0);
     assign qr_load = m_valid && m_qr && (m_cnt == 3'd0);
-    assign qr_en   = m_valid && m_qr && (m_cnt != 3'd0) && (m_cnt <= 3'd4);
+    assign qr_en   = m_valid && m_qr && (m_cnt != 3'd0) && (m_cnt <= 3'd3);
     assign qr_ph   = m_cnt - 3'd1;
 
     always_comb begin
         if (m_halt)          m_done = 1'b1;
         else if (m_mem)      m_done = m_tail;
         else if (m_mul)      m_done = (m_cnt == 3'd1);
-        else if (m_qr)       m_done = (m_cnt == 3'd5);
+        else if (m_qr)       m_done = (m_cnt == 3'd4);
         else if (m_vt)       m_done = m_vt_tail;
         else                 m_done = 1'b1;
     end
