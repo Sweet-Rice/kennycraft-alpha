@@ -5,7 +5,8 @@
 #               A sources.tcl reads every RTL, IP and constraint file and sets
 #               the variable `top` to the top module name. It may also set
 #               `generics` (NAME=VALUE list for synth_design -generic) and
-#               `kc_mmi 1` (the KennyCraft top: write kc.mmi). Targets "top"
+#               `kc_mmi 1` (the KennyCraft top: write kc.mmi) and
+#               `kc_timing_opt 1` (timing-driven directives, slower). Targets "top"
 #               (Stage 1, LANES = 8), "top_s0" (Stage 0, LANES = 1),
 #               "top_s2" (Stage 2: Stage 1 plus the VTRACE ray unit and
 #               QRCP), "top_s2p" (top_s2 on the pipelined core,
@@ -58,10 +59,15 @@ if {![file exists $sources]} { error "No sources script for target '$target': $s
 set top ""
 set generics {}
 set kc_mmi 0
+# kc_timing_opt 1 (set by a sources.tcl, e.g. top_s2p100): timing-driven
+# directives for every step plus a post-route phys_opt pass. Slower builds.
+set kc_timing_opt 0
 source $sources
 if {$top eq ""} { error "$sources did not set top" }
 
-synth_design -top $top -part $part {*}[concat {*}[lmap g $generics {list -generic $g}]]
+set kc_synth_opts {}
+if {$kc_timing_opt} { set kc_synth_opts {-directive PerformanceOptimized -retiming} }
+synth_design -top $top -part $part {*}$kc_synth_opts {*}[concat {*}[lmap g $generics {list -generic $g}]]
 if {$kc_mmi} {
     source fpga/kc_mmi.tcl
     set kc_mems {
@@ -75,10 +81,18 @@ if {[info exists ::env(FPGA_FAIL_TIMING)] && $::env(FPGA_FAIL_TIMING)} {
     # Acceptance-only: every target's 100 MHz board clock port is `clk` (E3).
     create_clock -name sys_clk -period 0.5 [get_ports clk]
 }
-opt_design
-place_design
-phys_opt_design
-route_design
+if {$kc_timing_opt} {
+    opt_design -directive Explore
+    place_design -directive ExtraTimingOpt
+    phys_opt_design -directive AggressiveExplore
+    route_design -directive AggressiveExplore
+    phys_opt_design -directive AggressiveExplore
+} else {
+    opt_design
+    place_design
+    phys_opt_design
+    route_design
+}
 
 report_timing_summary -report_unconstrained -check_timing_verbose -file $out/timing.rpt
 # The worst setup endpoints of the core clock, one path each, for
