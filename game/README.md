@@ -269,7 +269,22 @@ On the pipelined core, 0x1000_6000–0x1000_7FFF is the dmem window (8 banks of 
 
 Everything is ray traced: one ray per pixel through the voxel grid (`render.c`, `trace.c`). The Stage 2 build `kc_chip8_vtrace` (built by `tb/top/tb.mk` through this Makefile's `CHIP_ELF` macro with `-DKC_LANES=8 -DKC_VTRACE=1 -DKC_QRCP=1`) walks on the VTRACE unit; the other builds run `vtrace_ref`. Each block face is one flat color (vertex colors), with face shading and fog.
 
-### Memory: 192 KB for rendering and real-time updates (checked at compile time)
+### Look
+
+All of it lives in the palette and in the fog thresholds, so it costs no cycles per pixel:
+
+- **Cool shadows:** each face shade (top, x sides, z sides, bottom) scales red and green more
+  than blue (`SHADE` in `tools/gen_assets.py`), so shaded faces read as sky light instead of
+  flat grey; tops stay true color.
+- **Fog to the horizon:** three fog levels mix 15%, 45% and 100% of the horizon color
+  (`FOG_MIX`), starting at 45%, 65% and 85% of the view distance (`fog_d` in `src/kc_main.c`).
+  The far edge of the world fades into the sky instead of ending in a wall.
+- **Dithered fog bands:** blocks are 4x2 at even coordinates, so each lane's pixel has a fixed
+  checkerboard parity. Odd lanes reach each fog level half a band sooner (`dth` in
+  `src/render.c`), which turns each hard fog ring into a wide checkerboard strip.
+
+### Memory: 192 KB for rendering
+ and real-time updates (checked at compile time)
 
 `src/kc_budget.h` checks its `BUDGET_TOTAL` formula against 192 KiB, including a
 second assertion with two 160x120 framebuffers added. This is not complete
