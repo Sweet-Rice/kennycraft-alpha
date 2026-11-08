@@ -9,22 +9,27 @@
 //
 // One step (wiki "One step", ties as written there: x only on a strict
 // minimum, then y if tMaxY < tMaxZ, else z; tMax compares are signed):
-//   step   (an edge, not a state) move the cell one block on the chosen
-//          axis, tMax += tDelta (saturating at 0x7FFF_FFFF), record axis,
-//          sign, t = old tMax and the step count. world_addr follows the
-//          cell, so it is held until the next step.
+//   step   (an edge) move the cell one block on the chosen axis, tMax +=
+//          tDelta (saturating at 0x7FFF_FFFF), record axis, sign, t = old
+//          tMax and the step count. world_addr follows the cell, so it is
+//          held until the next step.
 //   WAIT   WORLD_LATENCY cycles with world_addr held. world_phase is the
 //          index of the WAIT cycle (0, 1): world_mem reads lanes 4n, 4n + 1
 //          in phase 0 and 4n + 2, 4n + 3 in phase 1.
-//   CHECK  world_data is valid: outside 0..63 / 0..31 / 0..63 finishes the
-//          lane with hit = 0, a non-air block finishes it with hit = 1 and
-//          the block type. The walk ends when every lane is finished or
-//          max_steps steps have been taken; otherwise the lanes still live
-//          take their next step on the CHECK edge itself.
-// That is WORLD_LATENCY + 1 = 3 cycles per step with two world copies
-// (D17), the world memory busy in both WAIT cycles. The first step happens
-// on the start edge, so the first cycle with busy high is the first
-// world_addr cycle.
+//   check  world_data is valid the cycle after the last WAIT: outside
+//          0..63 / 0..31 / 0..63 finishes the lane with hit = 0, a non-air
+//          block finishes it with hit = 1 and the block type.
+// The steps are pipelined: at the end of a step's last WAIT the live lanes
+// latch their cell and step record (k_*) and take the next step at once, so
+// the check of step k runs in the first WAIT cycle of step k + 1, while the
+// world memory reads cell k + 1. A lane that finishes there reports step k
+// (the k_* record and cell); its step k + 1 is dropped. That is
+// WORLD_LATENCY = 2 cycles per step with two world copies (D17), the world
+// memory busy in every cycle of the walk. After the step that reaches
+// max_steps no step is taken and S_CHECK checks it alone. The walk ends at
+// the first check that leaves no lane walking, or at that last check: a walk
+// of N steps (the most any lane takes) has its last check in cycle
+// N * WORLD_LATENCY + 1 after start and done in the next.
 //
 // The start cell is never tested. start with max_steps = 0 or an empty
 // lane_mask raises done the next cycle and changes nothing. Lanes outside
@@ -65,15 +70,23 @@ module vtrace #(parameter int LANES = 8, parameter int WORLD_LATENCY = 2) (
   logic [WL_W-1:0]  wait_cnt;
   logic [7:0]       step_cnt;   // steps taken so far in this walk
   logic [7:0]       cap;        // max_steps latched at start
+  logic             pend;       // the previous step's cell is checked this walk
   logic [LANES-1:0] live;       // lane still walking
-  logic [LANES-1:0] live_next;  // live after this CHECK
+  logic [LANES-1:0] live_next;  // live after the check of the pending step
 
-  wire launch   = (state == S_IDLE) && start && (max_steps != 8'd0) && (lane_mask != '0);
-  wire do_check = (state == S_CHECK);
-  wire finish   = do_check && ((live_next == '0) || (step_cnt == cap));
-  // lanes that take a step on this edge, and the step number they record:
-  // the start edge, or a CHECK that does not finish the walk
-  wire [LANES-1:0] stepping = launch ? lane_mask : (do_check && !finish) ? live_next : '0;
+  // The check of the pending step happens in the first WAIT cycle of the next
+  // (speculative) step, or in S_CHECK after the last step.
+  wire launch    = (state == S_IDLE) && start && (max_steps != 8'd0) && (lane_mask != '0);
+  wire checking  = ((state == S_WAIT) && pend && (wait_cnt == '0)) || (state == S_CHECK);
+  wire [LANES-1:0] live_now = checking ? live_next : live;
+  wire last_wait = (state == S_WAIT) && (wait_cnt == WL_W'(WORLD_LATENCY - 1));
+  // every lane finished at this check (a step still in flight is dropped)
+  wire finish    = checking && ((live_next == '0) || (state == S_CHECK));
+  // end of a step's last WAIT: the live lanes take the next step at once,
+  // before their current cell is checked, unless the cap is reached
+  wire spec      = last_wait && !finish && (step_cnt != cap);
+  wire [LANES-1:0] stepping = launch ? lane_mask : spec ? live_now : '0;
+  wire [LANES-1:0] latching = last_wait ? live_now : '0;   // cell + record -> checked
   wire [7:0]       step_num = launch ? 8'd1 : step_cnt + 8'd1;
 
   assign busy        = (state != S_IDLE);
@@ -84,8 +97,10 @@ module vtrace #(parameter int LANES = 8, parameter int WORLD_LATENCY = 2) (
       state <= S_IDLE;
       done  <= 1'b0;
       live  <= '0;
+      pend  <= 1'b0;
     end else begin
       done <= 1'b0;
+      if (checking) live <= live_next;
       unique case (state)
         S_IDLE: begin
           if (start) begin
@@ -94,6 +109,7 @@ module vtrace #(parameter int LANES = 8, parameter int WORLD_LATENCY = 2) (
               cap      <= max_steps;
               step_cnt <= 8'd1;
               wait_cnt <= '0;
+              pend     <= 1'b0;
               state    <= S_WAIT;
             end else begin
               done <= 1'b1;
@@ -101,19 +117,21 @@ module vtrace #(parameter int LANES = 8, parameter int WORLD_LATENCY = 2) (
           end
         end
         S_WAIT: begin
-          if (wait_cnt == WL_W'(WORLD_LATENCY - 1)) state <= S_CHECK;
-          else wait_cnt <= wait_cnt + 1'b1;
-        end
-        S_CHECK: begin
-          live <= live_next;
           if (finish) begin
             done  <= 1'b1;
             state <= S_IDLE;
-          end else begin
-            step_cnt <= step_num;     // the live lanes step on this edge
+          end else if (last_wait) begin
+            pend     <= 1'b1;
             wait_cnt <= '0;
-            state    <= S_WAIT;
+            if (spec) step_cnt <= step_num;   // the live lanes step on this edge
+            else      state    <= S_CHECK;    // cap reached: check the last step
+          end else begin
+            wait_cnt <= wait_cnt + 1'b1;
           end
+        end
+        S_CHECK: begin
+          done  <= 1'b1;
+          state <= S_IDLE;
         end
         default: state <= S_IDLE;
       endcase
@@ -125,13 +143,26 @@ module vtrace #(parameter int LANES = 8, parameter int WORLD_LATENCY = 2) (
     logic signed [31:0] tmx, tmy, tmz;     // tMax, Q16.16
     logic signed [31:0] tdx, tdy, tdz;     // tDelta, Q16.16
     logic [2:0]         neg;               // step signs, 1 = negative
+    // the step that produced the current cell
+    logic               s_sign;
+    logic [1:0]         s_axis;
+    logic [7:0]         s_steps;
+    logic [31:0]        s_t;
+    // the step whose cell is being read / checked
+    logic signed [6:0]  kx, ky, kz;
+    logic               k_sign;
+    logic [1:0]         k_axis;
+    logic [7:0]         k_steps;
+    logic [31:0]        k_t;
+    // results
     logic               r_hit, r_sign;
     logic [1:0]         r_axis;
     logic [3:0]         r_type;
     logic [7:0]         r_steps;
     logic [31:0]        r_t;
+    logic [16:0]        r_cell;
 
-    // ---- STEP: pick the axis with the smallest tMax ----
+    // ---- step: pick the axis with the smallest tMax ----
     wire                sel_x = (tmx < tmy) && (tmx < tmz);
     wire                sel_y = !sel_x && (tmy < tmz);
     wire                sel_z = !sel_x && !sel_y;
@@ -144,8 +175,8 @@ module vtrace #(parameter int LANES = 8, parameter int WORLD_LATENCY = 2) (
     wire                sgn   = neg[axis];
     wire signed [6:0]   delta = sgn ? -7'sd1 : 7'sd1;
 
-    // ---- CHECK ----
-    wire oob  = cx[6] | cy[6] | cy[5] | cz[6];
+    // ---- check of the latched step ----
+    wire oob   = kx[6] | ky[6] | ky[5] | kz[6];
     wire solid = (world_data[l] != 4'd0);
     assign live_next[l] = live[l] && !oob && !solid;
 
@@ -166,23 +197,32 @@ module vtrace #(parameter int LANES = 8, parameter int WORLD_LATENCY = 2) (
           3'd7: neg <= cfg_data[l][2:0];
         endcase
       end
+      if (latching[l]) begin               // before the step below overwrites them
+        kx <= cx; ky <= cy; kz <= cz;
+        k_axis <= s_axis; k_sign <= s_sign; k_t <= s_t; k_steps <= s_steps;
+      end
       if (stepping[l]) begin
         if (sel_x) begin cx <= cx + delta; tmx <= tm_n; end
         if (sel_y) begin cy <= cy + delta; tmy <= tm_n; end
         if (sel_z) begin cz <= cz + delta; tmz <= tm_n; end
-        r_axis  <= axis;
-        r_sign  <= sgn;
-        r_t     <= tm;
-        r_steps <= step_num;
+        s_axis  <= axis;
+        s_sign  <= sgn;
+        s_t     <= tm;
+        s_steps <= step_num;
       end
-      if (do_check && live[l]) begin
-        r_hit  <= !oob && solid;
-        r_type <= oob ? 4'd0 : world_data[l];
+      if (checking && live[l]) begin
+        r_hit   <= !oob && solid;
+        r_type  <= oob ? 4'd0 : world_data[l];
+        r_axis  <= k_axis;
+        r_sign  <= k_sign;
+        r_t     <= k_t;
+        r_steps <= k_steps;
+        r_cell  <= {kz[5:0], ky[4:0], kx[5:0]};
       end
     end
 
     assign result[l]     = {r_steps, r_type, r_sign, r_axis, r_hit};
-    assign hit_cell[l]   = {cz[5:0], cy[4:0], cx[5:0]};
+    assign hit_cell[l]   = r_cell;
     assign t_hit[l]      = r_t;
     assign world_addr[l] = {cy[4:0], cz[5:0], cx[5:0]};
 

@@ -5,7 +5,7 @@
 // cfg_data that must be ignored), optionally probe start with max_steps = 0
 // and with an empty lane_mask (done the next cycle, busy never high, no output
 // changes), then start the walk and check
-//   - busy stays high and done pulses exactly once, N * (WORLD_LATENCY + 1) + 1
+//   - busy stays high and done pulses exactly once, N * WORLD_LATENCY + 2
 //     cycles after start, N = the most steps any active lane takes;
 //   - active lanes on a hit: result, hit_cell and t_hit equal the golden
 //     value bit for bit; on a miss only hit and steps (result[0] and
@@ -173,9 +173,9 @@ module vtrace_tb;
       cyc++;
       if (cyc > 300 * 4) $fatal(1, "%s group %0d: no done", set, g);
     end
-    if (cyc != nmax * (WORLD_LATENCY + 1) + 1) begin
-      $display("ERROR %s group %0d: done after %0d cycles, want %0d steps x %0d + 1", set, g, cyc, nmax,
-               WORLD_LATENCY + 1);
+    if (cyc != nmax * WORLD_LATENCY + 2) begin
+      $display("ERROR %s group %0d: done after %0d cycles, want %0d steps x %0d + 2", set, g, cyc, nmax,
+               WORLD_LATENCY);
       errors++;
     end
     cycles_total += cyc;
