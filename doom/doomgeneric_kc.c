@@ -21,7 +21,6 @@
 #include "doomgeneric.h"
 #include "doomkeys.h"
 #include "i_video.h"
-#include "r_main.h"
 #include "z_zone.h"
 
 #if KC_PROF
@@ -104,14 +103,6 @@ void __wrap_I_InitGraphics(void) {
     __real_I_InitGraphics();
     Z_Free(I_VideoBuffer);
     I_VideoBuffer = SCRATCH;
-}
-
-void __real_R_ExecuteSetViewSize(void);
-void __wrap_R_ExecuteSetViewSize(void) {
-    __real_R_ExecuteSetViewSize();
-#if KC_PROF
-    kc_prof_hook_draw();
-#endif
 }
 
 void DG_DrawFrame(void) {

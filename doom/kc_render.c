@@ -13,6 +13,11 @@
 // KC_SCREENBLOCKS (doom/doom.mk) the way the menu does: detailLevel,
 // screenblocks and the menu's screenSize slider, then R_SetViewSize. The
 // defaults (high, 10) are Doom's own, so they change nothing.
+//
+// 8-lane drawing: --wrap=R_ExecuteSetViewSize points colfunc/basecolfunc and
+// spanfunc at kc_R_DrawColumn and kc_R_DrawSpan (doom/kc_draw.c) after every
+// view size change in high detail (low detail keeps Doom's functions, as do
+// the fuzz and translated columns), then hands them to the KC_PROF shims.
 #include <stdint.h>
 #include <string.h>
 
@@ -22,7 +27,11 @@
 #include "r_local.h"
 #include "w_wad.h"
 
+#include "kc_draw.h"
 #include "kc_mem.h"
+#if KC_PROF
+#include "kc_prof.h"
+#endif
 
 // r_main.c and m_menu.c, not in their headers
 void R_InitLightTables(void);
@@ -46,3 +55,15 @@ void __wrap_R_Init(void) {
     R_SetViewSize(screenblocks, detailLevel);
 }
 
+
+void __real_R_ExecuteSetViewSize(void);
+void __wrap_R_ExecuteSetViewSize(void) {
+    __real_R_ExecuteSetViewSize();
+    if (!detailshift) {
+        colfunc = basecolfunc = kc_R_DrawColumn;
+        spanfunc = kc_R_DrawSpan;
+    }
+#if KC_PROF
+    kc_prof_hook_draw();
+#endif
+}

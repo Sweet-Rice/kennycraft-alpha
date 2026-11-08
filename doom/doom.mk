@@ -52,7 +52,7 @@ DOOM_ENGINE := dummy am_map doomdef doomstat dstrings d_event d_items d_iwad d_l
     r_plane r_segs r_sky r_things sha1 statdump st_lib st_stuff tables v_video \
     wi_stuff w_checksum w_file w_main w_wad z_zone w_file_stdc i_input i_video \
     doomgeneric
-DOOM_PLAT   := doomgeneric_kc kc_render kc_nosound syscalls $(if $(filter 1,$(KC_PROF)),kc_prof)
+DOOM_PLAT   := doomgeneric_kc kc_render kc_draw kc_draw8 kc_nosound syscalls $(if $(filter 1,$(KC_PROF)),kc_prof)
 
 DOOM_ARCH   := -march=rv32i_zmmul -mabi=ilp32
 DOOM_CFLAGS := $(DOOM_ARCH) -O2 -mstrict-align -ffunction-sections -fdata-sections \
@@ -101,6 +101,9 @@ $(DOOM_OBJ)/doomgeneric_kc.o: doom/doomgeneric_kc.c $(DOOM_OBJ)/args | $(DOOM_OB
 
 $(DOOM_OBJ)/%.o: doom/%.c $(DOOM_OBJ)/args | $(DOOM_OBJ)
 	$(DOOM_CC) $(DOOM_CFLAGS) -Wall -Wextra $(DOOM_OPTS) -MMD -c $< -o $@
+
+$(DOOM_OBJ)/%.o: doom/%.S | $(DOOM_OBJ)
+	$(DOOM_CC) $(DOOM_ARCH) -c $< -o $@
 
 -include $(wildcard $(DOOM_OBJ)/*.d)
 

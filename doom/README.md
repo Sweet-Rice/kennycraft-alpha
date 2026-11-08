@@ -66,6 +66,13 @@ lookup is a BRAM read. The table does not fit in SCRATCH: the screen leaves only
 (0x7000_FA00..FFFF). The same wrap then applies `KC_DETAIL` and `KC_SCREENBLOCKS` as the menu would (detailLevel,
 screenblocks, the menu's screenSize, then R_SetViewSize).
 
+In high detail, `--wrap=R_ExecuteSetViewSize` points `colfunc`/`basecolfunc` and `spanfunc` at `kc_R_DrawColumn` and
+`kc_R_DrawSpan` (`doom/kc_draw.c`), which draw 8 pixels at a time on the 8 lanes (`doom/kc_draw8.S`): lane 0 stores the
+arguments to dmem 0x1000_5F00, MASKALL, and lane n draws pixels n, n + 8, ... of the column (rows) or span (x), with
+LMASK for the last group. The texture and colormap reads go through the D-cache and dmem one lane at a time; the
+screen stores go to SCRATCH, where the LSU coalesces lanes on one word. Low detail, fuzz and translated columns stay
+scalar.
+
 Sound and music are compiled out: `doom/kc_nosound.c` replaces `s_sound.c`/`i_sound.c` with no-ops, so no sound or
 music lump is ever loaded, and `sounds.c`, `memio.c`, `i_cdmus.c`, `mus2mid.c`, `gusconf.c` and every backend are not
 built. Files other than the WAD (config, savegames) fail with ENOENT, which Doom tolerates.

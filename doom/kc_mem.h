@@ -7,5 +7,6 @@
 // same word share it)
 #define KC_DMEM_COLORMAPS       0x10000000u   // COLORMAP lump, 34 x 256 bytes
 #define KC_DMEM_COLORMAPS_SIZE  0x2200
+#define KC_DMEM_DRAW            0x10005F00u   // 8-lane kernel arguments (kc_draw8.S)
 
 #endif
