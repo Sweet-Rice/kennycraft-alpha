@@ -89,14 +89,14 @@ Environment variables for `kc_host` (`host/hal_host.c`): `KC_DDR_FILL=random|zer
 |---|---|
 | `Makefile` | Asset generation, laptop build and checks, chip ELFs |
 | `src/kc_hal.h` | The only platform switch. Chip: memory map + MMIO from Interfaces v1.0, camera block and `kc_rparams` layout. Host: `host/hal_host.c` |
-| `src/blocks.h` | Block types (air, grass, dirt, stone, cobble, log, leaves, planks, sand, brick, bedrock, 5 spares), world size, build height, seed |
+| `src/blocks.h` | Block types (air, grass, dirt, stone, cobble, log, leaves, planks, sand, brick, bedrock, netherrack, lava, glowstone, obsidian, portal: all 16 4-bit codes), world size, build height, seed, the Nether boundary and the demo village layout |
 | `src/fixed.[ch]` | Q16.16, `qrcp` (1/x: computed seed + Newton, branch-free, no table by default), `qsin`, `sel()` |
 | `src/trace.[ch]` | `ray_setup` + `kc_trace` with the exact VTRACE contract. `vtrace_ref` = C reference for one ray; `KC_VTRACE=1` maps `kc_trace` onto the ray unit |
 | `src/render.[ch]` | Ray-tracing kernel. 4x2 block per lane pass (D15), blocks in rows; frame state and the ray in registers, one LBU + one SB per pixel. Each VTRACE walk overlaps the next block's ray setup (asynchronous VTRACE), and blocks under the hotbar are not traced. Pixel byte per spec |
 | `src/entity.[ch]` | Villager (trader, contractor), chicken and zombie box models (flat colors) that walk to a target; drawn by the ray tracer |
 | `src/kc_libc.c` | memcpy/memset for the freestanding chip build |
 | `src/kc_lanes.h` | LANEID/LMASK/BALLOT/MASKGET/MASKSET/MASKALL: software for 1 lane, `.insn` for 8; `qrcp_hw` (QRCP `.insn`) on 8 lanes only |
-| `src/terrain.[ch]` | Deterministic terrain + trees from absolute coordinates; generates one chunk into its window slot |
+| `src/terrain.[ch]` | Deterministic terrain + trees from absolute coordinates, Nether terrain east of x = 3072 and the `KC_DEMO=1` village; generates one chunk into its window slot |
 | `src/chunks.[ch]` | Issue #2 memory API: world_update/get/set, chunk_load/store tickets, slot_valid, window_origin; tags inside the DDR3 chunks replace the 8 KB generated bitmap (`KC_GEN_BITMAP=1` brings it back) |
 | `src/arena.[ch]` | Per-frame 8 KB arena (`sw/arena.[ch]` with an overridable `ARENA_SIZE`) |
 | `src/game.[ch]` | Keys, physics, picking, place/break, camera, crosshair, selection box + hotbar |
