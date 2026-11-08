@@ -58,6 +58,12 @@ module lsu
     input  logic [31:0]       rs2   [LANES],
     output logic              done,
 
+    // Lanes the bus never serves (core_pipe: the dmem window lanes, which
+    // rtl/core_pipe/win_lsu.sv serves; '0 on the multi-cycle core), from
+    // the same address registers. idle: no lane left for the bus.
+    input  logic [LANES-1:0]  skip,
+    output logic              idle,
+
     // Misaligned check for the EX cycle, per lane, on the address computed
     // there (Tai_2 section 1: LW/SW 4-aligned, LH/LHU/SH 2-aligned).
     input  logic [1:0]        ex_addr_lo [LANES],
@@ -134,21 +140,24 @@ module lsu
     // ------------------------------------------------------------------
     // Sequencer
     // ------------------------------------------------------------------
-    logic [LANES-1:0] pending, cur_bit, group;
+    logic [LANES-1:0] pending, pend, cur_bit, group;
     logic [LW-1:0]    cur;
     logic             merge, accept;
+
+    assign pend = pending & ~skip;
+    assign idle = (pend == '0);
 
     always_comb begin
         cur = '0;
         for (int i = LANES - 1; i >= 0; i--)
-            if (pending[i]) cur = LW'(i);
+            if (pend[i]) cur = LW'(i);
     end
 
     assign cur_bit = LANES'(1) << cur;
-    assign merge   = (pending & mmio) == '0;
-    assign group   = merge ? (pending & eq[cur]) : cur_bit;
+    assign merge   = (pend & mmio) == '0;
+    assign group   = merge ? (pend & eq[cur]) : cur_bit;
     assign accept  = bus_req && bus_ready;
-    assign done    = accept && ((pending & ~group) == '0);
+    assign done    = accept && ((pend & ~group) == '0);
 
     always_ff @(posedge clk) begin
         if (rst)          pending <= '0;
@@ -159,7 +168,7 @@ module lsu
     // ------------------------------------------------------------------
     // Bus side: cur's address, the group's merged byte enables and data
     // ------------------------------------------------------------------
-    assign bus_req  = go;
+    assign bus_req  = go && !idle;
     assign bus_we   = is_store;
     assign bus_addr = addr[cur];
 

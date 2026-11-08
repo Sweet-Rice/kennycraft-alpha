@@ -437,11 +437,15 @@ module core
     assign vt_block = vt_pend && ((bus_addr[31:28] == REG_WORLD) ||
                                   ((bus_addr[31:28] == REG_MMIO) && ex_is_store));
 
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic lsu_idle;   // the multi-cycle core serves every lane on the bus
+    /* verilator lint_on UNUSEDSIGNAL */
+
     lsu #(.LANES(LANES)) u_lsu (
         .clk, .rst,
         .start((state == S_EX) && ex_mem && !ex_halt), .active(mask),
         .go((state == S_MEM) && !vt_block), .is_store(ex_is_store), .funct3(ex_funct3),
-        .addr(l_res), .rs2(l_rs2), .done(lsu_done),
+        .addr(l_res), .rs2(l_rs2), .done(lsu_done), .skip('0), .idle(lsu_idle),
         .ex_addr_lo(l_addr_lo), .misaligned(mis),
         .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,
         .ld_cap, .ld_value

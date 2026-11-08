@@ -90,7 +90,13 @@ module core_pipe
     input  logic                 vt_done,
     input  logic [15:0]          vt_result   [LANES],
     input  logic [16:0]          vt_hit_cell [LANES],
-    input  logic [31:0]          vt_t_hit    [LANES]
+    input  logic [31:0]          vt_t_hit    [LANES],
+
+    // dmem window banks (rtl/mem/dmem_win.sv, rtl/core_pipe/win_lsu.sv)
+    output logic [3:0]           win_we    [DWIN_BANKS],
+    output logic [7:0]           win_addr  [DWIN_BANKS],
+    output logic [31:0]          win_wdata [DWIN_BANKS],
+    input  logic [31:0]          win_rdata [DWIN_BANKS]
 );
 
     if (LANES < 1 || LANES > 8) begin : g_lanes_check
@@ -261,6 +267,12 @@ module core_pipe
     logic [31:0]      vt_y [LANES];
     logic [LANES-1:0] l_cmp, nonzero, ld_cap, mis;
     logic [31:0]      ld_value [LANES];
+    // Load data for the lanes: the bus LSU's (ld_cap / ld_value, the cycle
+    // after an access) or the dmem window's (win_srv / win_val, the cycle the
+    // lane is served). A lane is either a bus lane or a window lane.
+    logic [LANES-1:0] l_cap, win_srv, win_lane;
+    logic [31:0]      l_ldv [LANES];
+    logic [31:0]      win_val [LANES];
     logic             e_vget, e_stash, e_vtrace, e_nowr;
     logic             m_is_load, m_is_store, m_mul, m_qr, m_vt;
     logic [2:0]       m_funct3, m_cnt;
@@ -299,13 +311,15 @@ module core_pipe
             .ray_y(ray_y[i]), .stash(e_stash),
             .rs1(l_rs1[i]), .alu_y(l_alu[i]), .cmp(l_cmp[i]),
             .mul_op(m_funct3[1:0]), .m_is_load, .mul_en, .m_mul, .qr_load, .qr_en, .qr_ph, .m_qr,
-            .vt_wr, .vt_y(vt_y[i]), .ld_cap(ld_cap[i]), .ld_value(ld_value[i]), .m_we(m_we[i]),
+            .vt_wr, .vt_y(vt_y[i]), .ld_cap(l_cap[i]), .ld_value(l_ldv[i]), .m_we(m_we[i]),
             .res(l_res[i]), .m_rs2(l_mrs2[i]), .wdata(l_wdata[i]),
             .w_we(w_we[i]), .w_rd
         );
 
         assign nonzero[i] = (l_rs1[i] != 32'd0);
         assign mis[i]     = is_misaligned(e_funct3, l_alu[i][1:0]);
+        assign l_cap[i]   = ld_cap[i] || (win_srv[i] && m_is_load);
+        assign l_ldv[i]   = win_srv[i] ? win_val[i] : ld_value[i];
     end
 
     // ------------------------------------------------------------------
@@ -495,7 +509,7 @@ module core_pipe
     // ------------------------------------------------------------------
     logic [ERR_WIDTH-1:0] m_err;
     logic [31:0]          m_pc, m_inst, m_next;
-    logic                 m_walk, m_tail, m_vt_tail, m_mem, lsu_done;
+    logic                 m_walk, m_sret, m_vt_tail, m_mem, lsu_done, lsu_idle, win_fin;
     logic                 retire_valid;
 
     always_ff @(posedge clk) begin
@@ -529,11 +543,11 @@ module core_pipe
             m_qr         <= HAS_QRCP && e_is_qrcp;
             m_vt         <= e_vtrace && e_r_we;   // VTRACE x0 does not wait
             m_cnt        <= '0;
-            m_tail       <= 1'b0;
+            m_sret       <= 1'b0;
             m_vt_tail    <= 1'b0;
         end else begin
             if (m_cnt != 3'd7) m_cnt <= m_cnt + 3'd1;
-            if (lsu_done)      m_tail <= 1'b1;
+            if (retire_valid)  m_sret <= 1'b1;
             if (vt_wr)         m_vt_tail <= 1'b1;
         end
     end
@@ -545,9 +559,13 @@ module core_pipe
     assign qr_en   = m_valid && m_qr && (m_cnt != 3'd0) && (m_cnt <= 3'd3);
     assign qr_ph   = m_cnt - 3'd1;
 
+    // A load or store is done when the bus LSU has no lane left (the cycle
+    // after its last access: a load's data arrives then) and the dmem window
+    // serves its last lanes (or has none). Both come from registers, so
+    // bus_ready never reaches m_done.
     always_comb begin
         if (m_halt)          m_done = 1'b1;
-        else if (m_mem)      m_done = m_tail;
+        else if (m_mem)      m_done = lsu_idle && win_fin;
         else if (m_mul)      m_done = (m_cnt == 3'd1);
         else if (m_qr)       m_done = (m_cnt == 3'd4);
         else if (m_vt)       m_done = m_vt_tail;
@@ -576,10 +594,21 @@ module core_pipe
         .clk, .rst,
         .start(e_lsu_go), .active(mask),
         .go(m_walk && !vt_block), .is_store(m_is_store), .funct3(m_funct3),
-        .addr(l_res), .rs2(l_mrs2), .done(lsu_done),
+        .addr(l_res), .rs2(l_mrs2), .done(lsu_done), .skip(win_lane), .idle(lsu_idle),
         .ex_addr_lo(lsu_lo), .misaligned(lsu_mis),
         .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,
         .ld_cap, .ld_value
+    );
+
+    // The dmem window's lanes, all served in parallel, one per bank per
+    // cycle (rtl/core_pipe/win_lsu.sv).
+    win_lsu #(.LANES(LANES)) u_win (
+        .clk, .rst,
+        .start(e_lsu_go), .active(mask),
+        .go(m_valid && m_mem && !m_halt), .is_store(m_is_store), .funct3(m_funct3),
+        .addr(l_res), .rs2(l_mrs2),
+        .win(win_lane), .served(win_srv), .fin(win_fin), .value(win_val),
+        .b_we(win_we), .b_addr(win_addr), .b_wdata(win_wdata), .b_rdata(win_rdata)
     );
 
     // ------------------------------------------------------------------
@@ -619,10 +648,17 @@ module core_pipe
     logic [31:0]      retire_lane_wdata [LANES];
     /* verilator lint_on UNUSEDSIGNAL */
 
-    assign state = halted ? 4'd6 : m_walk ? 4'd4 : 4'd0;
+    assign state = halted ? 4'd6 : (m_walk && !lsu_idle) ? 4'd4 : 4'd0;
+
+    // A store retires in the cycle the bus accepts its last lane, as on the
+    // multi-cycle core (then MEM spends one more cycle), or, with no bus lane
+    // left, in the cycle the window serves its last lanes; m_sret marks it
+    // retired.
+    logic st_ret;
+    assign st_ret = !m_sret && (lsu_done || lsu_idle) && win_fin;
 
     assign retire_valid      = m_valid && !m_halt &&
-                               ((m_mem && m_is_store) ? lsu_done : m_done);
+                               ((m_mem && m_is_store) ? st_ret : m_done);
     assign retire_pc         = m_pc;
     assign retire_inst       = m_inst;
     assign retire_lane_we    = retire_valid ? m_we : '0;
