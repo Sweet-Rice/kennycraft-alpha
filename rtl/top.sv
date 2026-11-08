@@ -38,7 +38,8 @@ module top #(
     parameter string PAL_HEX  = "palette.hex",
     parameter bit    HAS_RAY_UNIT  = 1'b0,
     parameter bit    HAS_QRCP      = 1'b0,
-    parameter int    FB_COUNT      = 2
+    parameter int    FB_COUNT      = 2,
+    parameter bit    PIPELINED     = 1'b0
 ) (
     input  logic        clk,            // E3,  100 MHz
     input  logic        ck_rst,         // C2,  active low
@@ -127,7 +128,8 @@ module top #(
         .EXT_WORLD(1'b1),
         .HAS_DIV_STACK(HAS_DIV_STACK),
         .HAS_RAY_UNIT (HAS_RAY_UNIT),
-        .HAS_QRCP     (HAS_QRCP)
+        .HAS_QRCP     (HAS_QRCP),
+        .PIPELINED    (PIPELINED)
     ) u_soc (
         .clk(clk_core), .rst(rst_core),
         .uart_tx(uart_rxd_out), .uart_rx(uart_txd_in),
