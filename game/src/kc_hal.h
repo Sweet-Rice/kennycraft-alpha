@@ -59,7 +59,9 @@ typedef struct {
     int32_t right[3], up[3];    // unit camera axes, Q16
     int32_t focal;              // pixels per unit of tangent, Q16
     int32_t corner_x, corner_z; // committed window corner (absolute blocks) for the kernel
-} kc_rparams;                   // 64 bytes, ends at 0x1000_0070
+    int32_t hud_x0, hud_x1;     // pixels [hud_x0, hud_x1) x [hud_y0, hud_y1) are opaque overlay
+    int32_t hud_y0, hud_y1;     // (the hotbar): the kernel skips 4x2 blocks fully inside them
+} kc_rparams;                   // 80 bytes, ends at 0x1000_0080
 
 #ifdef KC_HOST
 // ---------------------------------------------------------------- laptop emulation ----
