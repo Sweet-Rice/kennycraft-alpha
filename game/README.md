@@ -123,7 +123,10 @@ column bitmasks and box bins. `kc_render_frame` uses the plain world loop outsid
 the entity rows; inside them, only eligible 4x2 blocks enter entity compositing,
 which scans the row's boxes and skips boxes hidden by nearer world hits.
 
-Colors reuse the existing palette: villagers have light-dirt skin and near-black
+Model part counts are derived from their arrays, so rendering cannot read past a
+model into neighboring geometry. Both villager variants use the same five boxes.
+
+Colors reuse the existing palette: villagers have light-dirt skin and black
 eyes; trader robes are brick, contractor robes light wood. The chicken is white with
 a brick comb and wattle, a planks beak and light-wood legs. The zombie has light-grass skin, a dark-stone shirt
 and near-black pants/eyes.
