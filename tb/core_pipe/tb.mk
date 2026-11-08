@@ -16,6 +16,9 @@
 #                           core_pipe's QRCP latency (6 cycles after the
 #                           previous retirement, 8 after a flush) instead
 #                           of the multi-cycle 9
+#   tb-core-pipe-t_mmio     tb/core_pipe/t_mmio_pipe_tb.sv: t_mmio.S with its
+#                           two CYCLES checks at the pipelined MMIO LW and SW
+#                           CPI (2 and 2: deltas 2 and 42 instead of 5 and 47)
 #   tracediff-core-pipe-<t> the multi-cycle (tb-core-<t>) and pipelined builds
 #                           of the same test with +trace, retire traces
 #                           compared without cycle numbers
@@ -69,7 +72,7 @@ tracediff-core-pipe-$(1): tb-core-$(1) tb-core-pipe-$(1)
 	    $$(call core_bin,$(2),$(3)) $(call core_pipe_bin,$(2),$(3),$(6))
 endef
 
-$(foreach t,$(filter-out t_cpi,$(CORE_ALL)),$(eval $(call CORE_PIPE_RULES,$(t),$(call \
+$(foreach t,$(filter-out t_cpi t_mmio,$(CORE_ALL)),$(eval $(call CORE_PIPE_RULES,$(t),$(call \
     core_tb,$(t)),,,$(call core_hex_deps,$(t)))))
 $(foreach t,$(CORE_L8),$(eval $(call CORE_PIPE_RULES,$(t)-l8,$(call core_tb,$(t)),_l8, \
     -GLANES=8,$(call core_hex_deps,$(t)))))
@@ -82,6 +85,8 @@ $(eval $(call CORE_PIPE_RULES,t_qrcp,t_qrcp_tb,,-GHAS_QRCP="1'b1",$(CORE_QRCP_HE
 $(eval $(call CORE_PIPE_RULES,t_qrcp-l8,t_qrcp_tb,_l8,$(CORE_S2Q),$(CORE_QRCP_HEX),t_qrcp_pipe_tb))
 # t_cpi with the pipelined stall model (t_cpi_pipe_tb.sv)
 $(eval $(call CORE_PIPE_RULES,t_cpi,t_cpi_tb,,,$(call core_hex_deps,t_cpi),t_cpi_pipe_tb))
+# t_mmio with its two CYCLES checks at the pipelined LW/SW CPI (t_mmio_pipe_tb.sv)
+$(eval $(call CORE_PIPE_RULES,t_mmio,t_mmio_tb,,,$(call core_hex_deps,t_mmio),t_mmio_pipe_tb))
 
 # Lint matrix: LANES x HAS_DIV_STACK x HAS_RAY_UNIT x HAS_QRCP
 define CORE_PIPE_LINT_RULE
