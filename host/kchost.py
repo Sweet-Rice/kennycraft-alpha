@@ -3,6 +3,10 @@
     python host/kchost.py                 fake chip + devnet + Nessie, page on http://127.0.0.1:8000
     KC_CHIP=host python host/kchost.py    the real game (game/ host build, `kc_host link` in WSL)
                                           over CR6; the page shows it live and sends your keys
+    KC_CHIP=serial KC_PORT=COM5 python host/kchost.py
+                                          the Arty board over its USB UART at 1 Mbaud. kc-host
+                                          owns the port, so keys go through the page (click the
+                                          key box and play), not scripts/kc.py
 
 KC_GAME_DIR picks the game/ folder for KC_CHIP=host (build it first: make -C game).
 The fake chip speaks the same CR6 bytes as the board; its buttons stand in for the
@@ -11,6 +15,9 @@ player's E and Y/N presses.
 import asyncio
 import json
 import os
+import shlex
+import sys
+import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -19,41 +26,66 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 
-import agents
 import cr6
 from bank import InsufficientFunds, Ledger, Settler, exchange
-from nessie import Nessie, NessieError
-from orchestrator import TYPES, Orchestrator
+from nessie import Nessie, NessieError, env
+from orchestrator import STOCK, TYPES, Orchestrator
 
 HERE = Path(__file__).resolve().parent
+for k in ("NVIDIA_API_KEY", "NEMOTRON_API_KEY", "NEMOTRON_BASE_URL", "NEMOTRON_MODEL", "NANO_BASE_URL", "NANO_MODEL", "NANO_API_KEY"):    # kc_agents/llm.py reads os.environ
+    if env(k) and k not in os.environ:
+        os.environ[k] = env(k)
 
 
 class Host:
     async def start(self):
         self.log = []
         self.ledger = Ledger()
+        if not self.ledger.stock("trader"):
+            self.ledger.move_items([("trader", k, n) for k, n in STOCK.items()])
         self.settler = Settler(self.ledger)
         drift = await self.settler.reconcile()
         if drift:
             self.say(f"chain and ledger differ: {drift}")
         self.nessie, self.usd = Nessie(), None
-        self.chip = self.proc = None
-        if os.environ.get("KC_CHIP") == "host":
+        self.chip = self.proc = self.port = None
+        if os.environ.get("KC_CHIP") == "serial":
+            import serial
+            self.port = serial.serial_for_url(os.environ.get("KC_PORT", "COM3"), baudrate=1_000_000, timeout=0.02)
+            self.bridge = cr6.Bridge(self.port.write, on_link=self.linked)
+            threading.Thread(target=self.read_port, args=(asyncio.get_running_loop(),), daemon=True).start()
+        elif os.environ.get("KC_CHIP") == "host":
             self.game = Path(os.environ.get("KC_GAME_DIR", HERE.parent / "game")).resolve()
             wsl = "/mnt/" + self.game.drive[0].lower() + self.game.as_posix()[2:]
+            # KC_LINK_FPS / KC_REC (a WSL path): smooth recording, see cmd_link in game/host/main_host.c
+            rec = shlex.quote(os.environ["KC_REC"]) if os.environ.get("KC_REC") else ""
+            opts = " ".join(f"{k}={shlex.quote(os.environ[k])}" for k in ("KC_LINK_FPS", "KC_REC") if os.environ.get(k))
             self.proc = await asyncio.create_subprocess_exec(
-                "wsl", "-e", "bash", "-lc", f"cd '{wsl}' && mkdir -p out/link && exec ./build/kc_host link out/link",
+                "wsl", "-e", "bash", "-lc", f"cd '{wsl}' && mkdir -p out/link {rec} && {opts} exec ./build/kc_host link out/link",
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
             self.bridge = cr6.Bridge(self.proc.stdin.write, on_link=self.linked)
         else:
             self.bridge = cr6.Bridge(lambda b: self.chip.receive(b), on_link=self.linked)
             self.chip = cr6.FakeChip(self.bridge.feed)
-        self.orch = Orchestrator(self.ledger, self.bridge, agents.price)
-        for coro in (self.settler.run(), self.orch.events(), self.poll_nessie()):
+        self.orch = Orchestrator(self.ledger, self.bridge, say=self.say)
+        self.orch.nessie, self.orch.settler = self.nessie, self.settler
+        nano = None
+        if os.environ.get("NANO_BASE_URL"):     # villagers think with Nemotron Nano; rules otherwise
+            sys.path.insert(0, str(HERE.parent))
+            from kc_agents.llm import nano_json
+            nano = nano_json()
+        for coro in (self.settler.run(), self.orch.events(), self.poll_nessie(), self.orch.villagers(nano)):
             self.orch.spawn(coro)
         if self.proc:
             self.orch.spawn(self.read_chip())
         await self.bridge.hello()
+
+    def read_port(self, loop):
+        """The board's UART, read on its own thread (pyserial blocks); bytes go to the bridge."""
+        while True:
+            data = self.port.read(512)
+            if data:
+                loop.call_soon_threadsafe(self.bridge.feed, data)
 
     async def read_chip(self):
         while data := await self.proc.stdout.read(512):
@@ -75,6 +107,14 @@ class Host:
                 self.usd = None
             await asyncio.sleep(5)
 
+    @staticmethod
+    def job(j):
+        c, (done, total) = j.contract or getattr(j, "visit", None), j.progress()
+        waiting = bool(j.answer and not j.answer.done())
+        return {"id": j.id, "kind": j.kind, "text": j.text, "state": "QUOTED" if waiting else j.state,
+                "price": getattr(c, "price", 0) or getattr(c, "offer", 0), "rule": getattr(c, "rule", 0),
+                "placed": done, "total": total, "note": j.note}
+
     def snapshot(self):
         mode, queued = self.settler.mode()
         rows = self.ledger.db.execute(
@@ -90,13 +130,13 @@ class Host:
         else:
             hud, world = None, None                      # the live frame shows the chip's own HUD
         return {
-            "hud": hud, "world": world, "live": self.proc is not None,
+            "hud": hud, "world": world, "live": self.proc is not None, "board": self.port is not None,
             "roles": {r: i for i, r in self.orch.roles.items()},
+            "items": {"player": self.ledger.stock("player"), "trader": self.ledger.stock("trader")},
+            "speech": self.orch.speech, "brains": self.orch.mobs and self.orch.mobs.stats,
             "mode": mode, "queued": queued, "usd": self.usd, "prompt": self.orch.prompt,
             "wallets": {w: self.ledger.balance(w) for w in ("player", "escrow", "builder", "miner", "farmer", "treasury")},
-            "contracts": [{"id": c.id, "kind": c.kind, "text": c.text, "price": c.price, "rule": c.rule,
-                           "state": c.state, "placed": len(c.placed), "total": len(c.blueprint), "note": c.note}
-                          for c in list(self.orch.contracts.values())[-5:][::-1]],
+            "contracts": [self.job(j) for j in list(self.orch.jobs.values())[-5:][::-1]],
             "ledger": [dict(r) for r in rows],
             "log": self.log,
         }
@@ -147,7 +187,7 @@ async def live():
 @app.post("/api/key")
 async def key(body: dict):
     """A key from the page, as kc.py would send it: bit 7 set on key-down."""
-    if host.proc:
+    if host.proc or host.port:
         host.bridge.write(bytes([int(body["code"]) & 0x7F | (0x80 if body["down"] else 0)]))
 
 
@@ -160,7 +200,10 @@ async def interact(body: dict):
 @app.post("/api/confirm")
 async def confirm(body: dict):
     if host.chip:
-        host.chip.confirm(bool(body["yes"]))
+        host.chip.confirm(bool(body["yes"]))          # through the fake chip's Y/N, like the board
+    else:
+        for j in host.orch.jobs.values():
+            host.orch.confirm(j.id, bool(body["yes"]))
 
 
 @app.post("/api/close")
@@ -175,7 +218,7 @@ async def request(body: dict):
     except (ValueError, InsufficientFunds, asyncio.TimeoutError) as x:
         fail(x)
     host.orch.prompt = None
-    host.say(f"{c.kind} quotes {c.price} KCN (rule price {c.rule}) for: {c.text}")
+    host.say(f"{c.kind} #{c.id}: {c.text}")
 
 
 @app.post("/api/cancel")

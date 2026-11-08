@@ -19,6 +19,7 @@
 #include <time.h>
 #include "kc_hal.h"
 #include "hal_host.h"
+#include "kc_assets.h"   // kc_palette, for the Nether color checks
 #include "kc_main.h"
 #include "game.h"
 #include "chunks.h"
@@ -407,6 +408,88 @@ static int cmd_play(void) {
         check(world_boot_nonce() != n2, "nonce changes again after the corner visit");
     }
 
+    printf("nether\n");
+    {
+        step_frames(30);
+        q16 ox = kc_me.pos[0], oz = kc_me.pos[2];
+        key(KEY_P, 1); key(KEY_P, 0);
+        step_frames(150);
+        int32_t nx = qfloor(kc_me.pos[0]), ny = qfloor(kc_me.pos[1]), nz = qfloor(kc_me.pos[2]);
+        uint8_t under = world_get(nx, ny - 1, nz);
+        printf("  landed at %d %d %d on block %u\n", (int)nx, (int)ny, (int)nz, (unsigned)under);
+        check(nx >= NETHER_X0 && kc_me.pos[2] == oz, "P takes you into the Nether strip, same z");
+        check(kc_me.on_ground && under == B_OBSIDIAN && world_get(nx, ny, nz) == B_PORTAL
+              && world_get(nx, ny + 2, nz) == B_PORTAL, "you arrive standing in a lit return portal");
+        check(world_get(nx, WIN_Y - 1, nz) == B_BEDROCK, "the Nether has a bedrock roof");
+        const uint16_t *pal = host_palette();
+        check((pal[0xF8] >> 8) > (pal[0xF8] & 15) && pal[0x50] == kc_palette[0x50],
+              "the Nether sky is red, unfogged block colors are unchanged");
+        save_frame("p9_nether");
+        key(KEY_P, 1); key(KEY_P, 0);
+        step_frames(150);
+        q16 dx = kc_me.pos[0] - ox;
+        check(dx >= 0 && dx < Q16_INT(16) && kc_me.pos[2] == oz && kc_me.on_ground,
+              "P again brings you back to where you left, standing");
+        check(!memcmp(host_palette(), kc_palette, sizeof kc_palette), "back home: the whole palette is palette.hex again");
+
+        // Portal: an obsidian frame 3 blocks ahead in z, standing along x, built on the ground.
+        int32_t px = qfloor(kc_me.pos[0]), py = qfloor(kc_me.pos[1]), pz = qfloor(kc_me.pos[2]) + 3;
+        for (int32_t v = 0; v < 6; v++)
+            for (int32_t a = -1; a < 5; a++) world_set(px + a, py + v, pz, B_AIR);
+        for (int32_t a = 0; a < 4; a++) world_set(px + a, py - 1, pz, B_OBSIDIAN);   // bottom rim
+        for (int32_t v = 0; v < 4; v++) { world_set(px, py + v, pz, B_OBSIDIAN); world_set(px + 3, py + v, pz, B_OBSIDIAN); }
+        world_set(px + 1, py + 3, pz, B_OBSIDIAN);
+        check(!portal_light(px + 1, py + 3, pz), "an unfinished frame does not light");
+        world_set(px + 2, py + 3, pz, B_OBSIDIAN);
+        check(portal_light(px + 2, py + 3, pz) && world_get(px + 1, py, pz) == B_PORTAL
+              && world_get(px + 2, py + 2, pz) == B_PORTAL, "the last obsidian block lights a 2 x 3 portal");
+        kc_me.yaw = 0; kc_me.pitch = 0;   // face +z, at the portal
+        step_frames(2);
+        save_frame("p10_portal");
+        kc_me.pos[0] = Q16_INT(px + 1) + Q16_HALF;
+        kc_me.pos[2] = Q16_INT(pz) + Q16_HALF;
+        step_frames(150);
+        check(qfloor(kc_me.pos[0]) >= NETHER_X0 && kc_me.on_ground, "walking into the portal takes you to the Nether");
+        int32_t qx = qfloor(kc_me.pos[0]), qy = qfloor(kc_me.pos[1]), qz = qfloor(kc_me.pos[2]);
+        check(world_get(qx, qy, qz) == B_PORTAL, "the return portal from the first trip is reused");
+        step_frames(60);
+        check(qfloor(kc_me.pos[0]) >= NETHER_X0, "standing in the return portal does not send you back");
+        world_set(qx, qy, qz + 1, B_AIR); world_set(qx, qy + 1, qz + 1, B_AIR);   // room to step out
+        kc_me.pos[2] += Q16_INT(1);
+        step_frames(5);
+        kc_me.pos[2] -= Q16_INT(1);                                             // and back in
+        step_frames(150);
+        int32_t bx = qfloor(kc_me.pos[0]);
+        check(bx >= px + 1 && bx < NETHER_X0 && qfloor(kc_me.pos[2]) == pz,
+              "back in the overworld at the portal, and it does not fire again until you step out");
+
+        // Breaking: a frame block puts the whole portal out; so does breaking a portal block.
+        game_break(px, py + 1, pz);
+        int32_t lit = 0;
+        for (int32_t v = 0; v < 3; v++) for (int32_t a = 1; a < 3; a++) lit += world_get(px + a, py + v, pz) == B_PORTAL;
+        check(lit == 0 && world_get(px, py + 1, pz) == B_AIR, "breaking a frame block clears all 6 portal blocks");
+        world_set(px, py + 1, pz, B_OBSIDIAN);
+        check(portal_light(px, py + 1, pz), "putting the block back relights it");
+        game_break(px + 2, py + 2, pz);
+        lit = 0;
+        for (int32_t v = 0; v < 3; v++) for (int32_t a = 1; a < 3; a++) lit += world_get(px + a, py + v, pz) == B_PORTAL;
+        check(lit == 0, "breaking one portal block clears the rest");
+
+        // The wall: x = NETHER_X0 is bedrock top to bottom, and walking east stops at it.
+        int32_t wz = qfloor(kc_me.pos[2]), wall = 1;
+        pose(Q16_INT(NETHER_X0 - 4) + Q16_HALF, Q16(30.0), Q16_INT(wz) + Q16_HALF, Q16_INT(256), 0);
+        for (int32_t y = 0; y < WIN_Y; y++) wall &= world_get(NETHER_X0, y, wz) == B_BEDROCK;
+        check(wall, "a full-height bedrock wall stands at x = 3072");
+        step_frames(60);                                   // fall onto the ground
+        key(KEY_W, 1); key(KEY_SPACE, 1);
+        step_frames(240);                                  // walk and jump east into the wall
+        key(KEY_W, 0); key(KEY_SPACE, 0);
+        step_frames(2);
+        printf("  walked east to x = %.2f\n", kc_me.pos[0] / 65536.0);
+        check(kc_me.pos[0] < Q16_INT(NETHER_X0) && kc_me.pos[0] > Q16_INT(NETHER_X0 - 1),
+              "walking east from the overworld reaches the wall and stops there");
+    }
+
     printf("tag visibility\n");
     check(tag_leaks() == 0, "window settled: every y = 0 cell of every valid slot is bedrock");
     printf("  %llu frame swaps and %llu world_updates with tag-matched loads checked\n",
@@ -764,26 +847,65 @@ static int cmd_cr6(void) {
     return failures ? 1 : 0;
 }
 
+// KC_RAW=<file> writes every frame there as raw RGB888, w*h*3 bytes (scripts/kc.py --host).
+static void write_raw(const char *path, int w, int h) {
+    static uint8_t rgb[320 * 240 * 3];
+    char tmp[600];
+    const uint8_t *fb = host_front_buffer();
+    const uint16_t *pal = host_palette();
+    for (int y = 0, i = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            uint16_t c = pal[fb[y * FB_STRIDE + x]];
+            rgb[i++] = (uint8_t)(((c >> 8) & 15) * 17);
+            rgb[i++] = (uint8_t)(((c >> 4) & 15) * 17);
+            rgb[i++] = (uint8_t)((c & 15) * 17);
+        }
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    FILE *f = fopen(tmp, "wb");
+    if (!f) return;
+    fwrite(rgb, 1, (size_t)w * h * 3, f);
+    fclose(f);
+    rename(tmp, path);                                 // the reader never sees half a frame
+}
+
+// KC_LINK_FPS=n runs the game clock at n real frames per second (default: the old 20 fps
+// loop, 1/30 s of game time per frame). KC_REC=<dir> also saves every frame there as
+// 000000.png, ... for a smooth demo video (raw PNGs: keep <dir> on a fast disk).
 static int cmd_link(void) {
     char path[512], tmp[512];
+    const char *rec = getenv("KC_REC"), *fps_s = getenv("KC_LINK_FPS"), *raw = getenv("KC_RAW");
+    int fps = fps_s ? atoi(fps_s) : 0;
+    uint32_t step = fps > 0 ? CORE_HZ / (uint32_t)fps : CORE_HZ / 30;
+    long frame_ns = fps > 0 ? 1000000000L / fps : 50000000L;
     snprintf(path, sizeof path, "%s/live.png", outdir);
     snprintf(tmp, sizeof tmp, "%s/live.tmp.png", outdir);
     fcntl(0, F_SETFL, fcntl(0, F_GETFL) | O_NONBLOCK);
     host_uart_out(stdout, 0);
+    struct timespec next;
+    clock_gettime(CLOCK_MONOTONIC, &next);
     for (uint32_t n = 0;; n++) {
         uint8_t b[256];
         ssize_t k;
         while ((k = read(0, b, sizeof b)) > 0)
             for (ssize_t i = 0; i < k; i++) host_push_key(b[i]);
         if (k == 0) return 0;                              // kc-host closed the pipe
-        step_frames(1);
+        host_advance_cycles(step);
+        kc_frame();
         fflush(stdout);
+        int w = KC_RP->width, h = KC_RP->height;
+        if (rec) {
+            char f[600];
+            snprintf(f, sizeof f, "%s/%06u.png", rec, n);
+            png_write_fb(f, host_front_buffer(), host_palette(), w, h, 1);
+        }
+        if (raw) write_raw(raw, w, h);
         if ((n & 3) == 0) {
-            int w = KC_RP->width, h = KC_RP->height;
             png_write_fb(tmp, host_front_buffer(), host_palette(), w, h, w == 160 ? 4 : 2);
             rename(tmp, path);
         }
-        usleep(50000);
+        next.tv_nsec += frame_ns;                          // a steady clock, not sleep-after-work
+        while (next.tv_nsec >= 1000000000L) { next.tv_nsec -= 1000000000L; next.tv_sec++; }
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
     }
 }
 

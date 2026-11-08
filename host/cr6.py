@@ -10,9 +10,9 @@ import struct
 SYNC = 0xA5
 HELLO, BYE, PLACE, BREAK, FILL = 0x01, 0x02, 0x10, 0x11, 0x12
 SPAWN, MOVE = 0x20, 0x21
-Q_PLAYER, Q_BLOCKS = 0x30, 0x31
+Q_PLAYER, Q_BLOCKS, Q_ENTITY = 0x30, 0x31, 0x33
 SET_BALANCE, SET_QUOTE, SET_CONTRACT = 0x40, 0x41, 0x42
-STATUS, HELLO_ACK, R_PLAYER, R_BLOCKS, EVENT = 0x81, 0x82, 0x83, 0x84, 0x8F
+STATUS, HELLO_ACK, R_PLAYER, R_BLOCKS, R_ENTITY, EVENT = 0x81, 0x82, 0x83, 0x84, 0x86, 0x8F
 RESULTS = ["OK", "CRC", "BAD_OP", "OUT_OF_ZONE", "BAD_BLOCK", "PROTECTED", "RATE", "BUSY",
            "NOT_LINKED", "BAD_ENTITY"]
 EV_EDIT, EV_HIT, EV_INTERACT, EV_CONFIRM = 1, 2, 3, 4
@@ -85,7 +85,7 @@ class Bridge:
                     self.waiting.set_result(("OK", p))
                 if self.on_link:
                     self.on_link(self.boot)
-            elif op in (R_PLAYER, R_BLOCKS):
+            elif op in (R_PLAYER, R_BLOCKS, R_ENTITY):
                 self.reply = (seq, p)
             elif op == STATUS and self.waiting and not self.waiting.done() and seq == self.seq:
                 reply = self.reply[1] if self.reply and self.reply[0] == seq else None
@@ -169,11 +169,27 @@ class FakeChip:
             if op == BREAK:
                 x, z, y = struct.unpack("<HHB", p)
                 return self.edit(x, z, y, 0)
+            if op == FILL:
+                x, z, y, a, c = struct.unpack("<HHBBB", p)
+                return self.fill(x, z, y, (a & 15) + 1, (c & 15) + 1, (a >> 4) + 1, c >> 4)
+            if op == MOVE:
+                eid, x, z = struct.unpack("<BHH", p)
+                if eid >= len(self.entities):
+                    return 9
+                k, _, _, y = self.entities[eid]
+                self.entities[eid] = (k, x / 16, z / 16, y)
+                return 0
             if op == SPAWN:
                 eid, x, z, y = struct.unpack("<BHHB", p)
                 if eid & 15 != len(self.entities):
                     return 9                                 # BAD_ENTITY: ids come in order
                 self.entities.append((eid >> 4, x / 16, z / 16, y / 8))
+                return 0
+            if op == Q_ENTITY:
+                if p[0] >= len(self.entities):
+                    return 9
+                _, x, z, y = self.entities[p[0]]
+                self.send(seq, R_ENTITY, struct.pack("<BHHBB", p[0], round(x * 16), round(z * 16), round(y * 8), 0))
                 return 0
             if op == Q_PLAYER:
                 px, pz, py = self.player
@@ -218,6 +234,28 @@ class FakeChip:
             return 5                                         # PLACE only into air
         self.edited_this_frame = True
         self.world[(x, z, y)] = t
+        return 0
+
+    def fill(self, x, z, y, sx, sy, sz, t):
+        """FILL as cr6.c runs it: the whole box in the zone, air cells only (never overwrites)."""
+        if self.edited_this_frame:
+            return 6
+        x0, z0, y0, n = self.zone
+        if not (x0 <= x and x + sx <= x0 + n and z0 <= z and z + sz <= z0 + n
+                and y0 <= y and y + sy <= y0 + n and 1 <= y and y + sy - 1 <= 28):
+            return 3
+        if t > 9:
+            return 4
+        px, pz, py = self.player
+        if t and x <= px < x + sx and z <= pz < z + sz and y <= py + 1 and py < y + sy:
+            return 5
+        self.edited_this_frame = True
+        for i in range(sx):
+            for k in range(sz):
+                for j in range(sy):
+                    old = self.block(x + i, z + k, y + j)
+                    if old != 10 and (old == 0 or not t):
+                        self.world[(x + i, z + k, y + j)] = t
         return 0
 
     def event(self, code, arg):

@@ -21,6 +21,14 @@ class FakeBank:
     def __init__(self, player=100):
         self.wallets = {"player": player, "escrow": 0, "treasury": 0, "builder": 0}
         self.log = []
+        self.items = {}                 # the player's building materials
+
+    def materials(self):
+        return dict(self.items)
+
+    def use_materials(self, used):
+        for k, n in used.items():
+            self.items[k] -= n
 
     def balance(self, wallet="player"):
         return self.wallets[wallet]

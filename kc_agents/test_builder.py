@@ -16,7 +16,7 @@ def scripted(*steps):
     steps = list(steps)
 
     def chat(messages, tools):
-        s = steps.pop(0)
+        s = steps.pop(0) if len(steps) > 1 or not isinstance(steps[0], str) else steps[0]   # last words repeat
         if isinstance(s, str):
             return {"content": s, "tool_calls": []}
         return {"content": "", "tool_calls": [{"id": f"c{len(steps)}{i}", "name": n, "args": a}
@@ -76,6 +76,27 @@ class TestContract(unittest.TestCase):
         self.assertTrue(all(c.chip.get(*cell) == b for cell, b in c.target.items()))
         door = c._abs(2, 1, 0)
         self.assertEqual(c.chip.get(*door), 0)
+
+    def test_own_materials_cut_the_price_and_are_used_on_payment(self):
+        c, bank = contract()
+        full = c.submit_plan("hut", HUT)["rule_price_kcn"]
+        c2, bank2 = contract()
+        bank2.items = {"brick": 30, "planks": 4}
+        r = c2.submit_plan("hut", HUT)
+        self.assertEqual(r["player_materials_used"], {"brick": 25, "planks": 4})
+        self.assertEqual(r["rule_price_kcn"], full - 14)
+        for step in (lambda: c2.quote(r["rule_price_kcn"], "ok"), c2.build, c2.inspect, c2.request_payment):
+            step()
+        self.assertEqual(c2.state, "PAID")
+        self.assertEqual(bank2.items, {"brick": 5, "planks": 0})
+
+    def test_floating_build_is_rejected(self):
+        c, _ = contract()
+        up = [dict(op, at=[op["at"][0], op["at"][1] + 3, op["at"][2]]) for op in HUT]
+        r = c.submit_plan("sky hut", up)
+        self.assertFalse(r["ok"])
+        self.assertIn("floats", r["errors"][0])
+        self.assertTrue(c.submit_plan("hut", HUT)["ok"])
 
     def test_order_is_enforced(self):
         c, bank = contract()

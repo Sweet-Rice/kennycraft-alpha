@@ -36,6 +36,30 @@ def ledger_rules():
     print("ledger rules ok")
 
 
+def item_rules():
+    led = Ledger(Path(tempfile.mkdtemp()) / "t.db", wallets={"player", "treasury"})
+    led.seed({"player": 20, "treasury": 100})
+    led.move_items([("trader", "brick", 50)])
+    buy = [("trader", "brick", -30), ("player", "brick", 30)]
+    led.post("trade_buy", "player", "treasury", 12, items=buy)
+    assert led.stock("player") == {"brick": 30} and led.stock("trader") == {"brick": 20} and led.balance("player") == 8
+    for amount, items in [(9, buy), (1, [("trader", "brick", -21), ("player", "brick", 21)])]:
+        try:                                  # can't pay, or the trader hasn't got it: nothing moves
+            led.post("trade_buy", "player", "treasury", amount, items=items)
+            raise AssertionError("accepted")
+        except InsufficientFunds:
+            pass
+    try:
+        led.move_items([("player", "brick", -10), ("player", "planks", -1)])
+        raise AssertionError("used planks the player doesn't have")
+    except InsufficientFunds:
+        pass
+    assert led.stock("player") == {"brick": 30} and led.balance("player") == 8
+    led.move_items([("player", "brick", -30)])
+    assert led.stock("player") == {}
+    print("item rules ok: trades and material use are all or nothing")
+
+
 class FakeNessie:
     def __init__(self):
         self.moves, self.fail, self.during = [], None, None
@@ -152,6 +176,7 @@ async def devnet():
 
 if __name__ == "__main__":
     ledger_rules()
+    item_rules()
     asyncio.run(exchange_rules())
     if sys.argv[1:] == ["devnet"]:
         asyncio.run(devnet())
