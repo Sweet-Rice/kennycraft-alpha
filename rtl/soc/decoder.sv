@@ -11,9 +11,8 @@
 //   0x4  fb      byte port to the back framebuffer (fb_*), 17-bit index
 //   0x5  mmio    register port (mmio_*), byte offset addr[7:0]
 //   0x6  palette write only, one entry per word: pal_addr = addr[9:2], low 12 bits
-//   0x7  gpu     68 KB, word port with byte enables (gpu_*); offsets 0x11000
-//                and up are unmapped (no aliasing)
-//   0x8..0xF     unmapped: loads read 0, stores are dropped, no error
+//   0x7..0xF     unmapped: loads read 0, stores are dropped, no error (0x7
+//                held the rasterizer's GPU memory, removed with it)
 //
 // Byte-wide regions take every enabled byte lane in turn, so LW/SW work there
 // too (four accesses) and LB/SB take one.
@@ -41,12 +40,6 @@ module decoder
     output logic [12:0] dmem_addr,
     output logic [31:0] dmem_wdata,
     input  logic [31:0] dmem_rdata,
-
-    // GPU memory (68 KB, word addressed)
-    output logic [3:0]  gpu_we,
-    output logic [14:0] gpu_addr,
-    output logic [31:0] gpu_wdata,
-    input  logic [31:0] gpu_rdata,
 
     // World window
     output logic        world_req,
@@ -86,7 +79,7 @@ module decoder
 );
 
     typedef enum logic [2:0] {
-        R_NONE, R_DMEM, R_WORLD, R_TEX, R_FB, R_MMIO, R_GPU
+        R_NONE, R_DMEM, R_WORLD, R_TEX, R_FB, R_MMIO
     } region_t;
 
     region_t sel, sel_q;
@@ -98,7 +91,6 @@ module decoder
             REG_TEX:   sel = R_TEX;
             REG_FB:    sel = R_FB;
             REG_MMIO:  sel = R_MMIO;
-            REG_GPU:   sel = ({4'b0, addr[27:0]} < GPU_BYTES) ? R_GPU : R_NONE;
             default:   sel = R_NONE;  // imem (fetch only), palette (write only), unmapped
         endcase
     end
@@ -109,10 +101,6 @@ module decoder
     assign dmem_we    = (req && we && sel == R_DMEM) ? be : 4'b0;
     assign dmem_addr  = addr[14:2];
     assign dmem_wdata = wdata;
-
-    assign gpu_we     = (req && we && sel == R_GPU) ? be : 4'b0;
-    assign gpu_addr   = addr[16:2];
-    assign gpu_wdata  = wdata;
 
     assign mmio_req   = req && (sel == R_MMIO);
     assign mmio_we    = we;
@@ -178,7 +166,6 @@ module decoder
     always_comb begin
         unique case (sel_q)
             R_DMEM:  rdata = dmem_rdata;
-            R_GPU:   rdata = gpu_rdata;
             R_WORLD: rdata = world_bus_rdata;
             R_TEX:   rdata = tex_bus_rdata;
             R_FB:    rdata = fb_bus_rdata;
