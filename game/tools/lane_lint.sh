@@ -5,7 +5,7 @@
 # never enters) and its rotated copy at the loop bottom.
 ELF=$1
 bad=0
-for f in qrcp ray_setup kc_shade_pixel ent_box_hit vtrace_ref; do
+for f in qrcp ray_setup kc_shade_pixel kc_shade_pixel_ent ent_box_hit vtrace_ref; do
     llvm-nm "$ELF" | grep -q " $f\$" || continue
     n=$(llvm-objdump -d --no-show-raw-insn --disassemble-symbols=$f "$ELF" \
         | grep -cE '\s(beq|bne|blt|bge|bltu|bgeu|beqz|bnez|bltz|bgez|blez|bgtz|j)\s')

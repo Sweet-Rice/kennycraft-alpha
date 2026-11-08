@@ -8,7 +8,8 @@
 
 const uint8_t kc_face_color[16 * 3] = KC_FACE_COLORS;
 
-uint8_t kc_shade_pixel(int32_t px, int32_t py) {
+// ents is a compile-time constant: kc_shade_pixel is the plain world, kc_shade_pixel_ent adds models.
+static inline __attribute__((always_inline)) uint8_t shade(int32_t px, int32_t py, int32_t ents) {
     const kc_camera *c = KC_CAM;
     const kc_rparams *p = KC_RP;
 
@@ -43,8 +44,11 @@ uint8_t kc_shade_pixel(int32_t px, int32_t py) {
     int32_t sky = (COLOR_SKY << 4) | sky_i;
 
     int32_t world = sel(hit, PIX(color, shade, fog), sky);
+    if (!ents) return (uint8_t)world;
     return ent_composite(px, py, o, &r, sel(hit, h.t, 0x7FFFFFFF), (uint8_t)world);
 }
+uint8_t kc_shade_pixel(int32_t px, int32_t py)     { return shade(px, py, 0); }
+uint8_t kc_shade_pixel_ent(int32_t px, int32_t py) { return shade(px, py, 1); }
 
 void kc_render_frame(void) {
     int32_t W = KC_RP->width, H = KC_RP->height;
@@ -56,12 +60,14 @@ void kc_render_frame(void) {
             for (int32_t b = 0; b < 8; b++) {          // eight 4x2 blocks per 8x8 tile
                 int32_t bx = tx + ((b & 1) << 2);
                 int32_t by = ty + ((b >> 1) << 1);
+                // All lanes share the 4x2 block, so this branch is uniform. No entities: one load.
+                int32_t ents = ent_nrects && ent_block(bx, by);
 #if KC_LANES == 1
                 for (int32_t lane = 0; lane < 8; lane++) {
 #endif
                     int32_t px = bx + (lane & 3);
                     int32_t py = by + (lane >> 2);
-                    hal_fb_put((uint32_t)(py * FB_STRIDE + px), kc_shade_pixel(px, py));
+                    hal_fb_put((uint32_t)(py * FB_STRIDE + px), ents ? kc_shade_pixel_ent(px, py) : kc_shade_pixel(px, py));
 #if KC_LANES == 1
                 }
 #endif

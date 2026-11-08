@@ -2,12 +2,15 @@
 #include "kc_hal.h"
 #include "render.h"
 #include "chunks.h"
+#include "blocks.h"
 
 static struct { q16 pos[3], tgt[2]; uint8_t kind, facing; } ents[ENT_MAX];
 static int32_t nents;
 static const q16 walk_speed[ENT_KINDS] = {Q16(1.5), Q16(1.5), Q16(1.0), Q16(1.2)};   // blocks per second
 ent_box ent_boxes[ENT_BOX_MAX];
 int32_t ent_nboxes;
+static int16_t ent_rects[ENT_MAX][4];   // x0, y0, x1, y1 inclusive: union of one entity's boxes
+int32_t ent_nrects;
 
 enum { C_BLACK = 0, C_GRASS_L = 1, C_GRASS_D = 2, C_DIRT_L = 3,
        C_STONE_D = 6, C_SAND = 9, C_BRICK = 11, C_WOOD_L = 13 };
@@ -69,7 +72,7 @@ void entity_get(int32_t id, q16 pos[3], int32_t *facing) {
 }
 
 // ponytail: straight line, each axis clamped to the step (diagonals ~1.4x faster), no collision;
-// the laptop agents plan the route. Feet snap onto the column's top solid block when loaded.
+// the laptop agents plan the route. Feet snap onto the column's top non-tree block when loaded.
 void entity_tick(q16 dt) {
     for (int32_t i = 0; i < nents; i++) {
         q16 step = qmul(walk_speed[ents[i].kind], dt);
@@ -80,7 +83,10 @@ void entity_tick(q16 dt) {
         ents[i].facing = (uint8_t)(iabs(dx) > iabs(dz) ? (dx > 0 ? 1 : 3) : (dz > 0 ? 0 : 2));
         int32_t x = qfloor(ents[i].pos[0]), z = qfloor(ents[i].pos[2]), top = 31;
         if (!world_loaded(x, z)) continue;             // column not loaded: keep the height
-        while (top > 0 && world_get(x, top, z) == 0) top--;
+        for (; top > 0; top--) {                     // trees don't count: walk under the canopy
+            int32_t t = world_get(x, top, z);
+            if (t != B_AIR && t != B_LEAVES && t != B_LOG) break;
+        }
         ents[i].pos[1] = Q16_INT(top + 1);
     }
 }
@@ -115,13 +121,15 @@ static void screen_rect(ent_box *b, const q16 e[3]) {
 }
 
 void entity_prepare(void) {
-    ent_nboxes = 0;
+    ent_nboxes = ent_nrects = 0;
     int32_t cx = KC_RP->corner_x, cz = KC_RP->corner_z;
     q16 e[3] = {KC_CAM->origin[0]-Q16_INT(cx),KC_CAM->origin[1],KC_CAM->origin[2]-Q16_INT(cz)};
     for (int32_t i = 0; i < nents; i++) {
         if ((uint32_t)(qfloor(ents[i].pos[0])-cx) > 63u ||
             (uint32_t)(qfloor(ents[i].pos[2])-cz) > 63u) continue;
         int32_t kind = ents[i].kind, facing = ents[i].facing;
+        int16_t *u = ent_rects[ent_nrects];
+        u[0] = u[1] = 4096; u[2] = u[3] = -1;
         for (int32_t j = 0; j < models[kind].n; j++) {
             const ent_part *p = &models[kind].parts[j];
             int32_t x0 = p->x0, z0 = p->z0, x1 = p->x1, z1 = p->z1;
@@ -141,8 +149,20 @@ void entity_prepare(void) {
             b->hi[2] = ents[i].pos[2] + imax(rz0,rz1)*4096 - Q16_INT(cz);
             b->color = p->color == ROBE ? models[kind].robe : p->color;
             screen_rect(b,e);
+            if (b->sx0 > b->sx1) continue;
+            u[0] = imin(u[0],b->sx0); u[1] = imin(u[1],b->sy0);
+            u[2] = imax(u[2],b->sx1); u[3] = imax(u[3],b->sy1);
         }
+        ent_nrects += u[0] <= u[2];
     }
+}
+
+int32_t ent_block(int32_t bx, int32_t by) {
+    for (int32_t i = 0; i < ent_nrects; i++) {
+        const int16_t *u = ent_rects[i];
+        if (bx+3 >= u[0] && bx <= u[2] && by+1 >= u[1] && by <= u[3]) return 1;
+    }
+    return 0;
 }
 
 static inline q16 slab_t(q16 dist, q16 inv) {
@@ -173,6 +193,8 @@ void ent_box_hit(const ent_box *b, const q16 o[3], const kc_ray *r, ent_hit *h) 
 }
 
 uint8_t ent_composite(int32_t px, int32_t py, const q16 o[3], const kc_ray *r, q16 tw, uint8_t col) {
+    // The box skip below branches per lane, but every lane of a 4x2 block computes the same
+    // (bx, by), so it is uniform. A different lane layout would make it divergent.
     ent_hit h = {tw,col};
     int32_t bx = px & ~3, by = py & ~1;
     for (int32_t i = 0; i < ent_nboxes; i++) {

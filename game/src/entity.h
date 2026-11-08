@@ -19,6 +19,9 @@ typedef struct { q16 t; int32_t col; } ent_hit;
 
 extern ent_box ent_boxes[ENT_BOX_MAX];
 extern int32_t ent_nboxes;
+extern int32_t ent_nrects;  // entities with a screen rect this frame
+// 1 if any entity's screen rect overlaps the 4x2 block at (bx, by). Uniform across lanes.
+int32_t ent_block(int32_t bx, int32_t by);
 
 // Lane 0. Absolute feet center. Facing: 0 +z, 1 +x, 2 -z, 3 -x.
 // Returns the entity index, or -1 for invalid kind/facing or a full table.
