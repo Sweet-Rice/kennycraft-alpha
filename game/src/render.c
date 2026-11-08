@@ -3,6 +3,9 @@
 #include "trace.h"
 #include "kc_hal.h"
 #include "kc_lanes.h"
+#include "kc_tables.h"
+
+const uint8_t kc_face_color[16 * 3] = KC_FACE_COLORS;
 
 uint8_t kc_shade_pixel(int32_t px, int32_t py) {
     const kc_camera *c = KC_CAM;
@@ -27,17 +30,10 @@ uint8_t kc_shade_pixel(int32_t px, int32_t py) {
     int32_t neg  = (int32_t)HIT_NEG(h.res);
     int32_t type = (int32_t)HIT_TYPE(h.res);
 
-    // Texel coordinates: top 4 fraction bits of the hit point on the face's other two axes.
-    int32_t fx = (qfrac(o[0] + qmul(d[0], h.t)) >> 12) & 15;
-    int32_t fy = (qfrac(o[1] + qmul(d[1], h.t)) >> 12) & 15;
-    int32_t fz = (qfrac(o[2] + qmul(d[2], h.t)) >> 12) & 15;
+    // Face: ray stepping down (neg on y) hits a top face. One flat color per (type, face).
     int32_t ax_x = ax == 0, ax_y = ax == 1;
-    int32_t u = sel(ax_x, fz, fx);
-    int32_t v = sel(ax_y, fz, 15 - fy);               // side textures: row 0 at the top
-
-    // Face: ray stepping down (neg on y) hits a top face.
     int32_t face  = sel(ax_y, sel(neg, 0, 2), 1);
-    int32_t texel = hal_tex_get(TEX_INDEX(type, face, u, v)) & 15;
+    int32_t color = kc_face_color[type * 3 + face];
     int32_t shade = sel(ax_y, sel(neg, 0, 3), sel(ax_x, 1, 2));
     int32_t fog   = (h.t >= p->fog_d[0]) + (h.t >= p->fog_d[1]) + (h.t >= p->fog_d[2]);
 
@@ -45,7 +41,7 @@ uint8_t kc_shade_pixel(int32_t px, int32_t py) {
     sky_i = sel(sky_i > 15, 15, sky_i);
     int32_t sky = (COLOR_SKY << 4) | sky_i;
 
-    return (uint8_t)sel(hit, PIX(texel, shade, fog), sky);
+    return (uint8_t)sel(hit, PIX(color, shade, fog), sky);
 }
 
 void kc_render_frame(void) {
