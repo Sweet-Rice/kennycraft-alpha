@@ -122,8 +122,11 @@ module lane_pipe
 
     alu #(.W(32)) u_alu (.a(alu_a), .b(alu_b), .op(alu_ctrl), .result(alu_y));
 
-    // BEQ/BNE compare the XOR against 0, BLT/BGE/BLTU/BGEU take the SLT bit.
-    assign cmp = funct3[2] ? alu_y[0] : (alu_y == 32'd0);
+    // Branch compare on the forwarded operands, beside the ALU (same result
+    // as the ALU's XOR / SLT / SLTU that the multi-cycle core tests):
+    // BEQ/BNE equal, BLT/BGE signed less, BLTU/BGEU unsigned less.
+    assign cmp = !funct3[2] ? (rs1 == rs2) :
+                 funct3[1]  ? (rs1 < rs2) : ($signed(rs1) < $signed(rs2));
 
     // ------------------------------------------------------------------
     // MEM
