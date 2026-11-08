@@ -6,8 +6,9 @@
 // that the lanes outside the 0x5A mask keep across QRCP, MUL into an ALU
 // op, through a store and load address, MUL under the partial mask 0x5A,
 // whose inactive lanes keep their old rd, the predicted loops, the stores
-// that leave MEM at their accept, and the window bank-conflict and mixed
-// stores of slots 59 to 61). At each FB_SWAP request every
+// that leave MEM at their accept, the window bank-conflict and mixed stores
+// of slots 59 to 61, and VGET of the cell right after VSET, slot 62). At
+// each FB_SWAP request every
 // lane's framebuffer word must hold the store before it, not the one after.
 // Built for both cores; tracediff-core-pipe-t_pipe_stress compares their
 // retire traces, the only pipelined trace coverage of VSET/VTRACE/VGET with
@@ -49,7 +50,7 @@ module t_pipe_stress_tb;
 
     initial begin
         logic [7:0]  full, odd, qm, p5a;
-        logic [31:0] a0, a1, a2, prod;
+        logic [31:0] a0, a1, a2, prod, base;
         full = 8'((1 << ALANES) - 1);
         odd  = 8'hAA & full;
         qm   = 8'h5A & full;
@@ -107,6 +108,9 @@ module t_pipe_stress_tb;
                      32'(MIX_LAST[l] + 32'hE1));
             expect32($sformatf("lane %0d MMIO lane + dmem SW", l), res(l, 61),
                      (l == 0) ? 32'd0 : 32'(l + 32'hF1));
+            base = 32'(l) * 32'h841 + 32'd1;
+            expect32($sformatf("lane %0d VSET 0 then VGET 0", l), res(l, 62),
+                     p5a[l] ? 3 * base + 32'h222 : 2 * base);
         end
         expect32("FB_SWAP requests (fast, slow)", 32'(swap_req_count), 32'd2);
         expect32("mask at the end", 32'(`KC_CORE.mask), 32'd1);

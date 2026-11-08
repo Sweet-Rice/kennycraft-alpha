@@ -15,10 +15,12 @@
 //        become a fault flag that halts in EX
 //   EX   per-lane forwarding (MEM, else WB), ALU, branch compare, scalar
 //        lane, uniform checks, divergence stack, mask, lane control, ray
-//        unit configuration and start, misaligned check
+//        unit configuration and start (registered strobes: the ray unit
+//        takes them in the next cycle), misaligned check
 //   MEM  the only stage that takes more than one cycle; EX, ID and IF wait
 //        for it. QRCP 8 cycles (seven qrcp_pipe stages, result), VTRACE rd
-//        (rd != x0) until done plus one, loads and stores with an active
+//        (rd != x0) until done plus one (the walk starts in its first MEM
+//        cycle), loads and stores with an active
 //        lane: one cycle per LSU bus access (one per group of coalesced
 //        lanes) plus one, except a store whose bus lanes all go to dmem or
 //        the framebuffer (no extra cycle); MUL and everything else 1.
@@ -44,13 +46,16 @@
 // after EX (u_req), unless the branch halted (m_halt, a register). Only the
 // fetch path depends on it: pc, retire order and values do not.
 //
-// Asynchronous VTRACE (VTRACE x0) starts the walk in EX like VTRACE rd and
-// leaves MEM in one cycle. vt_pend is high from vt_start until vt_done; while
-// it is high a custom-1 instruction waits in EX (e_vt_hold: EX, ID and IF
-// hold, MEM gets a bubble), so VSET cannot change the rays, a second VTRACE
-// cannot start and VGET reads the finished results; and a lane's world access
-// or MMIO store waits in MEM (vt_block, bus_req low), since the ray unit owns
-// the world port while busy and WIN_ORIGIN / SLOT_VALID steer its reads.
+// Asynchronous VTRACE (VTRACE x0) starts the walk like VTRACE rd (the ray
+// unit strobes are registered: VSET and VTRACE reach it the cycle after EX)
+// and leaves MEM in one cycle. vt_pend is high from VTRACE's EX until
+// vt_done; while it is high a custom-1 instruction waits in EX (e_vt_hold:
+// EX, ID and IF hold, MEM gets a bubble), so VSET cannot change the rays, a
+// second VTRACE cannot start and VGET reads the finished results (a VGET
+// right after a VSET waits one cycle too, for VSET's cell); and a lane's
+// world access or MMIO store waits in MEM (vt_block, bus_req low), since the
+// ray unit owns the world port while busy and WIN_ORIGIN / SLOT_VALID steer
+// its reads.
 //
 // Retirement (the retire_* wires, pc). An instruction retires in its last
 // MEM cycle, a store with an active lane in the cycle the bus accepts its
@@ -481,26 +486,47 @@ module core_pipe
     // ------------------------------------------------------------------
     // Ray unit (custom-1)
     // ------------------------------------------------------------------
-    logic vt_pend;    // a walk is in flight: from vt_start to vt_done
+    logic vt_pend;    // a walk is in flight: from VTRACE's EX to vt_done
 
     if (HAS_RAY_UNIT) begin : g_ray
         logic [7:0] cap;
+        logic       e_vset_go, e_vt_go;
 
         assign e_vtrace  = e_is_ray && (e_funct3 == F3_VTRACE);
         assign e_vget    = e_is_ray && (e_funct3 == F3_VGET);
-        assign e_vt_hold = e_valid && e_is_ray && vt_pend;
         assign cap       = l_rs1[sl][7:0];
         assign e_nowr    = e_vtrace && (cap == 8'd0);
 
-        assign vt_lane_mask = mask;
         // A custom-1 instruction halts only on e_fault (DIVERGE, DIVSTACK
         // and the EX ILLEGAL cases need a branch, JALR, DIF/DELSE/DENDIF or
         // a load/store), so the strobes skip the forward/uniform-check cone.
-        assign vt_cfg_we    = e_go && !e_fault && e_is_ray && (e_funct3 == F3_VSET);
-        assign vt_cfg_field = e_field;
-        assign vt_cfg_data  = l_rs1;
-        assign vt_start     = e_go && !e_fault && e_vtrace;
-        assign vt_max_steps = cap;
+        assign e_vset_go = e_go && !e_fault && e_is_ray && (e_funct3 == F3_VSET);
+        assign e_vt_go   = e_go && !e_fault && e_vtrace;
+
+        // The strobes and their operands are registered: VSET and VTRACE
+        // reach the ray unit the cycle after their EX, so adv (e_go) feeds
+        // only two flops here, not the ray unit's clock enables. The operand
+        // registers load every cycle; the strobe says when they hold a
+        // custom-1 instruction's. A VSET after a VSET or a VTRACE after a
+        // VSET keeps its order. VGET field 0 reads the cell that VSET field 0
+        // writes, so a VGET waits in EX while a VSET strobe is out
+        // (vt_cfg_we); VTRACE sets vt_pend in its EX cycle, so any custom-1
+        // instruction after it waits as before.
+        assign e_vt_hold = e_valid && e_is_ray && (vt_pend || (e_vget && vt_cfg_we));
+
+        always_ff @(posedge clk) begin
+            if (rst) begin
+                vt_cfg_we <= 1'b0;
+                vt_start  <= 1'b0;
+            end else begin
+                vt_cfg_we <= e_vset_go;
+                vt_start  <= e_vt_go;
+            end
+            vt_cfg_field <= e_field;
+            vt_lane_mask <= mask;
+            vt_cfg_data  <= l_rs1;
+            vt_max_steps <= cap;
+        end
         assign vt_wr        = m_valid && m_vt && vt_done;
 
         // VGET field 3 returns the VTRACE result, fields 0 and 1 the hit
@@ -512,9 +538,9 @@ module core_pipe
         end
 
         always_ff @(posedge clk) begin
-            if (rst)           vt_pend <= 1'b0;
-            else if (vt_start) vt_pend <= 1'b1;
-            else if (vt_done)  vt_pend <= 1'b0;
+            if (rst)          vt_pend <= 1'b0;
+            else if (e_vt_go) vt_pend <= 1'b1;
+            else if (vt_done) vt_pend <= 1'b0;
         end
     end else begin : g_no_ray
         assign e_vtrace     = 1'b0;

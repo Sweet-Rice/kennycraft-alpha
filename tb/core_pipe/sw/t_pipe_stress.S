@@ -43,7 +43,11 @@
    lane past a conflicting lane between them, then a load of the same words;
    a store of window lanes in three cycles mixed with dmem lanes in two
    groups, then a load; an MMIO lane followed by dmem lanes (the last group
-   in dmem, done when the bus is idle), then a load. */
+   in dmem, done when the bus is idle), then a load.
+   Registered ray-unit strobes: VGET of the cell right after the VSET that
+   writes it (full mask and under 0x5A); eight VSETs back to back, VTRACE x0
+   right after the last, VGET right after VTRACE x0, VSET right after VGET,
+   VTRACE rd right after that VSET and VGET right after it. */
 #include "kc_test.h"
 #include "kc_lanes.h"
 #define VSET(f, rs)    .insn r 0x2B, 0, f, x0, rs, x0
@@ -494,6 +498,54 @@ fast_jal_link:
     sw    t3, 0(s8)
     lw    t4, 192(s4)
     sw    t4, RES(61)(s2)
+    /* VGET of the cell right after the VSET that writes it, full mask and
+       under 0x5A (the inactive lanes keep their cell and their rd) */
+    slli  t0, s0, 11
+    slli  t1, s0, 6
+    add   t0, t0, t1
+    add   t0, t0, s0
+    addi  t0, t0, 1             /* cell: z = y = lane, x = lane + 1 */
+    addi  t2, t0, 0x111
+    li    a1, 0
+    li    t3, 0x5A
+    VSET(0, t0)
+    VGET(a0, 0)
+    MASKSET(t3)
+    VSET(0, t2)
+    VGET(a1, 0)
+    MASKALL
+    VGET(a2, 0)
+    add   a0, a0, a1
+    add   a0, a0, a2
+    sw    a0, RES(62)(s2)
+    /* eight VSETs back to back, VTRACE x0 right after the last, VGET 3
+       right after it (waits for the walk), VSET right after the VGET,
+       VTRACE rd right after that VSET, VGET 1 right after */
+    slli  t0, s0, 3
+    addi  t0, t0, 5
+    li    t1, 0x8000
+    add   t1, t1, s1
+    li    t2, 0x9000
+    li    t3, 0xA000
+    li    t4, 0x10000
+    andi  t5, s0, 3
+    li    a0, 20
+    VSET(0, t0)
+    VSET(1, t1)
+    VSET(2, t2)
+    VSET(3, t3)
+    VSET(4, t4)
+    VSET(5, t4)
+    VSET(6, t4)
+    VSET(7, t5)
+    VTRACE(x0, a0)
+    VGET(a1, 3)
+    VSET(0, t0)
+    VTRACE(a2, a0)
+    VGET(a3, 1)
+    add   a1, a1, a2
+    xor   a1, a1, a3
+    sw    a1, RES(63)(s2)
 
     /* ---------------- slow pass ---------------- */
     li    s9, 0
@@ -965,6 +1017,78 @@ fast_jal_link:
     lw    t4, 192(s4)
     SLOW
     CHECK(61, t4)
+    slli  t0, s0, 11
+    slli  t1, s0, 6
+    SLOW
+    add   t0, t0, t1
+    SLOW
+    add   t0, t0, s0
+    SLOW
+    addi  t0, t0, 1
+    SLOW
+    addi  t2, t0, 0x111
+    li    a1, 0
+    li    t3, 0x5A
+    SLOW
+    VSET(0, t0)
+    SLOW
+    VGET(a0, 0)
+    SLOW
+    MASKSET(t3)
+    VSET(0, t2)
+    SLOW
+    VGET(a1, 0)
+    SLOW
+    MASKALL
+    VGET(a2, 0)
+    SLOW
+    add   a0, a0, a1
+    SLOW
+    add   a0, a0, a2
+    SLOW
+    CHECK(62, a0)
+    slli  t0, s0, 3
+    li    t1, 0x8000
+    SLOW
+    addi  t0, t0, 5
+    add   t1, t1, s1
+    li    t2, 0x9000
+    li    t3, 0xA000
+    li    t4, 0x10000
+    andi  t5, s0, 3
+    li    a0, 20
+    SLOW
+    VSET(0, t0)
+    SLOW
+    VSET(1, t1)
+    SLOW
+    VSET(2, t2)
+    SLOW
+    VSET(3, t3)
+    SLOW
+    VSET(4, t4)
+    SLOW
+    VSET(5, t4)
+    SLOW
+    VSET(6, t4)
+    SLOW
+    VSET(7, t5)
+    SLOW
+    VTRACE(x0, a0)
+    SLOW
+    VGET(a1, 3)
+    SLOW
+    VSET(0, t0)
+    SLOW
+    VTRACE(a2, a0)
+    SLOW
+    VGET(a3, 1)
+    SLOW
+    add   a1, a1, a2
+    SLOW
+    xor   a1, a1, a3
+    SLOW
+    CHECK(63, a1)
 
     li    t1, 1
     MASKSET(t1)
