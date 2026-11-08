@@ -149,10 +149,15 @@ class Contract:
         if self.builds >= 3:
             return {"error": "out of build attempts; cancel"}
         self.builds += 1
-        if self.worker is not None:     # the contractor walks to the corner of the site (CR6 MOVE)
+        # The contractor hops onto each piece as it goes in (CR6 MOVE with the teleport bit);
+        # on a chip interface without teleport he walks to the corner of the site instead.
+        hop = getattr(self.chip, "teleport", None) if self.worker is not None else None
+        if self.worker is not None and not hop:
             self.chip.move(self.worker, self.origin[0] - 1, self.origin[2] - 1)
         ok = 0
         for c in self.cmds:
+            if hop:
+                hop(self.worker, c[1] + 0.5, c[3] + 0.5)
             ok += self.chip.place(*c[1:]) if c[0] == "place" else self.chip.fill(*c[1:])
         self.state = "BUILT"
         return {"commands": len(self.cmds), "accepted_by_chip": ok, "rejected": len(self.cmds) - ok}

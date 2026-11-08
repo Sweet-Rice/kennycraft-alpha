@@ -123,6 +123,10 @@ class Job:
         res, _ = self.sync(self.orch.send(cr6.MOVE, struct.pack("<BHH", eid, round(tx * 16), round(tz * 16))))
         return res == "OK"
 
+    def teleport(self, eid, x, z):          # MOVE with bit 7 of the id: there at once (cr6.c)
+        res, _ = self.sync(self.orch.send(cr6.MOVE, struct.pack("<BHH", eid | 0x80, round(x * 16), round(z * 16))))
+        return res == "OK"
+
     # -- bank -----------------------------------------------------------------------------
     def materials(self):
         return self.sync(self._call(self.orch.ledger.stock, "player"))
