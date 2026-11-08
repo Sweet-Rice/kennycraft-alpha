@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 from tracediff import compare_lines
+from tracecollapse import compare_collapsed
 
 MAKE_ENV_DROP = ('MAKEFLAGS', 'MFLAGS', 'MAKELEVEL', 'MAKEOVERRIDES')
 
@@ -67,6 +68,8 @@ def main():
                         help='directory with kc_imem.hex and kc_dmem.hex for both runs')
     parser.add_argument('--make-var', action='append', default=[], metavar='NAME=VALUE',
                         help='setting for the reference make vl-build (repeatable)')
+    parser.add_argument('--collapse-polls', action='store_true',
+                        help='collapse MMIO poll loops that ran a different count (scripts/tracecollapse.py)')
     parser.add_argument('--palette-hex', type=Path)
     parser.add_argument('--texture-hex', type=Path)
     args = parser.parse_args()
@@ -94,7 +97,8 @@ def main():
         traces.mkdir(parents=True, exist_ok=True)
         runs = [start(label, executable, images, traces, args.frames, keys)
                 for label, executable in (('reference', ref_binary), ('current', binary))]
-        result = compare_lines(runs[0][1], runs[1][1], 'reference', 'current')
+        compare = compare_collapsed if args.collapse_polls else compare_lines
+        result = compare(runs[0][1], runs[1][1], 'reference', 'current')
         for (process, _, _), label in zip(runs, ('reference', 'current')):
             # After a difference the other run is still going; it is stopped below.
             if (process.wait() if result == 0 else process.poll()):

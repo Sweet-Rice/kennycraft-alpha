@@ -197,6 +197,8 @@ golden-check:
 # directory (built in place in out/vl-tracediff). The reference is built with
 # this chip configuration plus REF_MAKE="NAME=VALUE ...", and both kcvl runs
 # get IMAGES=<dir>'s kc_imem.hex and kc_dmem.hex (default out/, PROG's).
+# POLLS=1 collapses MMIO poll loops that ran a different number of times
+# (scripts/tracecollapse.py: a different-CPI core) and lists each one.
 REF_MAKE ?=
 IMAGES ?= out
 TRACEDIFF_CONFIG = STAGE=$(STAGE) DDR=$(DDR) LANES=$(LANES) HAS_DIV_STACK=$(HAS_DIV_STACK) \
@@ -205,7 +207,7 @@ tracediff: vl-build
 	@test -n "$(REF)" || { echo "tracediff: set REF=" >&2; exit 5; }
 	$(PYTHON) scripts/compare_ref.py --ref "$(REF)" --frames $(if $(FRAMES),$(FRAMES),5) $(if $(KEYS),--keys "$(KEYS)") \
 		--binary $(VL_MDIR)/kcvl --images "$(IMAGES)" $(foreach v,$(TRACEDIFF_CONFIG) $(REF_MAKE),--make-var "$(v)") \
-		$(PALETTE_ARGS) $(TEXTURE_ARGS)
+		$(if $(filter 1,$(POLLS)),--collapse-polls) $(PALETTE_ARGS) $(TEXTURE_ARGS)
 
 .PHONY: board keys
 board: check
