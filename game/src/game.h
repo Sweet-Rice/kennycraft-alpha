@@ -17,6 +17,9 @@
 #define KEY_DOWN  0x13
 #define KEY_BREAK 0x6A   // J
 #define KEY_PLACE 0x6B   // K
+#define KEY_E     0x65   // talk to the villager in front of you (CR6 INTERACT)
+#define KEY_Y     0x79   // accept the quote on the HUD (CR6 CONFIRM)
+#define KEY_N     0x6E   // decline it
 
 typedef struct {
     q16 pos[3];          // feet center, absolute blocks
@@ -39,5 +42,7 @@ void move_player(q16 dt);          // look, walk, gravity, collisions (dt in sec
 void pick_and_edit(void);          // aim with the DDA, apply J / K
 void write_camera(void);           // camera block (absolute coords) + render params
 void game_draw_overlay(void);      // crosshair + hotbar into the back framebuffer
+// 1 if the player's box overlaps any block in [x0..x1] x [y0..y1] x [z0..z1] (CR6 edits).
+int32_t player_overlaps(int32_t x0, int32_t y0, int32_t z0, int32_t x1, int32_t y1, int32_t z1);
 
 #endif

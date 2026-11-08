@@ -8,12 +8,13 @@
 #                   and that every lane's call chain fits its 1 KB stack
 #   make chip8      same with KC_LANES=8 (Stage 1 kernel)
 #   make models     entity checks and review shots (out/models)
+#   make cr6        CR6 UART link checks (out/cr6/cr6_hud.png shows the HUD)
 # Build options (any target): KC_GEN_BITMAP=1 (issue #2's 8 KB bitmap instead of chunk tags),
 # KC_TAG_PERSIST=1 (chunk tags without the boot nonce: stored chunks survive a reset).
 # KC_QRCP=1: 8-lane chip builds use the QRCP instruction for qrcp() (D22; Stage 2 core).
 # KC_FIXED_DT=1: fixed per-frame dt and frame-synchronous chunk loads, so replays retire the
 #   same instructions on any core speed (trace comparison; use with KC_TAG_PERSIST=1).
-SRC      := src/kc_libc.c src/arena.c src/fixed.c src/trace.c src/render.c src/entity.c src/terrain.c src/chunks.c src/game.c src/kc_main.c
+SRC      := src/kc_libc.c src/arena.c src/fixed.c src/trace.c src/render.c src/entity.c src/terrain.c src/chunks.c src/game.c src/kc_main.c src/cr6.c
 HOST_SRC := host/hal_host.c host/png.c host/main_host.c
 GEN      := gen/kc_tables.h gen/kc_assets.h gen/textures.hex gen/palette.hex
 KC_DEFS  := $(if $(KC_GEN_BITMAP),-DKC_GEN_BITMAP=$(KC_GEN_BITMAP)) $(if $(KC_TAG_PERSIST),-DKC_TAG_PERSIST=$(KC_TAG_PERSIST)) \
@@ -32,7 +33,7 @@ CHIP_LDFLAGS := -Wl,--gc-sections,--entry=_start
 # triangle) stay at -O2; lane-0 game code is built for size: IMEM is 32 KB.
 KERNEL_OPT := -O2
 GAME_OPT   := -Os
-GAME_FILES := arena.c terrain.c chunks.c game.c kc_main.c
+GAME_FILES := arena.c terrain.c chunks.c game.c kc_main.c cr6.c
 chip_opt    = $(if $(filter $(GAME_FILES),$(notdir $(1))),$(GAME_OPT),$(KERNEL_OPT))
 
 # Per-frame arena size override, applied to the laptop AND chip builds alike (default 8 KB in
@@ -42,7 +43,7 @@ CFLAGS     += -DARENA_SIZE=$(ARENA_SIZE)
 CHIP_FLAGS += -DARENA_SIZE=$(ARENA_SIZE)
 endif
 
-.PHONY: all shots play vectors contract models bench chip chip8 clean FORCE
+.PHONY: all shots play vectors contract models cr6 bench chip chip8 clean FORCE
 all: build/kc_host
 
 $(GEN): tools/gen_assets.py $(wildcard assets/textures.png)
@@ -65,6 +66,8 @@ contract: build/kc_host
 	./build/kc_host contract
 models: build/kc_host
 	mkdir -p out/models && ./build/kc_host models out/models
+cr6: build/kc_host
+	mkdir -p out/cr6 && ./build/kc_host cr6 out/cr6
 bench: build/kc_host
 	./build/kc_host bench
 

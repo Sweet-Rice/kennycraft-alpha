@@ -60,6 +60,7 @@ def main(argv=None):
         pygame.K_SPACE: 0x20,
         pygame.K_LEFT: 0x10, pygame.K_RIGHT: 0x11, pygame.K_UP: 0x12, pygame.K_DOWN: 0x13,
         pygame.K_j: 0x6A, pygame.K_k: 0x6B,
+        pygame.K_e: 0x65, pygame.K_y: 0x79, pygame.K_n: 0x6E,   # CR6: talk, accept, decline
         **{getattr(pygame, f'K_{n}'): 0x30 + n for n in range(1, 10)},
     }
     connection = None

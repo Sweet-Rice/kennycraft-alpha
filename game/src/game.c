@@ -5,6 +5,7 @@
 #include "terrain.h"
 #include "trace.h"
 #include "render.h"
+#include "cr6.h"
 #include "kc_hal.h"
 
 kc_player kc_me;
@@ -59,12 +60,14 @@ static int32_t move_axis(int32_t a, q16 delta) {
     return 1;
 }
 
-static int32_t box_overlaps_block(int32_t bx, int32_t by, int32_t bz) {
+int32_t player_overlaps(int32_t x0, int32_t y0, int32_t z0, int32_t x1, int32_t y1, int32_t z1) {
     const q16 *p = kc_me.pos;
-    return qfloor(p[0] - HALF_W) <= bx && bx <= qfloor(p[0] + HALF_W - 1)
-        && qfloor(p[1]) <= by && by <= qfloor(p[1] + HEIGHT - 1)
-        && qfloor(p[2] - HALF_W) <= bz && bz <= qfloor(p[2] + HALF_W - 1);
+    return qfloor(p[0] - HALF_W) <= x1 && x0 <= qfloor(p[0] + HALF_W - 1)
+        && qfloor(p[1]) <= y1 && y0 <= qfloor(p[1] + HEIGHT - 1)
+        && qfloor(p[2] - HALF_W) <= z1 && z0 <= qfloor(p[2] + HALF_W - 1);
 }
+
+static int32_t box_overlaps_block(int32_t bx, int32_t by, int32_t bz) { return player_overlaps(bx, by, bz, bx, by, bz); }
 
 // ---------------------------------------------------------------- view vectors ----------
 static void view_vectors(q16 fwd[3], q16 right[3], q16 up[3]) {
@@ -151,6 +154,7 @@ static void game_key(uint8_t b) {
     case KEY_DOWN:  bit = H_DOWN; break;
     case KEY_BREAK: if (down) kc_me.want_break = 1; return;   // done in pick_and_edit()
     case KEY_PLACE: if (down) kc_me.want_place = 1; return;
+    case KEY_E: case KEY_Y: case KEY_N: if (down) cr6_key(b & 0x7F); return;
     default:
         if ((b & 0x7F) >= '1' && (b & 0x7F) <= '9' && down) kc_me.selected = (uint8_t)((b & 0x7F) - '1');
         return;
@@ -159,8 +163,11 @@ static void game_key(uint8_t b) {
 }
 
 void read_keys(void) {
-    while (hal_mmio_r(MMIO_UART_STATUS) & 1u)
-        game_key((uint8_t)hal_mmio_r(MMIO_UART_RX));
+    while (hal_mmio_r(MMIO_UART_STATUS) & 1u) {
+        uint8_t b = (uint8_t)hal_mmio_r(MMIO_UART_RX);
+        if (!cr6_byte(b)) game_key(b);
+    }
+    cr6_end_drain();   // CR6 commands ran above, before world_update / pick_and_edit
 }
 
 void move_player(q16 dt) {
@@ -311,4 +318,5 @@ void game_draw_overlay(void) {
                 put(sx + u, y0 + v, edge ? border : fill);
             }
     }
+    cr6_draw_hud(W);
 }

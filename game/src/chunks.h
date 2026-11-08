@@ -41,8 +41,8 @@ int     world_loaded(int x, int z);            // block column's chunk is loaded
 uint32_t world_stats_generated(void);          // chunks generated since boot
 uint32_t world_stats_tag_hits(void);           // loads whose tag matched (0 with KC_GEN_BITMAP)
 uint32_t world_stats_tag_misses(void);         // loads with no matching tag, then generated
+uint32_t world_boot_count(void);              // this boot's DDR3 boot counter (CR6 HELLO_ACK)
 #ifdef KC_HOST
-uint32_t world_boot_count(void);              // laptop: this boot's DDR3 boot counter
 uint32_t world_boot_nonce(void);              // laptop: this boot's chunk tag nonce
 void    world_reboot(void);                    // laptop: forget all state, as a reset would
 #endif
