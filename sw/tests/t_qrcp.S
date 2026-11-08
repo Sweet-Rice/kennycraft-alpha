@@ -4,8 +4,12 @@
 # values, negatives, powers of two and neighbours) and XORs each QRCP result
 # with fixed.c qrcp() of that input; QRCP x0 must write nothing; QRCP under
 # the mask 0xA5 must leave inactive lanes' rd alone; QRCP with rd = rs1 must
-# read rs1 first. Each lane stores its OR of XORs and its masked result, and
-# lane 0 checks all eight after SCALAR.
+# read rs1 first. A second pass sends one input through every seed ROM
+# bucket, x = (256 + i) << 8 for i = 0..255 (32 QRCPs per lane), against
+# sw/tests/t_qrcp_buckets.inc, generated from fixed.c qrcp() by
+# `make qrcp-bench-inc` (tb-qrcp-model checks it is current). Each lane
+# stores its ORs of XORs and its masked result, and lane 0 checks all eight
+# after SCALAR.
     .include "sw/tests/test.inc"
 
     .globl main
@@ -63,13 +67,34 @@ main:
     xor   t3, t2, s7
     or    s9, s9, t3
 
+    # Seed ROM pass: lane l takes x = (256 + 8k + l) << 8 for k = 0..31, so
+    # the 8 lanes cover every bucket m[15:8] = 8k + l once (qr_bkt_exp).
+    la    t0, qr_bkt_exp
+    add   t0, t0, s1
+    addi  t1, s0, 256
+    slli  t1, t1, 8                     # k = 0
+    li    s10, 0
+    li    t4, 0
+    li    t5, 32
+4:  .insn r 0x0B, 2, 0, a3, t1, x0      # QRCP a3, t1
+    lw    t2, 0(t0)
+    xor   t2, t2, a3
+    or    s10, s10, t2
+    li    t3, 8 << 8
+    add   t1, t1, t3                    # next k
+    addi  t0, t0, 32
+    addi  t4, t4, 1
+    bne   t4, t5, 4b                    # uniform: same count in every lane
+
     la    t0, qr_err
     add   t0, t0, s1
     sw    s9, 0(t0)                     # per-lane OR of XORs
     sw    a1, 32(t0)                    # per-lane masked result
+    sw    s10, 64(t0)                   # per-lane seed ROM pass OR of XORs
     SCALAR
 
-    # Lane 0 checks every lane: qr_err[l] = 0, qr_err[8 + l] = qr_mask[l]
+    # Lane 0 checks every lane: qr_err[l] = 0, qr_err[8 + l] = qr_mask[l],
+    # qr_err[16 + l] = 0
     la    s2, qr_err
     la    s3, qr_mask
     li    s4, 0
@@ -83,7 +108,11 @@ main:
     beq   t0, t1, 3f
     addi  a0, s4, 11                    # FAIL 11..18: lane 0..7 masked rd
     j     .Lqr_fail
-3:  addi  s2, s2, 4
+3:  lw    t0, 64(s2)
+    beqz  t0, 5f
+    addi  a0, s4, 21                    # FAIL 21..28: lane 0..7 seed ROM pass
+    j     .Lqr_fail
+5:  addi  s2, s2, 4
     addi  s3, s3, 4
     addi  s4, s4, 1
     bne   s4, s5, 1b
@@ -110,4 +139,5 @@ qr_exp:                                 # fixed.c qrcp() of qr_in
 qr_mask:                                # a1 after QRCP under 0xA5: row 1 result or the preset
     .word 0x0000FFFF, 0x5A5A0001, 0x0000FFFF, 0x5A5A0003, 0x5A5A0004, 0x33334000, 0x5A5A0006, 0x1FFFE000
 qr_err:
-    .space 64, 0xFF
+    .space 96, 0xFF
+    .include "sw/tests/t_qrcp_buckets.inc"
