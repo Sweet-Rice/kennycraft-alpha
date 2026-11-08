@@ -45,7 +45,7 @@ DEMO_SITE = (DEMO_PLOT_W - 2, 10, DEMO_PLOT_W - 2)           # inside the plot's
 DEMO_MOBS = [("banker", 0, -6.5, 9.5, 1), ("builder", 1, 0.5, 16.5, 1), ("trader", 0, 7.5, 9.5, 1),
              ("chicken", 2, -7.5, 2.5, 1.5), ("chicken", 2, -6.5, 3.5, 1.5), ("chicken", 2, -7.5, 4.5, 1.5)]
 TALKERS = ("banker", "builder", "trader")
-DEMO_START = 300        # KCN the player has when kc-host starts in the demo (topped up from the treasury)
+DEMO_START = int(os.environ.get("KC_START", 300))   # KCN the player starts with in the demo (topped up from the treasury; the HUD holds up to 65535)
 DEMO_CAP = 400          # price cap for builds on the 12x12 plot (200 elsewhere)
 RETRY = ("RATE", "BUSY")
 EXPLORER = "https://explorer.solana.com/tx/{}?cluster=devnet"
@@ -115,6 +115,8 @@ class Job:
         res = self.sync(self.orch.edit(self, op, payload))
         if res == "OK":
             self.mirror.update(cells)
+        else:
+            print(time.strftime("%H:%M:%S"), f"#{self.id} chip said {res} to op 0x{op:02X} {payload.hex()}", file=sys.stderr, flush=True)
         return res == "OK"
 
     def place(self, x, y, z, b):
