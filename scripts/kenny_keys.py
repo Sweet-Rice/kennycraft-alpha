@@ -15,8 +15,14 @@ Opening or closing the port may reset the game: the Arty resets the design on a 
 and Windows raises DTR on open and drops it on close.
 """
 import argparse
+import json
 import os
 import sys
+import textwrap
+import threading
+import time
+import urllib.error
+import urllib.request
 
 os.environ.setdefault('PYGAME_HIDE_SUPPORT_PROMPT', '1')
 import pygame  # noqa: E402
@@ -48,33 +54,95 @@ def look_bytes(acc, sens):
     return bytes(out)
 
 
+class KcHost:
+    """The serial calls main() uses, sent to kc-host's /api/input; kc-host shows the board's text.
+    state is kc-host's latest dashboard snapshot (its /events stream), for talking to villagers."""
+    def __init__(self, url):
+        self.url, self.state = url.rstrip('/'), {}
+        threading.Thread(target=self._watch, daemon=True).start()
+
+    def post(self, path, body):
+        """POST JSON to kc-host; returns its error text, '' when it took it."""
+        req = urllib.request.Request(self.url + path, json.dumps(body).encode(), {'Content-Type': 'application/json'})
+        try:
+            urllib.request.urlopen(req, timeout=25).close()
+            return ''
+        except urllib.error.HTTPError as err:
+            try:
+                return json.loads(err.read()).get('detail', str(err))
+            except ValueError:
+                return str(err)
+
+    def _watch(self):
+        while True:
+            try:
+                with urllib.request.urlopen(self.url + '/events', timeout=60) as stream:
+                    for line in stream:
+                        if line.startswith(b'data: '):
+                            self.state = json.loads(line[6:])
+            except (OSError, ValueError):
+                time.sleep(1)
+
+    def write(self, data):
+        self.post('/api/input', {'hex': data.hex()})
+
+    def read(self, n):
+        return b''
+
+    def close(self):
+        pass
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--port', default='COM5', help='board UART (default %(default)s; Linux /dev/ttyUSB1)')
     ap.add_argument('--sens', type=float, default=4.0, help='mouse pixels per look step (default %(default)s)')
+    ap.add_argument('--kchost', nargs='?', const='http://127.0.0.1:8000', metavar='URL',
+                    help='send through a running kc-host (KC_CHIP=serial owns the port) instead of opening it')
     args = ap.parse_args()
 
     try:
-        uart = serial.Serial(args.port, baudrate=1_000_000, timeout=0, write_timeout=1)
+        if args.kchost:
+            uart = KcHost(args.kchost)
+            args.port = args.kchost
+        else:
+            uart = serial.Serial(args.port, baudrate=1_000_000, timeout=0, write_timeout=1)
     except serial.SerialException as err:
         print(f'kenny_keys: {err}', file=sys.stderr)
         return 5
 
     pygame.display.init()
     pygame.font.init()
-    screen = pygame.display.set_mode((520, 120))
+    screen = pygame.display.set_mode((640, 260) if args.kchost else (520, 120))
     pygame.display.set_caption(f'Kenny keys ({args.port})')
+    pygame.key.start_text_input()
     font = pygame.font.Font(None, 24)
     held, acc = set(), [0.0, 0.0]
     grabbed = False
     slot = 0
+    talk = None             # villager being talked to (E in game opens it, via kc-host)
+    typed, err, closed, shown = '', '', None, None
 
     def draw():
+        nonlocal shown
+        lines = [(line, (220, 220, 220)) for line in HELP]
+        lines.append((f'{args.port}  {"mouse captured" if grabbed else "mouse free"}  slot {slot + 1}', (120, 200, 120)))
+        state = getattr(uart, 'state', {})
+        if talk:
+            lines += [(f'Talking to the {talk}: type, Enter sends, Esc closes', (240, 210, 120)),
+                      ('> ' + typed[-70:] + '_', (255, 255, 255))]
+        elif state.get('contracts'):    # the newest answer: the villager's reply and how the job stands
+            j = state['contracts'][0]
+            reply = f"{j['kind']} #{j['id']} {j['state']}: {j['note'] or j['text']}"
+            lines += [(line, (240, 210, 120)) for line in textwrap.wrap(reply, 66)[:5]]
+        if err:
+            lines.append((err[:80], (240, 120, 120)))
+        if lines == shown:
+            return
+        shown = lines
         screen.fill((24, 24, 24))
-        for i, line in enumerate(HELP):
-            screen.blit(font.render(line, True, (220, 220, 220)), (12, 12 + 26 * i))
-        state = 'mouse captured' if grabbed else 'mouse free'
-        screen.blit(font.render(f'{args.port}  {state}  slot {slot + 1}', True, (120, 200, 120)), (12, 12 + 26 * 3))
+        for i, (line, color) in enumerate(lines):
+            screen.blit(font.render(line, True, color), (12, 12 + 24 * i))
         pygame.display.flip()
 
     def send(data):
@@ -99,9 +167,28 @@ def main():
     try:
         clock = pygame.time.Clock()
         while True:
+            prompt = getattr(uart, 'state', {}).get('prompt')
+            if prompt is None:
+                closed = None
+            elif prompt != closed and not talk:     # E on a villager: type here, not into the game
+                talk, typed, err = prompt, '', ''
+                release_all()
+                if grabbed:
+                    grab(False)
             for ev in pygame.event.get():
                 if ev.type == pygame.QUIT:
                     return 0
+                if talk:
+                    if ev.type == pygame.TEXTINPUT:
+                        typed = (typed + ev.text)[:200]
+                    elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_BACKSPACE:
+                        typed = typed[:-1]
+                    elif ev.type == pygame.KEYDOWN and ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_ESCAPE):
+                        if ev.key != pygame.K_ESCAPE:
+                            err = uart.post('/api/request', {'kind': talk, 'text': typed.strip() or 'hello'})
+                        uart.post('/api/close', {})
+                        closed, talk = talk, None
+                    continue
                 if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
                     if grabbed:
                         release_all()
@@ -134,6 +221,7 @@ def main():
                 elif ev.type == pygame.MOUSEMOTION and grabbed:
                     acc[0] += ev.rel[0]
                     acc[1] += ev.rel[1]
+            draw()
             look = look_bytes(acc, args.sens)
             if look:
                 send(look)
