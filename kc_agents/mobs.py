@@ -1,6 +1,6 @@
 """Mob brains at two sizes.
 
-- Pigs and zombies: rules only (wander, flee, chase). A model adds lag and nothing visible.
+- Chickens and zombies: rules only (wander, flee, chase). A model adds lag and nothing visible.
 - Villagers (trader, contractor): a small Nemotron Nano agent. One JSON decision per call,
   two villagers per call, with a short memory. Any timeout, error or bad answer falls back
   to the rules, so the game never waits on the model.
@@ -48,7 +48,7 @@ def rule_decision(mob, pos, player, rnd):
     dist = math.hypot(dx, dz)
     if mob.kind == KINDS["zombie"] and dist < 12:
         return {"act": "chase", "dx": dx, "dz": dz}
-    if mob.kind == KINDS["pig"] and dist < 3:
+    if mob.kind == KINDS["chicken"] and dist < 3:
         k = 4 / max(dist, 0.1)
         return {"act": "flee", "dx": -dx * k, "dz": -dz * k}
     if mob.kind in VILLAGERS and dist < 5 and not mob.greeted:

@@ -22,13 +22,13 @@ class TestRules(unittest.TestCase):
 
     def test_pig_flees(self):
         mm = manager()
-        p = mm.spawn("pig", 101, 100)
+        p = mm.spawn("chicken", 101, 100)
         mm.step(0, (100, 100))
         self.assertGreater(mm.chip.ents[p]["tgt"][0], 101)
 
     def test_only_eight_mobs(self):
         mm = manager()
-        ids = [mm.spawn("pig", 100 + i, 100) for i in range(9)]
+        ids = [mm.spawn("chicken", 100 + i, 100) for i in range(9)]
         self.assertEqual(ids[:8], list(range(8)))
         self.assertIsNone(ids[8])
 
@@ -55,7 +55,7 @@ class TestValidation(unittest.TestCase):
         self.assertEqual(validate(c, {"act": "offer_job"}, (0, 0), (0, 0))[0], "offer_job")
 
     def test_pigs_never_talk(self):
-        p = Mob(0, KINDS["pig"], (0, 0))
+        p = Mob(0, KINDS["chicken"], (0, 0))
         self.assertEqual(validate(p, {"act": "wander", "say": "oink"}, (0, 0), (0, 0))[3], "")
 
 
@@ -70,11 +70,11 @@ class TestModelBrain(unittest.TestCase):
         mm = manager(chat)
         for k in ("trader", "contractor", "trader"):
             mm.spawn(k, 103, 103)
-        mm.spawn("pig", 110, 110)
+        mm.spawn("chicken", 110, 110)
         mm.step(0, (100, 100))
         self.assertEqual(calls, [[0, 1], [2]])
         self.assertEqual(mm.stats["model"], 3)
-        self.assertEqual(mm.stats["rules"], 1)                    # the pig
+        self.assertEqual(mm.stats["rules"], 1)                    # the chicken
         self.assertEqual(mm.chip.ents[0]["tgt"], [100, 100])      # follow -> walks to the player
 
     def test_model_failure_falls_back_to_rules(self):
@@ -104,7 +104,7 @@ class TestModelBrain(unittest.TestCase):
 
     def test_wrong_ids_are_matched_by_order(self):
         mm = manager(lambda m: {"decisions": [{"id": 0, "act": "idle"}, {"id": 1, "act": "follow"}]})
-        mm.spawn("pig", 120, 120)                                  # takes id 0, so the villagers are 1 and 2
+        mm.spawn("chicken", 120, 120)                                  # takes id 0, so the villagers are 1 and 2
         a, b = mm.spawn("trader", 103, 103), mm.spawn("contractor", 104, 104)
         done = {i: act for i, act, _ in mm.step(0, (100, 100))}
         self.assertEqual((done[a], done[b]), ("idle", "follow"))
@@ -116,7 +116,7 @@ class TestModelBrain(unittest.TestCase):
 class TestFakeChipWalking(unittest.TestCase):
     def test_walks_at_kind_speed_and_stands_on_ground(self):
         chip = FakeChip()
-        chip.spawn(0, KINDS["pig"], 100.5, 100.5)
+        chip.spawn(0, KINDS["chicken"], 100.5, 100.5)
         chip.move(0, 104.5, 100.5)
         for _ in range(4):
             chip.tick(0.5)

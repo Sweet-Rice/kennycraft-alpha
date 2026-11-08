@@ -40,7 +40,7 @@ def main():
         nano = nano_json()
     mobs = MobManager(chip, nano)
     px, pz = 100.0, 100.0
-    for kind, dx, dz in (("pig", 6, 2), ("zombie", -14, 9), ("trader", 3, -5), ("contractor", -4, -3)):
+    for kind, dx, dz in (("chicken", 6, 2), ("zombie", -14, 9), ("trader", 3, -5), ("contractor", -4, -3)):
         mobs.spawn(kind, px + dx, pz + dz)
 
     print(f"== 20 s of mob life ({'Nemotron Nano villagers' if nano else 'rules only'})")
