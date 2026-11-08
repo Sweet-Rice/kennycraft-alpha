@@ -24,9 +24,10 @@
 //        cycle), loads and stores with an active
 //        lane: one cycle to load the bus request register
 //        (rtl/core_pipe/lsu_pipe.sv), one per LSU bus access (one per group
-//        of coalesced lanes), plus one, except a store whose bus lanes all
-//        go to dmem or the framebuffer (no extra cycle); MUL and everything
-//        else 1.
+//        of coalesced lanes), plus one (a store's tail) or two (a load's
+//        read data, registered in the LSU), except a store whose bus lanes
+//        all go to dmem or the framebuffer (no extra cycle); MUL and
+//        everything else 1.
 //        Retirement happens here
 //   WB   every lane writes rd
 //
@@ -327,7 +328,7 @@ module core_pipe
     logic [31:0]      vt_y [LANES];
     logic [LANES-1:0] l_cmp, nonzero, ld_cap, mis;
     logic [31:0]      ld_value [LANES];
-    // Load data for the lanes: the bus LSU's (ld_cap / ld_value, the cycle
+    // Load data for the lanes: the bus LSU's (ld_cap / ld_value, two cycles
     // after an access) or the dmem window's (win_srv / win_val, the cycle the
     // lane is served). A lane is either a bus lane or a window lane.
     logic [LANES-1:0] l_cap, win_srv, win_lane;
@@ -604,7 +605,7 @@ module core_pipe
         end else if (m_ready) begin
             m_valid <= e_valid && !e_vt_hold;
             m_walk  <= e_lsu_go;
-        end else if (lsu_done) begin
+        end else if (lsu_idle) begin
             m_walk  <= 1'b0;
         end
     end
@@ -662,17 +663,18 @@ module core_pipe
     // (m_cnt stops at 7).
     assign qr_s0  = m_valid && m_qr && (m_cnt == 3'd0);
 
-    // A load or store is done when the bus LSU has no lane left (none
-    // pending and its request register empty: the cycle after its last
-    // access, when a load's data arrives) and the dmem window serves its
-    // last lanes (or has none).
+    // A load or store is done when the bus LSU has no lane left and no read
+    // data in flight (none pending, its request register empty and no read
+    // accepted last cycle: a store, the cycle after its last access; a load,
+    // two cycles after, when its data leaves the LSU's read register) and
+    // the dmem window serves its last lanes (or has none).
     //
     // A store whose bus lanes all go to dmem or the framebuffer is done in
     // the cycle its last group goes out (st_fast): rtl/soc/decoder.sv answers
     // ready = req for both (BRAM / strobe ports) and vt_block never holds
     // them, so such a store sends one group per cycle, the first in MEM's
     // second cycle (rtl/core_pipe/lsu_pipe.sv loads its request register in
-    // the first). Loads keep the extra cycle (their data arrives then); a
+    // the first). Loads keep the extra cycles (their data arrives then); a
     // store with a world, texture, MMIO, palette or unmapped lane waits for
     // the bus LSU to be idle.
     //

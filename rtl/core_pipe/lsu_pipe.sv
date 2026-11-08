@@ -1,8 +1,9 @@
 // Load/store unit of the pipelined core (rtl/core_pipe/core_pipe.sv): the
 // coalescing LSU of rtl/core/lsu.sv (same groups, same order, same byte
-// enables and data, see its header) with the bus request registered, so the
-// SoC sees a request that comes straight from flops and no lane select
-// reaches a slave's address. The multi-cycle core keeps rtl/core/lsu.sv.
+// enables and data, see its header) with the bus request and the read data
+// registered, so the SoC sees a request that comes straight from flops (no
+// lane select reaches a slave's address) and a slave's read data reaches a
+// flop before the byte extract. The multi-cycle core keeps rtl/core/lsu.sv.
 //
 // start (EX) loads the pending set with the active mask. While go (MEM walks
 // the LSU) a priority encoder picks the lowest pending lane, nxt, and the
@@ -16,14 +17,16 @@
 // G groups take G + 1 cycles, one more than rtl/core/lsu.sv.
 //
 // done is the cycle the bus accepts q's last group, idle no lane left for
-// the bus (none pending, q empty). idle comes from registers, done from
-// bus_ready. hold (the core's vt_block, from q's address) keeps bus_req
-// low; q waits with it.
+// the bus and no read data in flight (none pending, q empty, no read
+// accepted last cycle). idle comes from registers, done from bus_ready.
+// hold (the core's vt_block, from q's address) keeps bus_req low; q waits
+// with it.
 //
 // The core's MEM completion reads only registers, so the LSU also gives two
 // of next cycle's values for it to register:
-//   idle_nx  next cycle's idle: idle, or the bus accepts the last group now
-//            (q empties and is not loaded again).
+//   idle_nx  next cycle's idle: no lane pending, and q empty or a store's
+//            last group accepted now (q empties and is not loaded again; a
+//            load's accept puts read data in flight instead).
 //   fast_nx  next cycle, the bus accepts the last group of a store whose
 //            bus lanes all go to dmem or the framebuffer: the lanes left
 //            pending are all in one dmem or framebuffer word (they are the
@@ -34,14 +37,18 @@
 //            after. fast_nx reads the address registers and pending, not the
 //            priority encoder.
 //
-// Loads. The bus returns read data the cycle after an access is accepted
-// (ld_cap marks the group's lanes then); ld_value[i] is lane i's byte,
-// halfword or word of it at lane i's own address, extended per funct3. The
-// addresses are core_pipe's MEM-stage registers, stable until the load's
-// last data has arrived (MEM holds the load until idle).
+// Loads. The bus returns read data the cycle after an access is accepted;
+// rdata_q registers it, so the data reaches the lanes two cycles after the
+// accept (ld_cap marks the group's lanes then): G groups of a load take
+// G + 3 MEM cycles, two more than rtl/core/lsu.sv. ld_value[i] is lane i's
+// byte, halfword or word of rdata_q at lane i's own address, extended per
+// funct3. The addresses are core_pipe's MEM-stage registers, stable until
+// the load's last data has arrived (MEM holds the load until idle).
 //
 // Timing. bus_ready reaches pending, q's load enable and the load-capture
 // registers; the group logic needs only pending and the address registers.
+// bus_rdata (the decoder's region mux of the slaves' outputs) ends at
+// rdata_q; the extract and extend start there.
 module lsu_pipe
     import kc_isa_pkg::*;
 #(
@@ -172,6 +179,7 @@ module lsu_pipe
     /* verilator lint_on UNUSEDSIGNAL */
     logic [31:0]      q_addr, q_wdata;
     logic [3:0]       q_be;
+    logic             fl_v;      // a read was accepted last cycle: data in flight
 
     assign bus_req   = q_v && !hold;
     assign bus_we    = is_store;
@@ -182,8 +190,8 @@ module lsu_pipe
     assign accept  = bus_req && bus_ready;
     assign load    = go && (!q_v || accept);
     assign done    = accept && q_last;
-    assign idle    = (pend == '0) && !q_v;
-    assign idle_nx = idle || done;
+    assign idle    = (pend == '0) && !q_v && !fl_v;
+    assign idle_nx = (pend == '0) && (!q_v || (accept && is_store));
 
     always_comb begin
         one = (pend != '0);
@@ -217,13 +225,23 @@ module lsu_pipe
     end
 
     // ------------------------------------------------------------------
-    // Load return: q's group, the cycle after its access
+    // Load return: q's group's data in bus_rdata the cycle after its access
+    // (fl), in rdata_q the cycle after that (ld_cap)
     // ------------------------------------------------------------------
-    logic [LANES-1:0] cap_q;
+    logic [LANES-1:0] fl_q, cap_q;
+    logic [31:0]      rdata_q;
 
     always_ff @(posedge clk) begin
-        if (rst) cap_q <= '0;
-        else     cap_q <= (accept && !is_store) ? q_group : '0;
+        if (rst) begin
+            fl_v  <= 1'b0;
+            fl_q  <= '0;
+            cap_q <= '0;
+        end else begin
+            fl_v  <= accept && !is_store;
+            fl_q  <= (accept && !is_store) ? q_group : '0;
+            cap_q <= fl_q;
+        end
+        rdata_q <= bus_rdata;
     end
 
     assign ld_cap = cap_q;
@@ -232,8 +250,8 @@ module lsu_pipe
         logic [7:0]  byte_v;
         logic [15:0] half_v;
 
-        assign byte_v = bus_rdata[addr[i][1:0]*8 +: 8];
-        assign half_v = addr[i][1] ? bus_rdata[31:16] : bus_rdata[15:0];
+        assign byte_v = rdata_q[addr[i][1:0]*8 +: 8];
+        assign half_v = addr[i][1] ? rdata_q[31:16] : rdata_q[15:0];
 
         always_comb begin
             unique case (funct3)
@@ -241,7 +259,7 @@ module lsu_pipe
                 F3_LBU:  ld_value[i] = {24'b0, byte_v};
                 F3_LH:   ld_value[i] = {{16{half_v[15]}}, half_v};
                 F3_LHU:  ld_value[i] = {16'b0, half_v};
-                default: ld_value[i] = bus_rdata;   // LW
+                default: ld_value[i] = rdata_q;   // LW
             endcase
         end
     end

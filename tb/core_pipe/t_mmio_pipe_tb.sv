@@ -8,14 +8,16 @@
 //                                      CYCLES LW, the CHUNK_CMD SW, and the
 //                                      model's STALL + 1 cycles of bus_ready
 //                                      low on that SW
-// Pipelined: CPI_LW = 3, CPI_SW = 3 (one cycle to load the LSU's bus
-// request register, rtl/core_pipe/lsu_pipe.sv, one bus cycle and MEM's tail;
-// the next instruction's EX overlaps the tail), so 3 and 44. The multi-cycle
-// core passes with -GCPI_LW=5 -GCPI_SW=4 (5 and 47, tb/core/t_mmio_tb.sv).
+// Pipelined: CPI_LW = 4, CPI_SW = 3 (one cycle to load the LSU's bus
+// request register, rtl/core_pipe/lsu_pipe.sv, one bus cycle, and MEM's
+// tail: one cycle for a store, two for a load, whose read data the LSU
+// registers; the next instruction's EX overlaps the tail), so 4 and 45. The
+// multi-cycle core passes with -GCPI_LW=5 -GCPI_SW=4 (5 and 47,
+// tb/core/t_mmio_tb.sv).
 module t_mmio_pipe_tb;
     parameter string IMEM_HEX = "";
     parameter string DMEM_HEX = "";
-    parameter int    CPI_LW   = 3;
+    parameter int    CPI_LW   = 4;
     parameter int    CPI_SW   = 3;
     `include "soc_harness.svh"
 
