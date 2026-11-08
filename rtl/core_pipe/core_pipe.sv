@@ -366,6 +366,12 @@ module core_pipe
                        ((e_mem && ((mis & mask) != '0)) || (take && target[1]));
     assign e_halt    = e_fault || e_diverge || e_divstack || e_illegal;
 
+    // LSU start. A load or store halts only on e_fault or a misaligned
+    // active lane (no DIVERGE, DIVSTACK or jump), so this equals
+    // e_go && e_mem && !e_halt without the uniform-check cone.
+    logic e_lsu_go;
+    assign e_lsu_go = e_go && e_mem && !e_fault && ((mis & mask) == '0);
+
     always_comb begin
         e_err = '0;
         e_err[ERR_ILLEGAL]  = e_fault || e_illegal;
@@ -448,7 +454,7 @@ module core_pipe
             m_walk  <= 1'b0;
         end else if (m_ready) begin
             m_valid <= e_valid;
-            m_walk  <= e_go && e_mem && !e_halt;
+            m_walk  <= e_lsu_go;
         end else if (lsu_done) begin
             m_walk  <= 1'b0;
         end
@@ -508,7 +514,7 @@ module core_pipe
     // look at MEM's funct3.
     lsu #(.LANES(LANES)) u_lsu (
         .clk, .rst,
-        .start(e_go && e_mem && !e_halt), .active(mask),
+        .start(e_lsu_go), .active(mask),
         .go(m_walk), .is_store(m_is_store), .funct3(m_funct3),
         .addr(l_res), .rs2(l_mrs2), .done(lsu_done),
         .ex_addr_lo(lsu_lo), .misaligned(lsu_mis),
