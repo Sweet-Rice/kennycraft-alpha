@@ -2,8 +2,10 @@
 // tb/qrcp/qrcp_check.c (x and fixed.c qrcp(x), one "x expected" hex pair per
 // line: every edge class plus random inputs). Each vector runs the core's
 // sequence: load in EX, then phases 0..3 in the wait state; y is read in
-// phase 4, where the core latches it into rd. Between vectors x changes and
-// the unit idles a cycle, so no state can leak from one input to the next.
+// phase 4, where the core latches it into rd. x is inverted right after the
+// load cycle, so the unit must sample x only at load (rs1 need not stay
+// stable while QRCP runs). Between vectors the unit idles a cycle, so no
+// state can leak from one input to the next.
 module qrcp_unit_tb;
     logic        clk = 1'b0;
     logic        load = 1'b0, en = 1'b0;
@@ -31,6 +33,7 @@ module qrcp_unit_tb;
             load = 1'b1;                    // EX
             @(negedge clk);
             load = 1'b0;
+            x    = ~vx;                     // x is only valid at load
             en   = 1'b1;
             for (int k = 0; k < 4; k++) begin
                 ph = 3'(k);
@@ -44,7 +47,6 @@ module qrcp_unit_tb;
             @(negedge clk);
             en = 1'b0;
             ph = 3'd0;
-            x  = ~vx;                       // garbage between instructions
             count++;
         end
         $fclose(fd);
