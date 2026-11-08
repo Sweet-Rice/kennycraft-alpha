@@ -166,7 +166,7 @@ def main():
             colors = {'you': (160, 200, 255), '!': (240, 120, 120)}
             chat = [(line, colors.get(who, (240, 210, 120)))
                     for who, text in chats.get(talk, []) for line in textwrap.wrap(f'{who}: {text}', 66)]
-            lines += [(f'Chat with the {talk}: Enter sends, Esc closes', (150, 150, 150))] + chat[-7:]
+            lines += [(f'Chat with the {talk}: Enter sends, Esc or click to play', (150, 150, 150))] + chat[-7:]
             lines.append(('> ' + typed[-70:] + '_', (255, 255, 255)))
         if lines == shown:
             return
@@ -219,9 +219,11 @@ def main():
                     elif ev.type == pygame.KEYDOWN and ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER) and typed.strip():
                         send_chat(typed.strip())
                         typed = ''
-                    elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
+                    elif (ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE) or ev.type == pygame.MOUSEBUTTONDOWN:
                         uart.post('/api/close', {})
                         closed, talk = talk, None
+                        if ev.type == pygame.MOUSEBUTTONDOWN:
+                            grab(True)          # a click goes straight back to the game
                     continue
                 if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
                     if grabbed:
