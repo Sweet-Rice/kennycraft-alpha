@@ -26,9 +26,9 @@
 // The boot nonce hashes a boot counter kept in DDR3 with CYCLES once the startup loads have
 // landed, so it differs per reset even when boot timing repeats exactly, and chunks stored
 // by an earlier boot don't match (as with the bitmap, they're regenerated). The counter
-// lives in chunk (0, 0)'s y = 0 row z = 2 (BOOT_CELLS nibbles: count, then a check hash):
+// lives in chunk (1, 0)'s y = 0 row z = 2 (BOOT_CELLS nibbles: count, then a check hash):
 // every boot loads that chunk, bumps the count, and stores it back before anything else;
-// whenever chunk (0, 0) is stored later its tag write puts the count back, and a tag clear
+// whenever chunk (1, 0) is stored later its tag write puts the count back, and a tag clear
 // or generation turns the cells to bedrock like the tag cells. A failed check (power-on
 // DRAM) starts the count from the garbage itself. KC_TAG_PERSIST=1 fixes the nonce at 0: chunks survive a reset. Random DRAM
 // matches with probability 2^-128 per load; a constant fill or another chunk's bytes
@@ -61,7 +61,8 @@
 
 #define TAG_CELLS 32                           // y = 0, z = 0..1, x = 0..15: 32 nibbles = 128 bits
 #define TAG_FORMAT 0x4B430001u                 // bump if the DDR3 chunk layout changes
-#define BOOT_ID    0                           // chunk (0, 0) holds the boot counter
+#define BOOT_ID    1                           // chunk (1, 0) holds the boot counter (not (0, 0):
+                                               // MIG calibration overwrites DDR3 bytes 0..63)
 #define BOOT_CELLS 16                          // y = 0, z = 2, x = 0..15: count + check hash
 #define BOOT_MAGIC 0x6B63626Fu
 
@@ -147,20 +148,20 @@ static int32_t tag_cells(int32_t id, int32_t mode) {
     return ok;
 }
 
-// Startup, window corner 0: load chunk (0, 0), bump the counter in its boot cells, store it
+// Startup, window corner 0: load chunk BOOT_ID, bump the counter in its boot cells, store it
 // back (tag_cells writes them; its tag cells get a key-0 tag no boot will match). Runs
 // before any window chunk is requested; the engine is in order, so the window's own load of
-// slot 0 comes after this store has read the slot out.
+// that slot comes after this store has read the slot out.
 __attribute__((noinline))   // startup only: keep it out of world_update (.text)
 static void boot_count_bump(void) {
-    chunk_wait(chunk_load(0, 0));
-    slot_valid(0, 0, 1);                                      // reads of an invalid slot are air
+    chunk_wait(chunk_load(BOOT_ID & 255, BOOT_ID >> 8));
+    slot_valid(BOOT_ID & 255, BOOT_ID >> 8, 1);               // reads of an invalid slot are air
     boot_rd[0] = boot_rd[1] = 0;
     tag_cells(BOOT_ID, TAG_READ);
-    slot_valid(0, 0, 0);
+    slot_valid(BOOT_ID & 255, BOOT_ID >> 8, 0);
     boot_count = boot_rd[1] == h32(boot_rd[0] ^ BOOT_MAGIC) ? boot_rd[0] + 1 : h32(boot_rd[0] ^ boot_rd[1]);
     tag_cells(BOOT_ID, TAG_WRITE);
-    chunk_wait(chunk_store(0, 0));
+    chunk_wait(chunk_store(BOOT_ID & 255, BOOT_ID >> 8));
 }
 
 static void puts_nonce(uint32_t v) {

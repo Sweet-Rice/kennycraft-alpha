@@ -395,7 +395,7 @@ static int cmd_play(void) {
         pose(Q16_INT(rx), Q16(30.0), Q16_INT(rz), 0, 0);
         check(world_get(rx, 27, rz) == B_AIR && world_stats_tag_hits() == 0,
               "same-jitter reset: no tag from the previous boot accepted, edit gone");
-        // Visit the world corner: chunk (0, 0) is generated (bedrock over the counter cells)
+        // Visit the world corner: chunk (1, 0) is generated (bedrock over the counter cells)
         // and stored on leaving, so its tag write must put the counter back.
         uint32_t c2 = world_boot_count();
         pose(Q16(8.0), Q16(30.0), Q16(8.0), 0, 0);
@@ -404,7 +404,7 @@ static int cmd_play(void) {
         world_reboot();
         kc_init();
         printf("  boot counter across a corner visit: %u -> %u\n", (unsigned)c2, (unsigned)world_boot_count());
-        check(world_boot_count() == c2 + 1, "boot counter survives chunk (0, 0) being generated and stored in play");
+        check(world_boot_count() == c2 + 1, "boot counter survives chunk (1, 0) being generated and stored in play");
         check(world_boot_nonce() != n2, "nonce changes again after the corner visit");
     }
 
