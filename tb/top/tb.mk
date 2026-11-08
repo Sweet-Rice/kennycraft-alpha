@@ -119,4 +119,5 @@ lint-top:
 	$(VERILATOR) $(VL_LINT) --timing --top-module top $(TOP_RTL)
 	$(VERILATOR) $(VL_LINT) --timing --top-module top -GHAS_RAY_UNIT="1'b1" $(TOP_RTL)
 	$(VERILATOR) $(VL_LINT) --timing --top-module top -GLANES=1 -GHAS_DIV_STACK=0 $(TOP_RTL)
+	$(VERILATOR) $(VL_LINT) --timing --top-module top -GLANES=1 -GHAS_DIV_STACK=0 -GHAS_RAY_UNIT="1'b1" $(TOP_RTL)
 	$(VERILATOR) $(VL_LINT) --top-module world_mem rtl/mem/world_mem.sv
