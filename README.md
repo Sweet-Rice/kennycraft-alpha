@@ -14,6 +14,15 @@ An 8-lane SIMD TPU (Tai Processing Unit) grown from a multi-cycle RV32I core, ru
 - **The laptop side:** a bank companion that settles a KCN token on Solana devnet, and Nemotron
   agents that drive the villagers and a builder contractor over the chip's UART link.
 
+On the board (Arty A7-100T, `top_s2p100` at 100 MHz, the 320×240 game, captured from its video output):
+
+| | |
+| --- | --- |
+| ![Trees and a dirt path on the board, with the overlay reading 98 FPS](docs/board/fps_overlay.png) | ![Two villagers and two chickens on the board](docs/board/villagers.png) |
+| The FPS overlay (F) reads 98 FPS | Villagers and chickens spawned over the CR6 link |
+
+In the laptop build of the same C code, at 160×120 scaled up 4x:
+
 | | |
 | --- | --- |
 | ![The demo village: stalls around a plaza and well](docs/img/village.png) | ![A trader, a contractor, a chicken and a zombie](docs/img/mobs.png) |
@@ -21,12 +30,10 @@ An 8-lane SIMD TPU (Tai Processing Unit) grown from a multi-cycle RV32I core, ru
 | ![A Nether cave of netherrack under a red sky](docs/img/nether.png) | ![Trees and a path fading into the horizon fog](docs/img/horizon.png) |
 | The Nether, through an obsidian portal | Shaded faces and fog to the horizon |
 
-Frames from the laptop build of the same C code the chip runs, at 160×120 and scaled up 4x.
-
 | Result | |
 | --- | --- |
 | Frame rate, pipelined core at 100 MHz (Verilator) | 405 fps at 160×120, 106 fps at 320×240 |
-| On the board | 59.4 new frames/s while turning: the 60 Hz display is the limit |
+| On the board | 98 FPS on the overlay at 320×240; at 160×120, 59.4 new frames/s while turning (the 60 Hz display is the limit) |
 | Timing at 100 MHz | WNS +0.100 ns, every clock met; 27,340 LUT, 111.5 BRAM36 |
 
 How the pieces connect:
@@ -74,8 +81,7 @@ With the villager agents and the bank, run `KC_DEMO=1 KC_CHIP=host python host/k
 then `python scripts/kc.py --kchost` (see [Bank companion](#bank-companion)). Game controls and
 build options are in [`game/README.md`](game/README.md).
 
-This README describes the current state of the files in this repository.
- The
+This README describes the current state of the files in this repository. The
 [GitHub wiki](https://github.com/Sweet-Rice/kennycraft-alpha/wiki) holds the
 design history; decision numbers such as D22 refer to it.
 
