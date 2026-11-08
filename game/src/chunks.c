@@ -47,6 +47,7 @@
 #include "terrain.h"
 #include "kc_hal.h"
 #include "fixed.h"
+#include "arena.h"
 #if KC_RASTER
 #include "mesh.h"
 #define MESH_MARK_SLOT(s) mesh_mark_slot(s)
@@ -235,6 +236,7 @@ void world_update(int px, int pz) {
 
     // 3. Start loads; generate (all at startup, then one per frame).
     int32_t gens = started ? 1 : 16;
+    void *gen_scratch = 0;                                    // arena, once per call (startup: 16 gens)
     for (int32_t s = 0; s < 16; s++) {
         if (slot_state[s] != S_NEED) continue;
         int32_t id = slot_id[s];
@@ -285,7 +287,8 @@ void world_update(int px, int pz) {
         if (slot_state[s] == S_GEN && gens > 0) {
             chunk_wait(slot_ticket[s]);                       // a store may still be reading the slot
             slot_valid(id & 255, id >> 8, 1);                 // valid first: tree code reads back
-            terrain_gen_chunk(id & 255, id >> 8, corner_cx * CHUNK_W, corner_cz * CHUNK_W);
+            if (!gen_scratch) gen_scratch = arena_alloc(TERRAIN_SCRATCH_BYTES);
+            terrain_gen_chunk(id & 255, id >> 8, corner_cx * CHUNK_W, corner_cz * CHUNK_W, gen_scratch);
 #if KC_GEN_BITMAP
             gen_set(id);
 #endif
@@ -334,6 +337,15 @@ int world_corner_z(void) { return corner_cz * CHUNK_W; }
 int world_ready(void) { return committed && corner_cx == target_cx && corner_cz == target_cz; }
 int world_storage_ok(void) { return storage_ok; }
 int world_loaded(int x, int z) { return loaded_slot(x, z) >= 0; }
+#if KC_RASTER
+uint32_t world_column_bits(int x, int z) {
+    if (loaded_slot(x, z) < 0) return 0xFFFFFFFFu;
+    int32_t wx = (x - corner_cx * CHUNK_W) & 63, wz = (z - corner_cz * CHUNK_W) & 63;
+    uint32_t c = 0;
+    for (int32_t y = 0; y < WIN_Y; y++) c |= (uint32_t)(hal_win_get(wx, y, wz) != B_AIR) << y;
+    return c;
+}
+#endif
 int world_slot_chunk(int s) { return slot_state[s] == S_READY ? slot_id[s] + 1 : 0; }
 uint32_t world_stats_generated(void) { return n_generated; }
 #if KC_GEN_BITMAP
