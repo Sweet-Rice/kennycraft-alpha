@@ -29,6 +29,8 @@
 #define KC_DT_FIXED 5243       // Q16(0.08 s): one frame at 12.5 fps
 #endif
 
+kc_perf_t kc_perf;
+
 #if !KC_FIXED_DT
 static uint32_t last_cycles;
 #endif
@@ -79,6 +81,7 @@ void kc_frame(void) {
 #else
     uint32_t now = hal_mmio_r(MMIO_CYCLES);
     q16 dt = (q16)(((uint64_t)(now - last_cycles) * DT_K) >> 32);
+    kc_perf.frame = now - last_cycles;
     last_cycles = now;
 #endif
     move_player(imin(dt, DT_MAX));                     // 4.
@@ -86,7 +89,13 @@ void kc_frame(void) {
     world_update(qfloor(kc_me.pos[0]), qfloor(kc_me.pos[2]));   // 5.
     pick_and_edit();                                   // 6.
     write_camera();                                    // 7.
+#if !KC_FIXED_DT
+    uint32_t d0 = hal_mmio_r(MMIO_CYCLES);
+#endif
     kc_draw_world();                                   // 8. mask_all(); kernel(); mask_set(1);
+#if !KC_FIXED_DT
+    kc_perf.draw = hal_mmio_r(MMIO_CYCLES) - d0;
+#endif
     game_draw_overlay();
     hal_mmio_w(MMIO_FB_SWAP, 1);                       // 9.
 }
