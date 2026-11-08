@@ -7,9 +7,15 @@
 //                           a digest of the window (must not change with optimizations)
 //   kc_host gencost         terrain generation cost per chunk (terrain_height, window reads/writes)
 //   kc_host models  <dir>   static entity checks and renderer/close-up review shots
+//   kc_host cr6             CR6 UART command link checks (framing, ops, chip-side rules, HUD)
+//   kc_host link    <dir>   stdin = UART RX, stdout = UART TX at ~20 fps, <dir>/live.png every
+//                           4th frame: the laptop's kc-host drives this build as it would the board
+#define _DEFAULT_SOURCE   // usleep for kc_host link
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <time.h>
 #include "kc_hal.h"
 #include "hal_host.h"
@@ -597,9 +603,183 @@ static int cmd_gencost(void) {
     return 0;
 }
 
+// ---------------------------------------------------------------- CR6 ---------------------
+static uint8_t cr6_crc(const uint8_t *p, int n) {
+    uint32_t c = 0;
+    for (int i = 0; i < n; i++) {
+        c ^= p[i];
+        for (int k = 0; k < 8; k++) c = (c & 0x80) ? ((c << 1) ^ 0x07) & 0xFF : (c << 1) & 0xFF;
+    }
+    return (uint8_t)c;
+}
+
+static void cr6_push(uint8_t seq, uint8_t op, const uint8_t *p, int n, int corrupt) {
+    uint8_t f[16] = { 0xA5, (uint8_t)(n + 2), seq, op };
+    memcpy(f + 4, p, (size_t)n);
+    f[n + 4] = (uint8_t)(cr6_crc(f + 1, n + 3) ^ corrupt);
+    for (int i = 0; i < n + 5; i++) host_push_key(f[i]);
+}
+
+typedef struct { int status, seq, ev, ev_arg, rop, rn, frames; uint8_t rp[40]; } cr6_out;
+
+// One frame; decode what the chip sent back.
+static cr6_out cr6_step(void) {
+    cr6_out o = { -1, -1, -1, -1, -1, 0, 0, { 0 } };
+    host_tx_clear();
+    step_frames(1);
+    for (uint32_t i = 0; i + 4 < host_tx_n; ) {
+        uint8_t *f = host_tx + i;
+        if (f[0] != 0xA5) { i++; continue; }
+        int n = f[1] - 2;
+        if (i + (uint32_t)n + 5 > host_tx_n || cr6_crc(f + 1, n + 3) != f[n + 4]) { o.frames = -99; break; }
+        o.frames++;
+        if (f[3] == 0x81) { o.status = f[4]; o.seq = f[2]; }
+        else if (f[3] == 0x8F) { o.ev = f[4]; o.ev_arg = f[5] | f[6] << 8; }
+        else { o.rop = f[3]; o.rn = n; memcpy(o.rp, f + 4, (size_t)n); }
+        i += (uint32_t)n + 5;
+    }
+    return o;
+}
+
+static void le16(uint8_t *p, uint32_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
+
+static int cmd_cr6(void) {
+    enum { OK, CRC, BAD_OP, ZONE, BAD_BLOCK, PROTECTED, RATE };
+    host_uart_out(NULL, 1);
+    entity_clear();
+    step_frames(2);
+    int px = qfloor(kc_me.pos[0]), py = qfloor(kc_me.pos[1]), pz = qfloor(kc_me.pos[2]);
+    int ty = py + 2;
+    while (world_get(px + 3, ty, pz) != B_AIR || world_get(px + 4, ty, pz) != B_AIR) ty++;
+    uint8_t p[8];
+    cr6_out o;
+
+    le16(p, (uint32_t)px + 3); le16(p + 2, (uint32_t)pz); p[4] = (uint8_t)ty; p[5] = B_PLANKS;
+    cr6_push(1, 0x10, p, 6, 0);
+    o = cr6_step();
+    check(host_tx_n == 0 && world_get(px + 3, ty, pz) == B_AIR, "before HELLO: commands ignored, nothing sent back");
+
+    cr6_push(2, 0x01, (const uint8_t *)"KC\x01", 3, 0);
+    o = cr6_step();
+    check(o.rop == 0x82 && o.rn == 7 && o.rp[0] == 1 && o.rp[1] == 16 && o.status == OK && o.seq == 2,
+          "HELLO -> HELLO_ACK (ver 1, RX_DEPTH 16) and a STATUS after the drain");
+    o = cr6_step();
+    check(o.status == OK && o.frames == 1, "linked: one STATUS per frame even with nothing to do");
+
+    le16(p, (uint32_t)px + 3); le16(p + 2, (uint32_t)pz); p[4] = (uint8_t)ty; p[5] = B_PLANKS;
+    cr6_push(3, 0x10, p, 6, 0);
+    check(cr6_step().status == ZONE, "PLACE before the player has talked to anyone: OUT_OF_ZONE");
+
+    p[0] = 0 | 1 << 4; le16(p + 1, (uint32_t)(px + 2) * 16 + 8); le16(p + 3, (uint32_t)pz * 16 + 8); p[5] = (uint8_t)(py * 8);
+    cr6_push(4, 0x20, p, 6, 0);
+    check(cr6_step().status == OK && entity_count() == 1, "SPAWN a contractor 2 blocks away");
+    p[0] = 5;
+    cr6_push(5, 0x20, p, 6, 0);
+    check(cr6_step().status == 9, "SPAWN with an out-of-order id: BAD_ENTITY");
+
+    key(KEY_E, 1); key(KEY_E, 0);
+    o = cr6_step();
+    check(o.ev == 3 && o.ev_arg == 0, "E next to the contractor: EVENT INTERACT entity 0");
+
+    le16(p, (uint32_t)px + 3); le16(p + 2, (uint32_t)pz); p[4] = (uint8_t)ty; p[5] = B_PLANKS;
+    cr6_push(6, 0x10, p, 6, 0);
+    o = cr6_step();
+    check(o.status == OK && o.seq == 6 && world_get(px + 3, ty, pz) == B_PLANKS, "PLACE in the zone: OK, block placed");
+    cr6_push(6, 0x10, p, 6, 0);
+    check(cr6_step().status == OK, "same seq again (retransmit): OK without running twice");
+    cr6_push(7, 0x10, p, 6, 0);
+    check(cr6_step().status == PROTECTED, "PLACE into a solid block: PROTECTED");
+    p[5] = 10; le16(p, (uint32_t)px + 4);
+    cr6_push(8, 0x10, p, 6, 0);
+    check(cr6_step().status == BAD_BLOCK, "PLACE bedrock: BAD_BLOCK");
+    p[5] = B_DIRT; p[4] = 29;
+    cr6_push(9, 0x10, p, 6, 0);
+    check(cr6_step().status == ZONE, "PLACE at y = 29: OUT_OF_ZONE");
+    le16(p, (uint32_t)px); le16(p + 2, (uint32_t)pz); p[4] = (uint8_t)py + 1; p[5] = B_DIRT;
+    cr6_push(10, 0x10, p, 6, 0);
+    check(cr6_step().status == PROTECTED, "PLACE inside the player: PROTECTED");
+
+    le16(p, (uint32_t)px + 4); le16(p + 2, (uint32_t)pz); p[4] = (uint8_t)ty; p[5] = B_DIRT;
+    cr6_push(11, 0x10, p, 6, 0);
+    le16(p, (uint32_t)px + 5);
+    cr6_push(12, 0x10, p, 6, 0);
+    o = cr6_step();
+    check(o.status == RATE && world_get(px + 4, ty, pz) == B_DIRT && world_get(px + 5, ty, pz) != B_DIRT,
+          "two edits in one frame: the second gets RATE");
+
+    le16(p, (uint32_t)px + 3); le16(p + 2, (uint32_t)pz - 1); p[4] = (uint8_t)ty + 1; p[5] = 2 | 2 << 4; p[6] = 0 | B_COBBLE << 4;
+    cr6_push(13, 0x12, p, 7, 0);
+    int filled = 0;
+    o = cr6_step();
+    for (int z = -1; z <= 1; z++) for (int x = 3; x <= 5; x++) filled += world_get(px + x, ty + 1, pz + z) == B_COBBLE;
+    check(o.status == OK && filled == 9, "FILL 3x1x3 cobble above the planks: 9 cells");
+
+    cr6_push(14, 0x30, p, 0, 0);
+    o = cr6_step();
+    check(o.rop == 0x83 && (uint32_t)(o.rp[0] | o.rp[1] << 8) == (uint32_t)kc_me.pos[0] >> 12 && o.rp[4] == (uint32_t)kc_me.pos[1] >> 13,
+          "Q_PLAYER: x, z in 1/16 block, y in 1/8 block");
+    le16(p, (uint32_t)px + 3); le16(p + 2, (uint32_t)pz); p[4] = (uint8_t)ty; p[5] = 1; p[6] = 0;
+    cr6_push(15, 0x31, p, 7, 0);
+    o = cr6_step();
+    check(o.rop == 0x84 && o.rn == 1 && o.rp[0] == (B_PLANKS | B_DIRT << 4), "Q_BLOCKS 2x1x1: planks, dirt (nibbles)");
+
+    le16(p, 1234);
+    cr6_push(16, 0x40, p, 2, 0);
+    cr6_step();
+    p[0] = 7; le16(p + 1, 43);
+    cr6_push(17, 0x41, p, 3, 0);
+    cr6_step();
+    o = cr6_step();
+    const uint8_t *fb = host_front_buffer();
+    int gold = 0;
+    for (int y = 0; y < 20; y++) for (int x = 0; x < 60; x++) gold += fb[y * 320 + x] == PIX(kc_face_color[B_SAND * 3], 0, 0);
+    check(gold > 20, "SET_BALANCE / SET_QUOTE: HUD drawn in the top-left corner");
+    if (*outdir) save_frame("cr6_hud");
+    key(KEY_Y, 1); key(KEY_Y, 0);
+    o = cr6_step();
+    check(o.ev == 4 && o.ev_arg == (7 | 0x100), "Y with quote 7 on the HUD: EVENT CONFIRM 7 yes");
+
+    key(KEY_W, 1);
+    le16(p, 1);
+    cr6_push(18, 0x40, p, 2, 0x55);
+    o = cr6_step();
+    check(o.status == CRC && kc_me.held == 0, "bad CRC: status CRC and held keys released");
+    cr6_push(19, 0x77, p, 0, 0);
+    check(cr6_step().status == BAD_OP, "unknown op: BAD_OP");
+
+    cr6_push(20, 0x02, p, 0, 0);
+    cr6_step();
+    check(cr6_step().frames == 0, "BYE: the chip stops sending STATUS");
+    host_uart_out(NULL, 0);
+    return failures ? 1 : 0;
+}
+
+static int cmd_link(void) {
+    char path[512], tmp[512];
+    snprintf(path, sizeof path, "%s/live.png", outdir);
+    snprintf(tmp, sizeof tmp, "%s/live.tmp.png", outdir);
+    fcntl(0, F_SETFL, fcntl(0, F_GETFL) | O_NONBLOCK);
+    host_uart_out(stdout, 0);
+    for (uint32_t n = 0;; n++) {
+        uint8_t b[256];
+        ssize_t k;
+        while ((k = read(0, b, sizeof b)) > 0)
+            for (ssize_t i = 0; i < k; i++) host_push_key(b[i]);
+        if (k == 0) return 0;                              // kc-host closed the pipe
+        step_frames(1);
+        fflush(stdout);
+        if ((n & 3) == 0) {
+            int w = KC_RP->width, h = KC_RP->height;
+            png_write_fb(tmp, host_front_buffer(), host_palette(), w, h, w == 160 ? 4 : 2);
+            rename(tmp, path);
+        }
+        usleep(50000);
+    }
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: kc_host shots|play|vectors|models <dir> | contract | bench | sweep | gencost\n");
+        fprintf(stderr, "usage: kc_host shots|play|vectors|models|link <dir> | contract | bench | sweep | gencost | cr6\n");
         return 2;
     }
     if (argc > 2) outdir = argv[2];
@@ -613,6 +793,8 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[1], "sweep"))   return cmd_sweep();
     if (!strcmp(argv[1], "gencost")) return cmd_gencost();
     if (!strcmp(argv[1], "models"))  return cmd_models();
+    if (!strcmp(argv[1], "cr6"))     return cmd_cr6();
+    if (!strcmp(argv[1], "link"))    return cmd_link();
     fprintf(stderr, "unknown command %s\n", argv[1]);
     return 2;
 }

@@ -2,6 +2,7 @@
 #ifndef KC_HAL_HOST_H
 #define KC_HAL_HOST_H
 #include <stdint.h>
+#include <stdio.h>
 
 typedef struct {
     uint64_t world_reads, world_writes, frames, chunk_loads, chunk_stores;
@@ -12,6 +13,10 @@ extern host_stats hstats;
 void host_init(int realtime_clock);          // 1: CYCLES follows the wall clock; 0: host_advance_cycles
 void host_push_key(uint8_t key_byte);
 void host_advance_cycles(uint32_t cycles);
+void host_uart_out(FILE *f, int quiet);      // UART_TX to f (NULL: stderr); quiet: capture only
+void host_tx_clear(void);
+extern uint8_t  host_tx[4096];               // UART_TX bytes since host_tx_clear()
+extern uint32_t host_tx_n;
 const uint8_t  *host_front_buffer(void);     // what VGA shows (after the last swap)
 const uint8_t  *host_back_buffer(void);
 const uint16_t *host_palette(void);          // RGB444

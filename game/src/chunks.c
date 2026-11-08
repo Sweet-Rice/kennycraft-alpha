@@ -340,6 +340,7 @@ uint32_t world_boot_nonce(void) {
     return boot_nonce;
 #endif
 }
+#endif
 uint32_t world_boot_count(void) {
 #if KC_GEN_BITMAP
     return 0;
@@ -347,6 +348,7 @@ uint32_t world_boot_count(void) {
     return boot_count;
 #endif
 }
+#ifdef KC_HOST
 // Laptop only: forget everything, as a reset would (DDR3 keeps its contents).
 void world_reboot(void) {
     for (int32_t s = 0; s < 16; s++) { slot_id[s] = 0; slot_state[s] = S_EMPTY; slot_ticket[s] = 0; }
