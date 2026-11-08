@@ -174,18 +174,27 @@ the same ports and parameters as `rtl/core/core.sv`, built from its leaf
 modules. `PIPELINED = 1` (the last parameter of `rtl/top.sv` and
 `rtl/soc/kc_soc.sv`) selects it, and the core sits at `g_core.u_core`
 whichever core is built. It retires the same instructions, masks and
-register writes as the multi-cycle core. Only CPI changes:
+register writes as the multi-cycle core. Unstalled retirement spacing with a full
+pipeline is below; dependencies, prediction misses and peripheral waits add stalls.
 
 | Class | Cycles |
 | --- | --- |
-| ALU, LUI, AUIPC, FENCE, MASKGET, BALLOT, LANEID, VSET, VGET, not-taken branch | 1 |
-| MUL family | 2 |
-| Taken branch, JAL, JALR, LMASK, MASKSET, MASKALL, DIF, DELSE, DENDIF (flush 2) | 3 |
-| Load or store with an active lane | G + 1, G bus accesses: one per group of active lanes in the same dmem or framebuffer word, else one per lane (+3 per world LW/SW and texture LW) |
-| QRCP | 5 after the previous retirement (7 after a flush) |
-| Load-use | +1 bubble |
+| ALU, LUI, AUIPC, FENCE, MASKGET, BALLOT, LANEID, VSET, VGET | 1 |
+| Independent MUL family | 1 |
+| Correctly predicted conditional branch or JAL | 1 |
+| Mispredicted branch/JAL, JALR, LMASK, MASKSET, MASKALL, DIF, DELSE, DENDIF (flush 2) | 3 |
+| Bus-only loads and stores without the dmem/framebuffer store fast path | G + 1 |
+| Bus-only stores whose last group targets dmem or framebuffer | G |
+| QRCP | 3 after the previous retirement (5 after a flush) |
+| Load-use or MUL-use | +1 bubble |
 | VTRACE rd (rd != x0) | start until done, plus 1 |
 | VTRACE x0 | 1; the walk runs on |
+
+For memory operations whose active lanes all use the bus path, G counts bus
+cycles: one per coalesced dmem/framebuffer word group, otherwise one per active
+lane, with three extra cycles per world LW/SW or texture LW. Slave wait states
+add to these counts. The dedicated dmem window below bypasses this bus path;
+mixed window/bus operations wait for both paths to finish.
 
 Branches, JALR and the uniform check (ERR.DIVERGE) resolve in EX. The mask
 and divergence stack are written in EX, and every mask writer flushes behind
@@ -204,9 +213,9 @@ accesses and MMIO stores wait in MEM.
   and values as the dmem BRAM, which still holds the rest. It is initialized
   from `kc_dmem.hex` at build time; `fpga/patch_bit.sh` refuses images that
   change that range.
-- **MUL** writes its product straight into WB and is forwarded from WB only
-  (mul-use bubble); **QRCP** (`rtl/core_pipe/qrcp_pipe.sv`) does its two
-  Newton steps in two MEM cycles, bit-exact with `rtl/core/qrcp.sv`.
+- **MUL** writes its product straight into WB and is forwarded from WB only.
+  **QRCP** (`rtl/core_pipe/qrcp_pipe.sv`) does its two Newton steps in two MEM
+  cycles and produces the result in the third, bit-exact with `rtl/core/qrcp.sv`.
 
 ```sh
 make tb-core-pipe-<t>          # any tb/core test on the pipelined core

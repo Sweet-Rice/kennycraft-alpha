@@ -9,7 +9,24 @@ Laptop-side agents that act in the game world. Three sizes:
 | Builder contractor, when hired | Multi-step tool agent: survey, plan, price, quote, build, inspect, get paid | Nemotron Ultra by default, hosted or on an OpenAI-compatible server |
 | Banker and trader, through `host/` | Tool agents for confirmed currency exchanges and material trades | The same configured tool model as the builder |
 
-The model only chooses actions. Code enforces the rules: one decision moves a mob at most 8 blocks per axis and villagers stay within 16 blocks of home (`mobs.py`); the builder can't quote without a valid plan, build before escrow is funded, build more than 3 times, or get paid before the chip's blocks check out (`builder.py`); the bank clamps each builder quote to 0.5x-1.5x of the plan's rule price after the player's material discount, at most 200 KCN and the player's balance, and keeps a 10% fee on release (`bank.py`). Cancelling after funding but before inspect passes pays the builder for the share of blocks already placed and refunds the rest; `run` does this itself if the model stops mid-contract. Cancelling after inspect passes moves no money: the escrow stays held.
+The model only chooses actions. Code limits one mob decision to 8 blocks per
+axis and keeps villagers within 16 blocks of home (`mobs.py`). The builder
+requires an accepted plan before quoting, funded escrow before building, at
+most three build attempts, and a passing inspection before payment (`builder.py`).
+Inspection samples up to eight target cells by default; it does not verify the
+whole plan. Its progress count uses local `get()` values (a mirror in UART
+adapters), not a full chip readback. An unsampled wrong block can therefore
+remain even when inspection passes and payment is released.
+
+Builder quotes are clamped to 0.5x-1.5x of the plan's rule price after the
+player's material discount, at most 200 KCN and the player's balance.
+Successful release charges a 10% treasury fee (`bank.py`).
+
+Cancellation in `FUNDED` or `BUILT` counts matching target cells through local
+`get()`, pays the builder that proportion of the price rounded down, and refunds
+the rest without a treasury fee. Cancellation in `VERIFIED` changes the state
+to `CANCELLED` without moving money: escrow stays held. When its tool loop ends
+normally in `FUNDED`, `BUILT` or `VERIFIED`, `run()` invokes this cancellation.
 
 ## Files
 | File | What |
