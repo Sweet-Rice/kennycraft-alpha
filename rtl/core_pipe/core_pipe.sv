@@ -339,18 +339,25 @@ module core_pipe
     logic [2:0]       m_funct3, m_cnt;
     logic             qr_s0, vt_wr;
 
-    // Forwarding selects, registered: fm* = m_wr && (m_rd == e_rs*) and
-    // fw* = (w_rd == e_rs*) one cycle early. m_rd, m_wr's terms and e_rs*
-    // all load at adv (m_ready) and hold otherwise; w_rd loads m_rd every
-    // cycle.
-    logic fm1, fm2, fw1, fw2, d_wb1, d_wb2;
+    // Forwarding selects, registered. fm*[i]: MEM writes rd in lane i and
+    // rd = EX's rs*, the whole m_we[i] term: loaded when MEM loads (m_ready)
+    // from the instruction entering it (a bubble when e_vt_hold), with the
+    // mask now (no instruction that writes rd writes the mask, and the mask
+    // only changes when MEM loads). A halting instruction may select itself:
+    // flush kills the reader in EX the next cycle. fw* = (w_rd == e_rs*)
+    // one cycle early; w_rd loads m_rd every cycle.
+    logic [LANES-1:0] fm1, fm2;
+    logic fw1, fw2, d_wb1, d_wb2, e_fwd;
+    assign e_fwd = e_valid && !e_vt_hold && e_r_we && !e_nowr;
     always_ff @(posedge clk) begin
         if (rst) begin
-            fm1 <= 1'b0;
-            fm2 <= 1'b0;
-        end else if (adv) begin
-            fm1 <= e_valid && !e_halt && e_r_we && !e_nowr && (e_rd == d_rs1);
-            fm2 <= e_valid && !e_halt && e_r_we && !e_nowr && (e_rd == d_rs2);
+            fm1 <= '0;
+            fm2 <= '0;
+        end else if (m_ready) begin
+            for (int i = 0; i < LANES; i++) begin
+                fm1[i] <= e_fwd && (e_rd == d_rs1) && (mask[i] || e_uniform_wr);
+                fm2[i] <= e_fwd && (e_rd == d_rs2) && (mask[i] || e_uniform_wr);
+            end
         end
         fw1 <= (m_rd == (adv ? d_rs1 : e_rs1));
         fw2 <= (m_rd == (adv ? d_rs2 : e_rs2));
@@ -364,14 +371,14 @@ module core_pipe
         lane_pipe #(.ID(i), .HAS_QRCP(HAS_QRCP)) u_lane (
             .clk,
             .rs1_addr(d_rs1), .rs2_addr(d_rs2), .d_wb1, .d_wb2, .adv,
-            .fm1, .fm2, .fw1, .fw2,
+            .fm1(fm1[i]), .fm2(fm2[i]), .fw1, .fw2,
             .ex_go(e_go), .alu_ctrl(e_alu_ctrl), .alu_a_pc(e_alu_a_pc),
             .alu_b_sel(e_alu_b_sel), .funct3(e_funct3), .pc(e_pc), .imm(e_imm),
             .res_imm(e_res_imm), .is_lane(e_is_lane), .lane_y, .ray_en(e_vget),
             .ray_y(ray_y[i]), .stash(e_stash),
             .rs1(l_rs1[i]), .alu_y(l_alu[i]), .cmp(l_cmp[i]),
             .mul_op(m_funct3[1:0]), .m_is_load, .m_mul, .qr_s0, .m_qr,
-            .vt_wr, .vt_y(vt_y[i]), .ld_cap(l_cap[i]), .ld_value(l_ldv[i]), .m_we(m_we[i]),
+            .vt_wr, .vt_y(vt_y[i]), .ld_cap(l_cap[i]), .ld_value(l_ldv[i]),
             .res(l_res[i]), .m_rs2(l_mrs2[i]), .wdata(l_wdata[i]),
             .w_we(w_we[i]), .w_rd
         );

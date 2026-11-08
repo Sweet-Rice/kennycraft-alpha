@@ -6,8 +6,9 @@
 //   ID   read rs1 / rs2 from the register file, bypassing the WB write of
 //        the same cycle (the register file writes on the clock edge)
 //   EX   forwarded operands: MEM's result, else WB's, else the ID read, each
-//        only when that stage writes rd in this lane (m_we / w_we, which
-//        carry the lane's mask bit). While EX waits for MEM the operands are
+//        only when that stage writes rd in this lane (fm*, a register that
+//        holds MEM's write enable, and w_we, which carry the lane's mask
+//        bit). While EX waits for MEM the operands are
 //        recaptured every cycle, so a WB result is not lost when it retires.
 //        ALU, comparator, and the result latched into res: the ALU output
 //        (or this lane's address for loads and stores), LUI immediate,
@@ -38,8 +39,9 @@ module lane_pipe
     input  logic        d_wb2,
     input  logic        adv,          // the pipe advances: EX takes ID's operands
 
-    // EX forwarding (shared rd compares; this lane's write enables below)
-    input  logic        fm1,          // MEM's rd = EX's rs1, MEM writes rd
+    // EX forwarding (registered selects: fm* already holds this lane's
+    // MEM write enable; fw* is the shared rd compare, w_we below)
+    input  logic        fm1,          // MEM writes rd in this lane, rd = EX's rs1
     input  logic        fm2,
     input  logic        fw1,          // WB's rd = EX's rs1
     input  logic        fw2,
@@ -73,7 +75,6 @@ module lane_pipe
     input  logic [31:0] vt_y,
     input  logic        ld_cap,
     input  logic [31:0] ld_value,
-    input  logic        m_we,         // MEM writes rd in this lane
 
     output logic [31:0] res,          // MEM: result, or the address for loads and stores
     output logic [31:0] m_rs2,        // MEM: store data
@@ -102,8 +103,8 @@ module lane_pipe
     // ------------------------------------------------------------------
     logic [31:0] e_rs1, e_rs2, rs2, fwd, alu_a, alu_b;
 
-    assign rs1 = (fm1 && m_we) ? fwd : (fw1 && w_we) ? w_res : e_rs1;
-    assign rs2 = (fm2 && m_we) ? fwd : (fw2 && w_we) ? w_res : e_rs2;
+    assign rs1 = fm1 ? fwd : (fw1 && w_we) ? w_res : e_rs1;
+    assign rs2 = fm2 ? fwd : (fw2 && w_we) ? w_res : e_rs2;
 
     always_ff @(posedge clk) begin
         e_rs1 <= adv ? d_rs1 : rs1;
