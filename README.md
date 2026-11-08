@@ -30,6 +30,21 @@ design history; decision numbers such as D22 refer to it.
 | `kc_agents/` | Nemotron agents that act in the game world; see `kc_agents/README.md` |
 | `tight_setup_hold_pins.txt` | Vivado table of the 68 `u_bridge` FIFO and calibration-sync pins with tight setup and hold (clocks `clk50_unbuf`, `clk_pll_i`) |
 
+## Bank companion
+
+With the existing bank configuration in place, run `python host/kchost.py` and
+open http://127.0.0.1:8000. The Wallets card includes a native-canvas player KCN
+chart fed by the page's existing `/events` stream; no separate dashboard,
+Node.js, npm install, or extra wallet configuration is needed.
+
+The chart starts with one observation, adds a point only when the player's
+balance changes, and retains the latest 120 observations until the page reloads.
+World, HUD, speech, and settlement-only updates do not consume chart history.
+These are game-ledger balances, including queued payments, not reconstructed
+on-chain history. Existing ledger settlement badges and devnet transaction
+links remain available. The chart is read-only; companion game/bank controls
+are unchanged.
+
 ## Checks
 
 ```sh

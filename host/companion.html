@@ -15,6 +15,7 @@
   .ONLINE { background:#1e3d2f; color:var(--ok); } .DEGRADED { background:#3d351e; color:var(--warn); }
   .OFFLINE { background:#3d221e; color:var(--bad); }
   main { display:grid; grid-template-columns:300px 1fr 380px; gap:16px; padding:16px 20px; }
+  main > section { min-width:0; }
   @media (max-width:1100px) { main { grid-template-columns:1fr; } }
   .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:16px; }
   .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); margin:0 0 10px; }
@@ -31,6 +32,9 @@
   input { background:#0b0d10; color:var(--text); border:1px solid var(--line); border-radius:7px; padding:7px 10px; font:inherit; }
   input[type=text] { flex:1; min-width:0; }
   canvas { width:100%; aspect-ratio:1; image-rendering:pixelated; background:#0b0d10; border-radius:8px; }
+  #balance-history { margin:14px 0 0; }
+  #balance-history h3 { font-size:12px; margin:0 0 6px; }
+  #balance-chart { display:block; height:180px; aspect-ratio:auto; image-rendering:auto; }
   .dim { color:var(--dim); } .small { font-size:12px; }
   table { width:100%; border-collapse:collapse; font-size:12.5px; }
   td { padding:5px 4px; border-bottom:1px solid var(--line); vertical-align:top; }
@@ -99,6 +103,11 @@
     </div>
     <div class="card"><h2>Contracts</h2><table id="contracts"></table></div>
     <div class="card"><h2>Wallets</h2><div id="wallets" class="row small"></div>
+      <figure id="balance-history">
+        <h3>Player balance observed this session</h3>
+        <canvas id="balance-chart" role="img" aria-label="Session player KCN balance history" aria-describedby="balance-caption"></canvas>
+        <figcaption id="balance-caption" class="small dim">Waiting for the first player balance.</figcaption>
+      </figure>
       <p class="small">Nessie checking: <b id="usd">…</b></p>
       <p class="small">Your materials: <span id="items">none</span></p></div>
     <div class="card"><h2>Villagers</h2><div id="speech" class="small"></div><div id="brains" class="dim small"></div></div>
@@ -115,6 +124,57 @@ const COLORS = {1:'#5a9e3a',2:'#8b5a2b',3:'#8a8a8a',4:'#6e6e6e',5:'#6b4a2a',6:'#
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let state = null;
+const balanceHistory = [];
+
+function observeBalance(balance) {
+  if (!Number.isSafeInteger(balance) || balance < 0 ||
+      balanceHistory.at(-1)?.balance === balance) return;
+  balanceHistory.push({t:Date.now(), balance});
+  if (balanceHistory.length > 120) balanceHistory.shift();
+  $('balance-caption').textContent = `${balanceHistory.length} observation${balanceHistory.length === 1 ? '' : 's'} · current ${balance} KCN · game ledger (includes queued payments)`;
+  drawBalance();
+}
+
+function drawBalance() {
+  const cv = $('balance-chart'), {width, height} = cv.getBoundingClientRect();
+  if (!width || !height) return;
+  const ratio = window.devicePixelRatio || 1;
+  cv.width = Math.round(width * ratio); cv.height = Math.round(height * ratio);
+  const g = cv.getContext('2d'), style = getComputedStyle(cv);
+  g.setTransform(ratio, 0, 0, ratio, 0, 0);
+  if (!balanceHistory.length) return;
+  g.font = '11px system-ui, sans-serif';
+  const first = balanceHistory[0], last = balanceHistory.at(-1);
+  const maximum = Math.max(1, ...balanceHistory.map(p => p.balance));
+  const left = Math.min(width / 2, Math.ceil(g.measureText(maximum.toLocaleString()).width) + 12);
+  const right = width - 12, top = 14, bottom = height - 28;
+  const x = p => balanceHistory.length === 1 ? (left + right) / 2
+    : left + (p.t - first.t) / Math.max(1, last.t - first.t) * (right - left);
+  const y = balance => bottom - balance / maximum * (bottom - top);
+  for (const tick of [0, maximum]) {
+    g.strokeStyle = style.getPropertyValue('--line');
+    g.beginPath(); g.moveTo(left, y(tick)); g.lineTo(right, y(tick)); g.stroke();
+    g.fillStyle = style.getPropertyValue('--dim'); g.textAlign = 'right';
+    g.fillText(tick.toLocaleString(), left - 6, y(tick) + 4);
+  }
+  g.strokeStyle = g.fillStyle = style.getPropertyValue('--ok'); g.lineWidth = 2;
+  if (balanceHistory.length > 1) {
+    g.beginPath(); g.moveTo(x(first), y(first.balance));
+    for (let i = 1; i < balanceHistory.length; i++) {
+      g.lineTo(x(balanceHistory[i]), y(balanceHistory[i - 1].balance));
+      g.lineTo(x(balanceHistory[i]), y(balanceHistory[i].balance));
+    }
+    g.stroke();
+  }
+  g.beginPath(); g.arc(x(last), y(last.balance), 3, 0, Math.PI * 2); g.fill();
+  g.fillStyle = style.getPropertyValue('--dim');
+  g.textAlign = balanceHistory.length === 1 ? 'center' : 'left';
+  g.fillText(new Date(first.t).toLocaleTimeString(), balanceHistory.length === 1 ? x(first) : left, height - 8);
+  if (balanceHistory.length > 1) {
+    g.textAlign = 'right';
+    g.fillText(new Date(last.t).toLocaleTimeString(), right, height - 8);
+  }
+}
 
 async function post(url, body) {
   const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body||{})});
@@ -127,6 +187,7 @@ const usd = c => c == null ? 'bank closed' : '$' + (c/100).toFixed(2);
 
 function render(s) {
   state = s;
+  observeBalance(s.wallets.player);
   $('mode').textContent = s.mode; $('mode').className = 'badge ' + s.mode;
   $('queued').textContent = s.queued ? `${s.queued} payment${s.queued>1?'s':''} waiting to settle` : 'all payments settled';
   $('livebox').style.display = s.live || s.board ? '' : 'none';
@@ -201,6 +262,8 @@ function drawWorld(w) {
   }
   g.fillStyle = '#fff'; g.fillRect(w.player[0], w.player[1], 1, 1);
 }
+
+new ResizeObserver(drawBalance).observe($('balance-chart'));
 
 new EventSource('/events').onmessage = e => render(JSON.parse(e.data));
 </script>
