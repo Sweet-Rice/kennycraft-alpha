@@ -250,17 +250,28 @@ module core_pipe
     logic [31:0]      vt_y [LANES];
     logic [LANES-1:0] l_cmp, nonzero, ld_cap, mis;
     logic [31:0]      ld_value;
-    logic             e_vget, e_stash;
+    logic             e_vget, e_stash, e_vtrace, e_nowr;
     logic             m_is_load, m_is_store, m_mul, m_qr, m_vt;
     logic [2:0]       m_funct3, m_cnt;
     logic             mul_en, qr_load, qr_en, vt_wr;
     logic [2:0]       qr_ph;
 
+    // Forwarding selects, registered: fm* = m_wr && (m_rd == e_rs*) and
+    // fw* = (w_rd == e_rs*) one cycle early. m_rd, m_wr's terms and e_rs*
+    // all load at adv (m_ready) and hold otherwise; w_rd loads m_rd every
+    // cycle.
     logic fm1, fm2, fw1, fw2, d_wb1, d_wb2;
-    assign fm1   = m_wr && (m_rd == e_rs1);
-    assign fm2   = m_wr && (m_rd == e_rs2);
-    assign fw1   = (w_rd == e_rs1);
-    assign fw2   = (w_rd == e_rs2);
+    always_ff @(posedge clk) begin
+        if (rst) begin
+            fm1 <= 1'b0;
+            fm2 <= 1'b0;
+        end else if (adv) begin
+            fm1 <= e_valid && !e_halt && e_r_we && !e_nowr && (e_rd == d_rs1);
+            fm2 <= e_valid && !e_halt && e_r_we && !e_nowr && (e_rd == d_rs2);
+        end
+        fw1 <= (m_rd == (adv ? d_rs1 : e_rs1));
+        fw2 <= (m_rd == (adv ? d_rs2 : e_rs2));
+    end
     assign d_wb1 = (w_rd == d_rs1);
     assign d_wb2 = (w_rd == d_rs2);
 
@@ -405,8 +416,6 @@ module core_pipe
     // ------------------------------------------------------------------
     // Ray unit (custom-1)
     // ------------------------------------------------------------------
-    logic e_vtrace, e_nowr;
-
     if (HAS_RAY_UNIT) begin : g_ray
         logic [7:0] cap;
 
