@@ -169,6 +169,16 @@ class FakeChip:
             if op == BREAK:
                 x, z, y = struct.unpack("<HHB", p)
                 return self.edit(x, z, y, 0)
+            if op == FILL:
+                x, z, y, a, c = struct.unpack("<HHBBB", p)
+                return self.fill(x, z, y, (a & 15) + 1, (c & 15) + 1, (a >> 4) + 1, c >> 4)
+            if op == MOVE:
+                eid, x, z = struct.unpack("<BHH", p)
+                if eid >= len(self.entities):
+                    return 9
+                k, _, _, y = self.entities[eid]
+                self.entities[eid] = (k, x / 16, z / 16, y)
+                return 0
             if op == SPAWN:
                 eid, x, z, y = struct.unpack("<BHHB", p)
                 if eid & 15 != len(self.entities):
@@ -218,6 +228,28 @@ class FakeChip:
             return 5                                         # PLACE only into air
         self.edited_this_frame = True
         self.world[(x, z, y)] = t
+        return 0
+
+    def fill(self, x, z, y, sx, sy, sz, t):
+        """FILL as cr6.c runs it: the whole box in the zone, air cells only (never overwrites)."""
+        if self.edited_this_frame:
+            return 6
+        x0, z0, y0, n = self.zone
+        if not (x0 <= x and x + sx <= x0 + n and z0 <= z and z + sz <= z0 + n
+                and y0 <= y and y + sy <= y0 + n and 1 <= y and y + sy - 1 <= 28):
+            return 3
+        if t > 9:
+            return 4
+        px, pz, py = self.player
+        if t and x <= px < x + sx and z <= pz < z + sz and y <= py + 1 and py < y + sy:
+            return 5
+        self.edited_this_frame = True
+        for i in range(sx):
+            for k in range(sz):
+                for j in range(sy):
+                    old = self.block(x + i, z + k, y + j)
+                    if old != 10 and (old == 0 or not t):
+                        self.world[(x + i, z + k, y + j)] = t
         return 0
 
     def event(self, code, arg):

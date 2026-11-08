@@ -36,8 +36,8 @@
   td { padding:5px 4px; border-bottom:1px solid var(--line); vertical-align:top; }
   a { color:var(--accent); }
   .st { font-size:11px; padding:1px 7px; border-radius:99px; background:#2a2f38; }
-  .st.RELEASED, .st.settled { color:var(--ok); } .st.REFUNDED, .st.EXPIRED { color:var(--bad); }
-  .st.queued, .st.WORKING, .st.VERIFYING, .st.QUOTED, .st.FUNDED { color:var(--warn); }
+  .st.PAID, .st.settled { color:var(--ok); } .st.REFUNDED, .st.DECLINED, .st.CANCELLED { color:var(--bad); }
+  .st.queued, .st.SURVEY, .st.PLANNED, .st.QUOTED, .st.FUNDED, .st.BUILT, .st.VERIFIED { color:var(--warn); }
   #toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--bad); color:#fff;
            padding:9px 16px; border-radius:8px; display:none; }
   .log { font:12px ui-monospace, monospace; color:var(--dim); white-space:pre-wrap; }
@@ -145,8 +145,8 @@ function render(s) {
   $('contracts').innerHTML = s.contracts.map(c => `<tr><td>#${c.id} ${c.kind}<div class="dim small">${esc(c.text)}</div>
       ${c.note ? `<div class="small" style="color:#e5604f">${esc(c.note)}</div>` : ''}</td>
       <td>${c.price} KCN<div class="dim small">rule ${c.rule}</div></td>
-      <td><span class="st ${c.state}">${c.state}</span><div class="dim small">${c.placed}/${c.total} blocks</div></td>
-      <td>${['QUOTED','FUNDED','WORKING','VERIFYING'].includes(c.state) ? `<button onclick="post('/api/cancel',{id:${c.id}})">Cancel</button>` : ''}</td></tr>`).join('')
+      <td><span class="st ${c.state}">${c.state}</span><div class="dim small">${c.placed}/${c.total} blocks</div>${c.note ? `<div class="dim small">${esc(c.note)}</div>` : ''}</td>
+      <td>${['SURVEY','PLANNED','QUOTED','FUNDED','BUILT','VERIFIED'].includes(c.state) ? `<button onclick="post('/api/cancel',{id:${c.id}})">Cancel</button>` : ''}</td></tr>`).join('')
       || '<tr><td class="dim">No contracts yet. Talk to a villager.</td></tr>';
   $('ledger').innerHTML = s.ledger.map(e => `<tr><td>e${e.id} ${e.kind}${e.contract_id ? ` <span class="dim">KC#${e.contract_id}</span>` : ''}
       <div class="dim small">${e.from_wallet} → ${e.to_wallet}</div></td><td><b>${e.amount}</b></td>

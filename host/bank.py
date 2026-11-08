@@ -98,19 +98,6 @@ class Ledger:
         return self.db.execute("SELECT * FROM entries WHERE status = 'queued' ORDER BY id").fetchall()
 
 
-def rule_price(blocks, breaks=0):
-    return 5 + blocks + 2 * breaks
-
-
-def clamp_price(proposed, rule):
-    """Whatever an agent proposes, the bank charges 0.5x-1.5x of the rule price, at most 200."""
-    try:
-        p = int(proposed)
-    except (TypeError, ValueError):
-        p = rule
-    return max(1, min(200, max((rule + 1) // 2, min(p, rule * 3 // 2))))
-
-
 async def exchange(ledger, nessie, dollars, to_game=True):
     """The banker villager. to_game: $ -> KCN (Nessie withdrawal), else KCN -> $ (Nessie deposit).
 
