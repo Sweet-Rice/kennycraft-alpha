@@ -50,6 +50,14 @@
 #include "arena.h"
 
 #define CAL_TIMEOUT_CYCLES (2u * CORE_HZ)      // wait up to 2 s for DDR3 calibration
+// KC_FIXED_DT=1 also takes the core's speed out of world streaming: the calibration wait
+// has no CYCLES timeout (it waits for DDR_STATUS), and a chunk load issued in a frame is
+// waited for in that frame instead of being picked up by whichever later frame finds its
+// ticket done, so slot states, generation order and the window commit follow the frame
+// number. Replay builds also set KC_TAG_PERSIST=1 (no CYCLES in the boot nonce).
+#ifndef KC_FIXED_DT
+#define KC_FIXED_DT 0
+#endif
 
 #define TAG_CELLS 32                           // y = 0, z = 0..1, x = 0..15: 32 nibbles = 128 bits
 #define TAG_FORMAT 0x4B430001u                 // bump if the DDR3 chunk layout changes
@@ -177,10 +185,13 @@ static void slot_ready(int32_t s) {
 // ---------------------------------------------------------------- world_update -----------
 void world_update(int px, int pz) {
     if (!started) {                                           // first call: storage check
-        uint32_t t0 = hal_mmio_r(MMIO_CYCLES);
 #if KC_NO_DDR
         storage_ok = 0;
+#elif KC_FIXED_DT
+        while (!(hal_mmio_r(MMIO_DDR_STATUS) & 1u)) {}
+        storage_ok = 1;
 #else
+        uint32_t t0 = hal_mmio_r(MMIO_CYCLES);
         while (!(hal_mmio_r(MMIO_DDR_STATUS) & 1u) && hal_mmio_r(MMIO_CYCLES) - t0 < CAL_TIMEOUT_CYCLES) {}
         storage_ok = (int32_t)(hal_mmio_r(MMIO_DDR_STATUS) & 1u);
 #endif
@@ -251,7 +262,7 @@ void world_update(int px, int pz) {
     }
     for (int32_t s = 0; s < 16; s++) {
         int32_t id = slot_id[s];
-        if (slot_state[s] == S_LOAD && chunk_done(slot_ticket[s])) {
+        if (slot_state[s] == S_LOAD && (KC_FIXED_DT ? (chunk_wait(slot_ticket[s]), 1) : chunk_done(slot_ticket[s]))) {
 #if KC_GEN_BITMAP
             slot_valid(id & 255, id >> 8, 1);
             slot_ready(s);
