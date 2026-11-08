@@ -7,13 +7,16 @@
 // multiplier rtl/core_pipe/mul_pipe.sv and the LSU, rtl/core/lsu.sv with a
 // registered bus request, rtl/core_pipe/lsu_pipe.sv.
 //
-//   IF   imem_addr = pc_f, a register (a redirect writes it: flush 3), and
+//   IF   imem_addr = pc_f, a register (a redirect writes it: flush 4), and
 //        the branch target buffer lookup of pc_f (rtl/core_pipe/btb.sv)
-//        that picks the next pc_f
-//   ID   the BRAM output (or d_hold, latched in the first cycle ID waits,
-//        since the BRAM keeps reading pc_f), decode, every lane's register
-//        read with the WB bypass. Illegal words and fetches outside imem
-//        become a fault flag that halts in EX
+//        that picks the next pc_f; f_tgt - pc_f for ID's target check
+//   F2   the imem BRAM read: imem_rdata (or q_hold, latched in the first
+//        cycle F2 waits, since the BRAM keeps reading pc_f) goes into the
+//        register d_raw, so the BRAM's clock-to-out ends there and ID
+//        decodes a register
+//   ID   d_raw (or d_hold, latched in the first cycle ID waits), decode,
+//        every lane's register read with the WB bypass. Illegal words and
+//        fetches outside imem become a fault flag that halts in EX
 //   EX   per-lane forwarding (MEM, else WB), ALU, branch compare, scalar
 //        lane, uniform checks, divergence stack, mask, lane control, ray
 //        unit configuration and start (registered strobes: the ray unit
@@ -42,7 +45,7 @@
 // high the cycle after a redirecting (or halting) instruction leaves EX,
 // while it is in MEM. That cycle it kills the instruction then in EX
 // (e_valid is e_vreg && !flush: no side effect, MEM gets a bubble), drops
-// ID and the fetch in flight, and loads pc_f from m_next (flush 3). EX's
+// ID and F2 and the fetch in flight, and loads pc_f from m_next (flush 4).
 // branch compare, uniform checks and target thus end in registers (flush,
 // m_next, m_halt) instead of reaching IF and ID's enables. MEM holds the
 // redirecting instruction for one cycle (it is no load, store, QRCP or
@@ -51,9 +54,10 @@
 //
 // Branch prediction. IF looks pc_f up in the BTB; on a hit with a counter
 // of 2 or 3 (predicted taken) the next pc_f is the entry's target, else
-// pc_f + 4. The prediction and target ride with the instruction; ID checks
-// the target against d_pc + d_imm into the e_pok flag. A conditional branch
-// or JAL in EX redirects (flush 3) only when the prediction was wrong: taken
+// pc_f + 4. The prediction and target ride with the instruction (the
+// target as f_tgt - pc_f); ID checks that against the B / J immediate into
+// the e_pok flag. A conditional branch
+// or JAL in EX redirects (flush 4) only when the prediction was wrong: taken
 // without e_pok, or predicted taken and not taken. JALR, DIF/DELSE/DENDIF
 // and the mask writers are never predicted. The BTB is written the cycle
 // after EX (u_req), unless the branch halted (m_halt, a register). Only the
@@ -165,19 +169,23 @@ module core_pipe
     end
 
     // ------------------------------------------------------------------
-    // IF / ID
+    // IF / F2 / ID
     // ------------------------------------------------------------------
-    logic [31:0] pc_f, d_pc, d_hold, d_inst;
-    logic        d_valid, d_hold_v, d_ready;
+    logic [31:0] pc_f, q_pc, q_hold, q_inst, d_pc, d_raw, d_hold, d_inst;
+    logic        q_valid, d_valid, d_hold_v, d_ready;
 
+    // IF, F2 and ID advance together (d_ready) and wait together, so one
+    // flag says both hold their instruction: q_hold and d_hold load every
+    // cycle until the first cycle they wait, then keep it.
     assign imem_addr = pc_f;
-    assign d_inst    = d_hold_v ? d_hold : imem_rdata;
+    assign q_inst    = d_hold_v ? q_hold : imem_rdata;
+    assign d_inst    = d_hold_v ? d_hold : d_raw;
     assign d_ready   = !d_valid || (adv && !lu);
 
     // Branch target buffer: the prediction for pc_f (rtl/core_pipe/btb.sv)
-    logic        f_hit, f_pred, d_hit, d_pred, e_hit, e_pred, e_pok;
-    logic [1:0]  f_ctr, d_ctr, e_ctr;
-    logic [31:0] f_tgt, d_tgt;
+    logic        f_hit, f_pred, q_hit, q_pred, d_hit, d_pred, e_hit, e_pred, e_pok;
+    logic [1:0]  f_ctr, q_ctr, d_ctr, e_ctr;
+    logic [31:0] f_tgt, q_off, d_off;
     logic        u_req, u_hit, u_taken;
     logic [1:0]  u_ctr;
     logic [31:0] u_tgt;
@@ -192,26 +200,43 @@ module core_pipe
         else if (d_ready && !stop) pc_f <= f_pred ? f_tgt : pc_f + 32'd4;
     end
 
+    // d_off is the predicted target minus d_pc: ID's check d_pc + d_imm ==
+    // target is then d_imm == d_off, with no adder after the decoder.
     always_ff @(posedge clk) begin
         if (rst) begin
+            q_valid  <= 1'b0;
             d_valid  <= 1'b0;
             d_hold_v <= 1'b0;
             stop     <= 1'b0;
         end else if (flush) begin
+            q_valid  <= 1'b0;
             d_valid  <= 1'b0;
             d_hold_v <= 1'b0;
             if (m_hlt) stop <= 1'b1;
         end else if (d_ready) begin
-            d_pc     <= pc_f;
-            d_hit    <= f_hit;
-            d_pred   <= f_pred;
-            d_ctr    <= f_ctr;
-            d_tgt    <= f_tgt;
-            d_valid  <= !stop;
+            q_pc     <= pc_f;
+            q_hit    <= f_hit;
+            q_pred   <= f_pred;
+            q_ctr    <= f_ctr;
+            q_off    <= f_tgt - pc_f;
+            q_valid  <= !stop;
+            d_pc     <= q_pc;
+            d_hit    <= q_hit;
+            d_pred   <= q_pred;
+            d_ctr    <= q_ctr;
+            d_off    <= q_off;
+            d_valid  <= q_valid;
             d_hold_v <= 1'b0;
-        end else if (!d_hold_v) begin
-            d_hold   <= imem_rdata;
+        end else begin
             d_hold_v <= 1'b1;
+        end
+    end
+
+    always_ff @(posedge clk) begin
+        d_raw <= q_inst;
+        if (!d_hold_v) begin
+            q_hold <= imem_rdata;
+            d_hold <= d_raw;
         end
     end
 
@@ -221,7 +246,7 @@ module core_pipe
     logic        d_uniform_wr, d_illegal;
     logic [1:0]  d_alu_b_sel;
     logic [2:0]  d_imm_sig;
-    logic [31:0] d_imm;
+    logic [31:0] d_imm, d_imm_b, d_imm_j;
     logic [4:0]  d_rs1, d_rs2;
     logic [6:0]  d_opc;
     logic        d_uses1, d_uses2;
@@ -244,6 +269,9 @@ module core_pipe
     // Operands an instruction reads, for the load-use / mul-use stall only
     assign d_uses1 = (d_opc != OPC_LUI) && (d_opc != OPC_AUIPC) && (d_opc != OPC_JAL);
     assign d_uses2 = (d_opc == OPC_BRANCH) || (d_opc == OPC_STORE) || (d_opc == OPC_OP);
+    // immgen's B and J immediates (a branch decodes imm_sig B, JAL J)
+    assign d_imm_b = {{20{d_inst[31]}}, d_inst[7], d_inst[30:25], d_inst[11:8], 1'b0};
+    assign d_imm_j = {{12{d_inst[31]}}, d_inst[19:12], d_inst[20], d_inst[30:21], 1'b0};
 
     // ID -> EX registers (shared decode; the operands live in the lanes)
     logic [3:0]  e_alu_ctrl;
@@ -290,7 +318,8 @@ module core_pipe
             // Only conditional branches and JAL are predicted; e_pok: the
             // predicted target is the real one (so EX needs no compare)
             e_pred       <= d_pred && (d_is_branch || d_is_jal);
-            e_pok        <= d_pred && (d_is_branch || d_is_jal) && (d_pc + d_imm == d_tgt);
+            e_pok        <= d_pred && ((d_is_branch && (d_imm_b == d_off)) ||
+                                       (d_is_jal && (d_imm_j == d_off)));
             e_hit        <= d_hit;
             e_ctr        <= d_ctr;
         end

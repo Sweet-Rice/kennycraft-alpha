@@ -14,7 +14,7 @@
 #   tb-core-pipe-t_qrcp(-l8)
 #                           tb/core_pipe/t_qrcp_pipe_tb.sv: t_qrcp.S with
 #                           core_pipe's QRCP latency (8 cycles after the
-#                           previous retirement, 11 after a flush) instead
+#                           previous retirement, 12 after a flush) instead
 #                           of the multi-cycle 7
 #   tb-core-pipe-t_mmio     tb/core_pipe/t_mmio_pipe_tb.sv: t_mmio.S with its
 #                           two CYCLES checks at the pipelined MMIO LW and SW

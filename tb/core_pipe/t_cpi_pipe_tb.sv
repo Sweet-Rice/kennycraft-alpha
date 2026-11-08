@@ -6,7 +6,7 @@
 // 1 for dmem, MMIO and byte accesses, 4 for words through the byte bridge):
 //   ALU, LUI, AUIPC, not-taken branch, FENCE, MASKGET    CPI_ALU
 //   MUL, MULHU (independent: no mul-use stall)          CPI_MUL
-//   taken branch, JAL, JALR (flush 3: registered redirect) CPI_TAKEN
+//   taken branch, JAL, JALR (flush 4: registered redirect) CPI_TAKEN
 //   MASKALL (mask writers flush like taken branches)    CPI_MASK
 //   load                                                LD_BASE + bus
 //   store                                               ST_BASE + bus
@@ -22,7 +22,7 @@
 // N passes of ADDI (+ JAL) + BNEZ, the back edge taken N - 1 times): the
 // first pass's BNEZ and JAL are BTB misses (CPI_TAKEN), every later one is
 // predicted taken to the right target (CPI_PRED), and the last BNEZ is
-// predicted taken but falls through (CPI_TAKEN: flush 3).
+// predicted taken but falls through (CPI_TAKEN: flush 4).
 // The defaults are the pipelined core's; the multi-cycle core passes with
 // -GCPI_ALU=3 -GCPI_MUL=4 -GCPI_TAKEN=3 -GCPI_PRED=3 -GCPI_MASK=3
 // -GLD_BASE=3 -GST_BASE=2 -GST_FAST=0.
@@ -31,9 +31,9 @@ module t_cpi_pipe_tb;
     parameter string DMEM_HEX = "";
     parameter int    CPI_ALU   = 1;
     parameter int    CPI_MUL   = 1;
-    parameter int    CPI_TAKEN = 4;
+    parameter int    CPI_TAKEN = 5;
     parameter int    CPI_PRED  = 1;   // predicted taken branch or JAL (BTB hit)
-    parameter int    CPI_MASK  = 4;
+    parameter int    CPI_MASK  = 5;
     parameter int    LD_BASE   = 3;   // load: M cycles beyond the bus cycles
     parameter int    ST_BASE   = 2;   // store: same
     parameter int    ST_FAST   = 1;   // store to dmem / fb: cycles fewer
