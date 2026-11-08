@@ -21,5 +21,6 @@ void kc_render_frame(void);
 
 // Shade one pixel (exposed for tests and the single-pixel debug path).
 uint8_t kc_shade_pixel(int32_t px, int32_t py);
+uint8_t kc_shade_pixel_ent(int32_t px, int32_t py);  // same, plus entity models
 
 #endif

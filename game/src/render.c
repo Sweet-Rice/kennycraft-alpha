@@ -1,13 +1,15 @@
 // render.c — the render kernel. One ray per pixel, branch-free shading.
 #include "render.h"
 #include "trace.h"
+#include "entity.h"
 #include "kc_hal.h"
 #include "kc_lanes.h"
 #include "kc_tables.h"
 
 const uint8_t kc_face_color[16 * 3] = KC_FACE_COLORS;
 
-uint8_t kc_shade_pixel(int32_t px, int32_t py) {
+// ents is a compile-time constant: kc_shade_pixel is the plain world, kc_shade_pixel_ent adds models.
+static inline __attribute__((always_inline)) uint8_t shade(int32_t px, int32_t py, int32_t ents) {
     const kc_camera *c = KC_CAM;
     const kc_rparams *p = KC_RP;
 
@@ -41,10 +43,16 @@ uint8_t kc_shade_pixel(int32_t px, int32_t py) {
     sky_i = sel(sky_i > 15, 15, sky_i);
     int32_t sky = (COLOR_SKY << 4) | sky_i;
 
-    return (uint8_t)sel(hit, PIX(color, shade, fog), sky);
+    int32_t world = sel(hit, PIX(color, shade, fog), sky);
+    if (!ents) return (uint8_t)world;
+    return ent_composite(px, py, o, &r, sel(hit, h.t, 0x7FFFFFFF), (uint8_t)world);
 }
+uint8_t kc_shade_pixel(int32_t px, int32_t py)     { return shade(px, py, 0); }
+uint8_t kc_shade_pixel_ent(int32_t px, int32_t py) { return shade(px, py, 1); }
 
-void kc_render_frame(void) {
+// with_ents is a compile-time constant: 0 is the plain world loop (it unrolls as before entities
+// existed), 1 adds a per-block entity test. All lanes share a 4x2 block, so that test is uniform.
+static inline __attribute__((always_inline)) void frame(int32_t with_ents) {
     int32_t W = KC_RP->width, H = KC_RP->height;
 #if KC_LANES == 8
     int32_t lane = (int32_t)lane_id();           // called between mask_all() and mask_set(1)
@@ -54,16 +62,21 @@ void kc_render_frame(void) {
             for (int32_t b = 0; b < 8; b++) {          // eight 4x2 blocks per 8x8 tile
                 int32_t bx = tx + ((b & 1) << 2);
                 int32_t by = ty + ((b >> 1) << 1);
+                int32_t ents = with_ents && ent_block(bx, by);
 #if KC_LANES == 1
                 for (int32_t lane = 0; lane < 8; lane++) {
 #endif
                     int32_t px = bx + (lane & 3);
                     int32_t py = by + (lane >> 2);
-                    hal_fb_put((uint32_t)(py * FB_STRIDE + px), kc_shade_pixel(px, py));
+                    hal_fb_put((uint32_t)(py * FB_STRIDE + px), ents ? kc_shade_pixel_ent(px, py) : kc_shade_pixel(px, py));
 #if KC_LANES == 1
                 }
 #endif
             }
         }
     }
+}
+
+void kc_render_frame(void) {
+    if (ent_nrects) frame(1); else frame(0);    // uniform: every lane reads the same count
 }

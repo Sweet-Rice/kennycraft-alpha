@@ -6,6 +6,7 @@
 //   kc_host sweep           arena high water over many locations x frames x edits, plus
 //                           a digest of the window (must not change with optimizations)
 //   kc_host gencost         terrain generation cost per chunk (terrain_height, window reads/writes)
+//   kc_host models  <dir>   static entity checks and renderer/close-up review shots
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,6 +20,7 @@
 #include "trace.h"
 #include "blocks.h"
 #include "arena.h"
+#include "entity.h"
 #include "terrain.h"
 #define TERRAIN_GEN(cx, cz, x0, z0) terrain_gen_chunk(cx, cz, x0, z0, gen_scratch)
 
@@ -124,6 +126,87 @@ static int box_overlap_any(void) {
         if (world_get(qfloor(kc_me.pos[0]), y, qfloor(kc_me.pos[2])) != B_AIR) return 1;
     }
     return 0;
+}
+
+static void models_render(const char *name, uint8_t out[320 * 240]) {
+    shot(name);
+    memcpy(out,host_front_buffer(),320 * 240);
+}
+
+static int cmd_models(void) {
+    static uint8_t base[320 * 240], model[320 * 240], hidden[320 * 240];
+    q16 bx = kc_me.pos[0], by = kc_me.pos[1], bz = kc_me.pos[2];
+    int32_t sx = qfloor(bx), sz = qfloor(bz);
+    kc_set_resolution(160);
+    pose(bx,by,bz,Q16_INT(128),Q16_INT(-40));
+    entity_clear();
+    models_render("base",base);
+    const int32_t dx[ENT_KINDS] = {2,5,4,7}, dz[ENT_KINDS] = {5,2,4,6}, facing[ENT_KINDS] = {2,3,2,3};
+    int32_t pig_x = 0, pig_z = 0;
+    for (int32_t k = 0; k < ENT_KINDS; k++) {
+        int32_t x = sx+dx[k], z = sz+dz[k];
+        while (terrain_tree_at(x,z)) x++;
+        entity_add(k,Q16_INT(x)+Q16_HALF,Q16_INT(terrain_height(x,z)+1),Q16_INT(z)+Q16_HALF,facing[k]);
+        if (k == ENT_PIG) { pig_x = x; pig_z = z; }
+    }
+    models_render("m0_models",model);
+    int changed = 0, bad = 0, brick = 0, wood = 0;
+    const uint32_t colors = (1u<<0)|(1u<<1)|(1u<<2)|(1u<<3)|(1u<<6)|(1u<<9)|(1u<<11)|(1u<<13);
+    for (int32_t y = 0; y < KC_RP->height; y++)
+        for (int32_t x = 0; x < KC_RP->width; x++) {
+            int32_t i = y*FB_STRIDE+x;
+            int a = base[i] != model[i];
+            changed += a;
+            bad += a && !(colors & (1u << (model[i] >> 4)));
+            brick += a && (model[i] >> 4) == 11;
+            wood += a && (model[i] >> 4) == 13;
+        }
+    printf("  changed %d; brick %d wood %d\n",changed,brick,wood);
+    check(changed >= 300,"entities change at least 300 pixels");
+    check(!bad,"entity pixels use only model palette colors");
+    check(brick >= 20,"at least 20 brick-colored entity pixels");
+    check(wood >= 20,"at least 20 light-wood entity pixels");
+
+    entity_clear();
+    entity_add(ENT_ZOMBIE,Q16_INT(pig_x)+Q16_HALF,Q16(2.0),Q16_INT(pig_z)+Q16_HALF,2);
+    models_render("buried",hidden);
+    check(!memcmp(base,hidden,sizeof hidden),"buried entity leaves the frame unchanged");
+    entity_clear();
+    int32_t x = sx-4, z = sz-4;
+    entity_add(ENT_ZOMBIE,Q16_INT(x)+Q16_HALF,Q16_INT(terrain_height(x,z)+1),Q16_INT(z)+Q16_HALF,2);
+    models_render("behind",hidden);
+    check(!memcmp(base,hidden,sizeof hidden),"entity behind the camera leaves the frame unchanged");
+    entity_clear();
+    for (int32_t i = 0; i < ENT_MAX; i++) entity_add(ENT_PIG,bx,by,bz,0);
+    check(entity_add(ENT_PIG,bx,by,bz,0) == -1,"ninth entity is rejected");
+    entity_clear();
+    check(entity_add(ENT_KINDS,bx,by,bz,0) == -1,"invalid entity kind is rejected");
+
+    // Walking: 4 blocks east at 1.2 blocks/s arrives within 4 s of 0.1 s frames, facing +x, on the ground.
+    int32_t wx = sx+2, wz = sz+6, id = entity_add(ENT_ZOMBIE,Q16_INT(wx)+Q16_HALF,by,Q16_INT(wz)+Q16_HALF,0);
+    check(entity_move(id,Q16_INT(wx+4)+Q16_HALF,Q16_INT(wz)+Q16_HALF) == 0,"entity_move accepts a live id");
+    check(entity_move(id+1,0,0) == -1,"entity_move rejects an unused id");
+    q16 wp[3]; int32_t wf;
+    world_set(wx+4,terrain_height(wx+4,wz)+4,wz,B_LEAVES);    // canopy over the target
+    for (int32_t f = 0; f < 40; f++) entity_tick(Q16(0.1));
+    entity_get(id,wp,&wf);
+    check(wp[0] == Q16_INT(wx+4)+Q16_HALF && wp[2] == Q16_INT(wz)+Q16_HALF,"walking entity reaches its target");
+    check(wf == 1,"walking entity faces its direction of travel (+x)");
+    check(wp[1] == Q16_INT(terrain_height(wx+4,wz)+1),"walking entity stands on the ground, not the canopy");
+    entity_clear();
+
+    const char *names[ENT_KINDS] = {"m1_trader","m1_contractor","m1_pig","m1_zombie"};
+    kc_set_resolution(320);
+    for (int32_t k = 0; k < ENT_KINDS; k++) {
+        entity_clear();
+        pose(bx,by,bz,0,Q16(-30.0));
+        entity_add(k,Q16_INT(sx)+Q16_HALF,Q16_INT(terrain_height(sx,sz+3)+1),Q16_INT(sz+3)+Q16_HALF,2);
+        shot(names[k]);
+    }
+    entity_clear();
+    kc_set_resolution(160);
+    printf("%s\n",failures ? "SOME CHECKS FAILED" : "all checks passed");
+    return failures != 0;
 }
 
 static int cmd_play(void) {
@@ -516,7 +599,7 @@ static int cmd_gencost(void) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: kc_host shots|play|vectors <dir> | contract | bench | sweep | gencost\n");
+        fprintf(stderr, "usage: kc_host shots|play|vectors|models <dir> | contract | bench | sweep | gencost\n");
         return 2;
     }
     if (argc > 2) outdir = argv[2];
@@ -529,6 +612,7 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[1], "bench"))   return cmd_bench();
     if (!strcmp(argv[1], "sweep"))   return cmd_sweep();
     if (!strcmp(argv[1], "gencost")) return cmd_gencost();
+    if (!strcmp(argv[1], "models"))  return cmd_models();
     fprintf(stderr, "unknown command %s\n", argv[1]);
     return 2;
 }

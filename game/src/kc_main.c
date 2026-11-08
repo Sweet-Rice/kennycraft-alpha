@@ -6,6 +6,7 @@
 #include "fixed.h"
 #include "chunks.h"
 #include "arena.h"
+#include "entity.h"
 #include "kc_lanes.h"
 #include "kc_budget.h"     // its static asserts check the 192 KB budget on every build
 
@@ -62,6 +63,7 @@ void kc_init(void) {
 
 // Draw the world: game-side preparation on lane 0, then the kernel on all lanes.
 void kc_draw_world(void) {
+    entity_prepare();
     while (hal_mmio_r(MMIO_FB_SWAP)) {}               // 1. (D21)
     mask_all(); kc_render_frame(); mask_set(1);
 }
@@ -80,6 +82,7 @@ void kc_frame(void) {
     last_cycles = now;
 #endif
     move_player(imin(dt, DT_MAX));                     // 4.
+    entity_tick(imin(dt, DT_MAX));
     world_update(qfloor(kc_me.pos[0]), qfloor(kc_me.pos[2]));   // 5.
     pick_and_edit();                                   // 6.
     write_camera();                                    // 7.
