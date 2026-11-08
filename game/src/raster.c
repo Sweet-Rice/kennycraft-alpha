@@ -47,15 +47,15 @@ static uint16_t tile_start[MAX_TILES + 1];
 // Per-tile counts / fill cursors: binning only (lane 0), so frame scratch from the arena.
 static uint16_t *tile_fill;
 
-// ---- tile memory: 16 x 16 x (2-byte color + 2-byte depth) = 1 KB, +1 scratch slot ----------
-// One 32-bit word per pixel (Josh's layout): color 11:0 (the 8-bit palette index, 4 spare
-// bits), depth 23:12 (12-bit linear, 1/64 block), stencil 31:24 (unused for now, kept 0).
+// ---- tile memory: 16 x 16 x 32-bit words = 1 KB, +1 scratch slot ---------------------------
+// One 32-bit word per pixel: color 7:0 (the palette byte), depth 31:8 (24 bits: 1/z in Q16,
+// flipped so the tile's "smaller wins" test holds). 24 bits hold every 1/z down to NEAR exactly,
+// so near faces never tie (a 12-bit depth saturated under about 1 block).
 // One load and one masked store per pixel instead of three halfword operations.
-#define PX_COLOR(w)   ((w) & 0xFFFu)
-#define PX_DEPTH(w)   (((w) >> 12) & 0xFFFu)
-#define PX_STENCIL(w) ((w) >> 24)
-#define PX_PACK(c, d, s) ((uint32_t)(c) | ((uint32_t)(d) << 12) | ((uint32_t)(s) << 24))
-#define DEPTH_MAX 0xFFFu
+#define PX_COLOR(w)   ((w) & 0xFFu)
+#define PX_DEPTH(w)   ((w) >> 8)
+#define PX_PACK(c, d) ((uint32_t)(c) | ((uint32_t)(d) << 8))
+#define DEPTH_MAX 0xFFFFFFu
 static uint32_t tile_px[TILE * TILE + 1];          // 1 KB + 1 scratch word
 
 // One polygon vertex, two stages in the same three words: view space while clipping, then the
@@ -308,7 +308,8 @@ static inline int32_t covers(const tri_t *t, int32_t px, int32_t py, int32_t val
 // color_px: flat face color, shade, fog, masked write; the caller runs it only when BALLOT says
 // some lane of the group passed (a uniform branch). Vertex colors: no texture, no reciprocal.
 // Depth is stored as 1/z (larger = nearer), flipped so the tile's "smaller wins" test holds.
-#define IZ_SHIFT 4                  // 12-bit depth = 4094 - min(iz >> 4, 4094); saturates under 1 block
+// 24-bit depth = 0xFFFFFE - min(iz, 0xFFFFFE): iz <= 1/NEAR ~ 1.31 M < 2^24, so no shift and no
+// saturation inside the view; equal iz ties keep the first face, like the strict < before.
 typedef struct { q16 iz; int32_t idx, dep, pass; uint32_t old; } zpx_t;
 
 static q16 fog_iz[3];               // 1/fog_d: fog thresholds in 1/z space
@@ -319,8 +320,7 @@ __attribute__((noinline)) static void depth_px(const tri_t *t, int32_t px, int32
     int64_t dX = X - t->X0, dY = Y - t->Y0;
     q16 iz = t->a0 + (q16)(((int64_t)t->gx * dX + (int64_t)t->gy * dY) >> 4);
     iz = sel(iz < 64, 64, iz);
-    int32_t dep = iz >> IZ_SHIFT;
-    dep = (int32_t)DEPTH_MAX - 1 - sel(dep > (int32_t)DEPTH_MAX - 1, (int32_t)DEPTH_MAX - 1, dep);
+    int32_t dep = (int32_t)DEPTH_MAX - 1 - sel(iz > (int32_t)DEPTH_MAX - 1, (int32_t)DEPTH_MAX - 1, iz);
     int32_t idx = sel(inside, (py - ty0) * TILE + (px - tx0), TILE * TILE);
     uint32_t old = tile_px[idx];
     o->iz = iz; o->idx = idx; o->dep = dep; o->old = old;
@@ -340,10 +340,10 @@ __attribute__((noinline)) static void color_px(const zpx_t *o, int32_t mat) {
 #if KC_LANES == 8
     uint32_t m = mask_get();
     lmask((uint32_t)pass);                             // masked stores: only winning lanes write
-    tile_px[idx] = PX_PACK(col, o->dep, PX_STENCIL(o->old));
+    tile_px[idx] = PX_PACK(col, o->dep);
     mask_set(m);
 #else
-    if (pass) tile_px[idx] = PX_PACK(col, o->dep, PX_STENCIL(o->old));
+    if (pass) tile_px[idx] = PX_PACK(col, o->dep);
 #endif
 }
 
@@ -405,7 +405,7 @@ static void tile_clear(int32_t ty0, int32_t lane0) {
 #endif
             int32_t k = i + lane;
             int32_t sky_i = ((ty0 + (k >> 4)) * p->sky_k) >> 16;
-            tile_px[k] = PX_PACK((COLOR_SKY << 4) | sel(sky_i > 15, 15, sky_i), DEPTH_MAX, 0);
+            tile_px[k] = PX_PACK((COLOR_SKY << 4) | sel(sky_i > 15, 15, sky_i), DEPTH_MAX);
 #if KC_LANES == 1
         }
 #endif

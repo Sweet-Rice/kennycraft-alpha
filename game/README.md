@@ -24,7 +24,7 @@ Every chip target also runs `tools/stack_check.sh`: the worst-case stack depth o
 | `src/trace.[ch]` | `ray_setup` + `kc_trace` with the exact VTRACE contract. `vtrace_ref` = C reference for one ray |
 | `src/render.[ch]` | Ray-tracing kernel. 8x8 tiles, 4x2 block per lane pass (D15). Pixel byte per spec |
 | `src/mesh.[ch]` | Greedy mesher: per-chunk vertex + index buffers in a pool of 4 KB pages |
-| `src/raster.[ch]` | Tile rasterizer (Josh's design): binning into per-tile command lists, 16x16 tile of 2-byte color + 2-byte depth, one framebuffer write per pixel |
+| `src/raster.[ch]` | Tile rasterizer (Josh's design): binning into per-tile command lists, 16x16 tile of 32-bit words (8-bit color + 24-bit 1/z depth), one framebuffer write per pixel |
 | `src/kc_libc.c` | memcpy/memset for the freestanding chip build |
 | `src/kc_lanes.h` | LANEID/LMASK/BALLOT/MASKGET/MASKSET/MASKALL: software for 1 lane, `.insn` for 8 |
 | `src/terrain.[ch]` | Deterministic terrain + trees from absolute coordinates |
@@ -95,7 +95,7 @@ Per frame:
    - Transform and clip each remaining quad against the near, left, right, bottom and top planes.
    - Append the quad to the command list of every 16×16 tile it touches.
 3. **Tiles** (all lanes): for each tile:
-   - Clear a 1 KB tile buffer (2-byte color + 2-byte linear depth, no stencil).
+   - Clear a 1 KB tile buffer (one 32-bit word per pixel: 8-bit color, 24-bit depth).
    - Rasterize the tile's quads with edge functions. Each face has one flat color (vertex colors, no textures). Depth is 1/z, interpolated linearly in screen space, so no reciprocal per pixel. A group whose 8 lanes all fail the depth test skips the color half (BALLOT).
    - Write the tile to the framebuffer once.
 

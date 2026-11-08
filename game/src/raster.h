@@ -3,8 +3,8 @@
 // Per frame:
 //   1. Bin (lane 0): walk every chunk's quads, cull back faces and the view frustum, and
 //      append each surviving quad to the command list of every 16x16 screen tile it covers.
-//   2. Tiles (all lanes): for each tile, clear a 16x16 tile buffer (2-byte color + 2-byte
-//      depth = 1 KB, no stencil), rasterize the tile's quads into it with a depth test, then
+//   2. Tiles (all lanes): for each tile, clear a 16x16 tile buffer (8-bit color + 24-bit 1/z
+//      depth = 1 KB), rasterize the tile's quads into it with a depth test, then
 //      write the finished tile to the back framebuffer once.
 // The framebuffer is touched once per pixel per frame; depth never leaves the tile.
 #ifndef KC_RASTER_H
