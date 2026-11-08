@@ -16,11 +16,7 @@ extern const uint8_t kc_face_color[16 * 3];
 
 // Render the whole frame from KC_CAM / KC_RP into the back framebuffer.
 // Kernel: call with all lanes active (mask_all(); kc_render_frame(); mask_set(1);).
-// Walks the screen in 8x8 tiles; each pass of the 8 lanes shades a 4x2 block (D15).
+// Each pass of the 8 lanes shades a 4x2 block (D15); blocks go in rows, left to right.
 void kc_render_frame(void);
-
-// Shade one pixel (exposed for tests and the single-pixel debug path).
-uint8_t kc_shade_pixel(int32_t px, int32_t py);
-uint8_t kc_shade_pixel_ent(int32_t px, int32_t py);  // same, plus entity models
 
 #endif
