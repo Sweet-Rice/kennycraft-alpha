@@ -2,8 +2,11 @@
 # rtl/top.sv with LANES = 8 and the divergence stack, running Kennedy's 8-lane
 # game (kc_chip8). Sourced by fpga/build.tcl from the repo root with $root and
 # $out set. fpga/top_s0/sources.tcl sets kc_stage 0 and sources this file for
-# the Stage 0 build (LANES = 1, no divergence stack, kc_chip):
+# the Stage 0 build (LANES = 1, no divergence stack, kc_chip), and
+# fpga/top_s2/sources.tcl kc_stage 2 for Stage 2 (Stage 1 plus the VTRACE ray
+# unit, HAS_RAY_UNIT = 1, running the VTRACE kernel kc_chip8_vtrace):
 #   tools/fpga_mcp.py --project <checkout> --target top_s0 build-wait
+#   tools/fpga_mcp.py --project <checkout> --target top_s2 build-wait
 #
 # Memory images: run `make top-hex` (tb/top/tb.mk) before the build. It builds
 # Kennedy's chip programs and copies his assets into obj_dir/top_hex/<build>:
@@ -13,7 +16,10 @@
 # To change imem, dmem or textures without a rebuild, use the updatemem
 # commands in fpga/build.tcl.
 if {![info exists kc_stage]} { set kc_stage 1 }
-if {$kc_stage == 1} {
+if {$kc_stage == 2} {
+    set hex_dir obj_dir/top_hex/kc_chip8_vtrace
+    set generics {LANES=8 HAS_DIV_STACK=1 HAS_RAY_UNIT=1}
+} elseif {$kc_stage == 1} {
     set hex_dir obj_dir/top_hex/kc_chip8
     set generics {LANES=8 HAS_DIV_STACK=1}
 } else {
@@ -35,6 +41,7 @@ read_verilog -sv {
     rtl/ddr/ddr_bridge.sv
     rtl/ddr/chunk_engine.sv
     rtl/ddr/world_remap.sv
+    rtl/vtrace/vtrace.sv
     rtl/top.sv
 }
 source rtl/ddr/mig/mig_ddr3.tcl

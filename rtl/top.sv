@@ -6,8 +6,11 @@
 //   kc_soc      core, imem, dmem, GPU memory, decoder, MMIO, UART, textures
 //               (EXT_WORLD = 1: its world port goes through world_remap)
 //   display     framebuffers, palette, VGA timing -> Pmod VGA on JA + JB
-//   world_remap window origin and slot-valid between the core and world_mem
-//   world_mem   two copies (D17); the VTRACE ports are idle until Stage 2
+//   world_remap window origin and slot-valid between the core / VTRACE and
+//               world_mem
+//   world_mem   two copies (D17); copy n serves VTRACE lanes 4n..4n+3
+//   vtrace      HAS_RAY_UNIT = 1: the ray unit behind the core's custom-1
+//               instructions (Stage 2), WORLD_LATENCY = 2
 //   chunk_engine + ddr_bridge (u_bridge) + mig_ddr3   DDR3 chunk store (D14)
 //
 // Memory images: IMEM_HEX / DMEM_HEX (program, kc.ld layout), TEX_HEX
@@ -15,9 +18,10 @@
 // fpga/build.tcl writes an .mmi so updatemem can replace all four in a
 // built bitstream (see the commands there).
 //
-// LANES and HAS_DIV_STACK configure the core: LANES = 8 with the divergence
-// stack is Stage 1 (the default, and the KC_TARGET=top board build); LANES = 1
-// without it is Stage 0 (KC_TARGET=top_s0).
+// LANES, HAS_DIV_STACK and HAS_RAY_UNIT configure the core: LANES = 8 with the
+// divergence stack is Stage 1 (the default, and the KC_TARGET=top board
+// build), plus HAS_RAY_UNIT = 1 Stage 2; LANES = 1 without either is Stage 0
+// (KC_TARGET=top_s0).
 //
 // led is the error LED: the core halted on an illegal instruction, a
 // misaligned access or a fetch outside instruction memory. The MIG owns the
@@ -29,7 +33,8 @@ module top #(
     parameter string IMEM_HEX = "kc_imem.hex",
     parameter string DMEM_HEX = "kc_dmem.hex",
     parameter string TEX_HEX  = "textures.hex",
-    parameter string PAL_HEX  = "palette.hex"
+    parameter string PAL_HEX  = "palette.hex",
+    parameter bit    HAS_RAY_UNIT  = 1'b0
 ) (
     input  logic        clk,            // E3,  100 MHz
     input  logic        ck_rst,         // C2,  active low
@@ -99,6 +104,15 @@ module top #(
     logic [7:0]  world_wdata;
     logic [3:0]  core_world_rdata;
 
+    logic        vt_cfg_we, vt_start, vt_done;
+    logic [2:0]  vt_cfg_field;
+    logic [LANES-1:0] vt_lane_mask;
+    logic [31:0] vt_cfg_data [LANES];
+    logic [7:0]  vt_max_steps;
+    logic [15:0] vt_result   [LANES];
+    logic [16:0] vt_hit_cell [LANES];
+    logic [31:0] vt_t_hit    [LANES];
+
     kc_soc #(
         .LANES    (LANES),
         .CLK_HZ   (50_000_000),
@@ -107,7 +121,8 @@ module top #(
         .DMEM_HEX (DMEM_HEX),
         .TEX_HEX  (TEX_HEX),
         .EXT_WORLD(1'b1),
-        .HAS_DIV_STACK(HAS_DIV_STACK)
+        .HAS_DIV_STACK(HAS_DIV_STACK),
+        .HAS_RAY_UNIT (HAS_RAY_UNIT)
     ) u_soc (
         .clk(clk_core), .rst(rst_core),
         .uart_tx(uart_rxd_out), .uart_rx(uart_txd_in),
@@ -118,7 +133,9 @@ module top #(
         .ddr_reg_en, .ddr_reg_we, .ddr_reg_off, .ddr_reg_wdata,
         .ddr_reg_rdata, .ddr_reg_stall,
         .world_req, .world_we, .world_addr, .world_wdata,
-        .world_ready(world_req), .world_rdata({4'b0, core_world_rdata})
+        .world_ready(world_req), .world_rdata({4'b0, core_world_rdata}),
+        .vt_cfg_we, .vt_cfg_field, .vt_lane_mask, .vt_cfg_data, .vt_start, .vt_max_steps,
+        .vt_done, .vt_result, .vt_hit_cell, .vt_t_hit
     );
 
     // ------------------------------------------------------------------
@@ -143,15 +160,48 @@ module top #(
     logic [16:0] eng_addr;
     logic [3:0]  eng_wdata;
 
-    // VTRACE (Stage 2) is not built yet: busy low, addresses 0.
+    // VTRACE world ports: one window-relative address per lane, data
+    // WORLD_LATENCY = 2 cycles later through world_remap and world_mem's
+    // two-phase sharing of each copy's ports (D17). Lanes the core does not
+    // have read address 0.
     logic        vt_busy;
     logic [16:0] vt_addr       [VT_LANES];
     logic [16:0] vt_paddr      [VT_LANES];
     logic [3:0]  vt_rdata_phys [VT_LANES];
     logic [3:0]  vt_rdata      [VT_LANES];
 
-    assign vt_busy = 1'b0;
-    always_comb for (int l = 0; l < VT_LANES; l++) vt_addr[l] = '0;
+    if (HAS_RAY_UNIT) begin : g_vtrace
+        logic [16:0] world_addr_l [LANES];
+        logic [3:0]  world_data_l [LANES];
+
+        vtrace #(.LANES(LANES), .WORLD_LATENCY(2)) u_vtrace (
+            .clk(clk_core), .rst(rst_core),
+            .cfg_we(vt_cfg_we), .cfg_field(vt_cfg_field), .lane_mask(vt_lane_mask),
+            .cfg_data(vt_cfg_data),
+            .start(vt_start), .max_steps(vt_max_steps), .busy(vt_busy), .done(vt_done),
+            .result(vt_result), .hit_cell(vt_hit_cell), .t_hit(vt_t_hit),
+            .world_addr(world_addr_l), .world_data(world_data_l)
+        );
+
+        always_comb begin
+            for (int l = 0; l < VT_LANES; l++) vt_addr[l] = '0;
+            for (int l = 0; l < LANES; l++) begin
+                vt_addr[l]      = world_addr_l[l];
+                world_data_l[l] = vt_rdata[l];
+            end
+        end
+    end else begin : g_no_vtrace
+        assign vt_busy = 1'b0;
+        assign vt_done = 1'b0;
+        always_comb begin
+            for (int l = 0; l < VT_LANES; l++) vt_addr[l] = '0;
+            for (int l = 0; l < LANES; l++) begin
+                vt_result[l]   = '0;
+                vt_hit_cell[l] = '0;
+                vt_t_hit[l]    = '0;
+            end
+        end
+    end
 
     world_remap #(.LANES(VT_LANES)) u_remap (
         .clk(clk_core), .win_x, .win_z, .slot_valid,
@@ -160,9 +210,8 @@ module top #(
         .vt_addr, .vt_paddr, .vt_rdata_phys, .vt_rdata
     );
 
-    // DONT_TOUCH keeps both copies and port B while VTRACE is not built: they
-    // only feed VTRACE lanes, so synthesis would otherwise remove copy 1.
-    (* dont_touch = "true" *)
+    // Copy 1 feeds only VTRACE lanes 4..7; without the ray unit synthesis
+    // removes it (Stage 0 and 1 builds).
     world_mem #(.LANES(VT_LANES)) u_world (
         .clk(clk_core),
         .vt_busy, .vt_paddr, .vt_rdata(vt_rdata_phys),
@@ -224,7 +273,11 @@ module top #(
     /* verilator lint_on UNUSEDSIGNAL */
     always_comb begin
         unused = core_locked ^ eng_re ^ app_rd_data_end ^ (^world_wdata[7:4]);
-        for (int l = 0; l < VT_LANES; l++) unused ^= ^vt_rdata[l];
+        for (int l = LANES; l < VT_LANES; l++) unused ^= ^vt_rdata[l];
+        if (!HAS_RAY_UNIT) begin
+            unused ^= vt_cfg_we ^ vt_start ^ (^vt_cfg_field) ^ (^vt_lane_mask) ^ (^vt_max_steps);
+            for (int l = 0; l < LANES; l++) unused ^= (^vt_cfg_data[l]) ^ (^vt_rdata[l]);
+        end
     end
 
 endmodule

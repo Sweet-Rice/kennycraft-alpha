@@ -159,6 +159,18 @@ module bench_chip #(
     logic [7:0]  world_wdata;
     logic [7:0]  world_rdata;
 
+    // No ray unit here (kc_soc HAS_RAY_UNIT = 0): Stage 2 runs on rtl/top.sv
+    // (CHIP_TOP=top HAS_RAY_UNIT=1), so the vt_* port is tied off.
+    logic [15:0] vt_result   [LANES];
+    logic [16:0] vt_hit_cell [LANES];
+    logic [31:0] vt_t_hit    [LANES];
+
+    always_comb for (int l = 0; l < LANES; l++) begin
+        vt_result[l]   = '0;
+        vt_hit_cell[l] = '0;
+        vt_t_hit[l]    = '0;
+    end
+
     kc_soc #(
         .LANES     (LANES),
         .CLK_HZ    (50_000_000),
@@ -199,7 +211,19 @@ module bench_chip #(
         .world_addr    (world_addr),
         .world_wdata   (world_wdata),
         .world_ready   (world_ready),
-        .world_rdata   (world_rdata)
+        .world_rdata   (world_rdata),
+        /* verilator lint_off PINCONNECTEMPTY */
+        .vt_cfg_we     (),
+        .vt_cfg_field  (),
+        .vt_lane_mask  (),
+        .vt_cfg_data   (),
+        .vt_start      (),
+        .vt_max_steps  (),
+        /* verilator lint_on PINCONNECTEMPTY */
+        .vt_done       (1'b0),
+        .vt_result     (vt_result),
+        .vt_hit_cell   (vt_hit_cell),
+        .vt_t_hit      (vt_t_hit)
     );
 
     // ------------------------------------------------------------------

@@ -22,13 +22,16 @@
 #                           lane-serial accesses to stalling slaves, and
 #                           illegal cases raised by lanes other than 0
 #   tb-core-<t>-l8          the Stage 1 tests (CORE_L8) at LANES = 8
+#   tb-core-t_illegal-ray   t_illegal with the ray unit (HAS_RAY_UNIT = 1,
+#                           Stage 2: LANES = 8, divergence stack), where
+#                           only the reserved custom-1 encodings halt
 #   tracediff-core-<tb>     Stage 1 rung 2: the same test at LANES = 8 with
 #                           only lane 0 able to activate (LANE0_ONLY), whose
 #                           retirement trace must equal the LANES = 1 trace
 #                           (tb/core/tracediff.py)
 #   lint-core               verilator -Wall over rtl/core, rtl/mem, rtl/soc
 #                           at LANES = 1, 3 and 8, with and without the
-#                           divergence stack
+#                           divergence stack, and with the ray unit
 #
 # Not in `make check`: `make tracediff-base-core` (Stage 1 rung 1) builds
 # every test above against the Stage 0 core of git ref CORE_BASE_REF and
@@ -43,7 +46,7 @@ CORE_SW_FLAGS := -march=rv32i_zmmul -mabi=ilp32 -nostdlib -nostartfiles \
 CORE_SW_OBJ   := $(OBJ)/core_sw
 
 CORE_RTL_CORE := $(wildcard rtl/core/*.sv)
-CORE_RTL_REST := $(wildcard rtl/mem/*.sv) $(wildcard rtl/soc/*.sv)
+CORE_RTL_REST := $(wildcard rtl/mem/*.sv) $(wildcard rtl/soc/*.sv) rtl/vtrace/vtrace.sv
 CORE_RTL      := rtl/kc_isa_pkg.sv $(CORE_RTL_CORE) $(CORE_RTL_REST)
 CORE_TBS  := datapath_tb program_mem_tb
 CORE_RUNG5 := t_mask t_ballot t_maskgetset t_mask_zero
@@ -58,6 +61,7 @@ CORE_L8   := t_illegal t_laneid t_lsu_order t_mmio_lanes $(CORE_RUNG5) $(CORE_RU
 CORE_ALL  := $(CORE_TBS) $(CORE_PROG)
 PLUSARGS  ?=
 
+TB_TARGETS += tb-core-t_illegal-ray
 TB_TARGETS += $(addprefix tb-core-,$(CORE_ALL)) $(addprefix tracediff-core-,$(CORE_ALL)) \
               $(addsuffix -l8,$(addprefix tb-core-,$(CORE_L8))) lint-core
 
@@ -115,6 +119,12 @@ tb-core-$(1)-l8: $(call core_hex_deps,$(1))
 endef
 $(foreach t,$(CORE_L8),$(eval $(call CORE_L8_RULES,$(t))))
 
+# Stage 2: t_illegal with the ray unit
+tb-core-t_illegal-ray: $(call core_hex_deps,t_illegal)
+	@mkdir -p $(OBJ)
+	$(call CORE_VL,t_illegal_tb,_ray,-GLANES=8 -GHAS_DIV_STACK="1'b1" -GHAS_RAY_UNIT="1'b1")
+	$(call core_bin,t_illegal_tb,_ray) $(PLUSARGS)
+
 # Rung 1: the Stage 0 core (git ref CORE_BASE_REF) against the current core,
 # both at LANES = 1, same harness, same test images
 CORE_BASE_REF ?= 16bccea
@@ -142,3 +152,5 @@ lint-core:
 	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=8 -GHAS_DIV_STACK="1'b1" $(CORE_RTL)
 	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=3 $(CORE_RTL)
 	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=3 -GHAS_DIV_STACK="1'b1" $(CORE_RTL)
+	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=8 -GHAS_DIV_STACK="1'b1" -GHAS_RAY_UNIT="1'b1" $(CORE_RTL)
+	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=3 -GHAS_RAY_UNIT="1'b1" $(CORE_RTL)

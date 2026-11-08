@@ -31,7 +31,7 @@ needs `--headless`. `make golden-check` also needs clang and `zig cc`;
 
 | Target | Behavior |
 | --- | --- |
-| `make check-bench` | Fixture checks, every self-checking test at Stage 0 (LANES = 1) and Stage 1 (LANES = 8, divergence stack), and the golden shots (part of `make check`) |
+| `make check-bench` | Fixture checks, every self-checking test at Stage 0 (LANES = 1), Stage 1 (LANES = 8, divergence stack) and Stage 2 (plus the VTRACE ray unit, on `rtl/top.sv`), and the golden shots (part of `make check`) |
 | `make sw [PROG="sources.c"]` | Build ELF, disassembly, map and two 8192-word memory images |
 | `make arena-host` | Compile the allocator for the host with `HOST_CC` |
 | `make vl [RUN_ARGS="..."]` | Run the Verilated RTL; SDL3 window, UART and keyboard when built with SDL3 |
@@ -55,10 +55,11 @@ Production uses `out/vl/kcvl`; the independent fixture uses `out/vl-fixture/kcvl
 `--vcd` needs `TRACE=1`, which builds kcvl with waveform support (a slower model);
 the fixture always has it.
 `STAGE=0 DDR=1` is the default; `STAGE=1` builds 8 lanes with the divergence
-stack. `STAGE=2` adds `t_vtrace`, which needs the ray unit in the core (P7).
-The default `CHIP_TOP=bench_chip` wires the shipped RTL like `rtl/top.sv` but takes
-`LANES` and `HAS_DIV_STACK`, with stub clocks (reset releases at once, `ui_clk` is
-the core clock). `CHIP_TOP=top` builds the board top and runs Stage 0. `PAL_HEX=` and `TEX_HEX=`
+stack. `STAGE=2` adds the ray unit (`HAS_RAY_UNIT=1`) and `t_vtrace`, and builds
+`CHIP_TOP=top`. The default `CHIP_TOP=bench_chip` below Stage 2 wires the shipped
+RTL like `rtl/top.sv` without the ray unit, takes `LANES` and `HAS_DIV_STACK`, and
+has stub clocks (reset releases at once, `ui_clk` is the core clock).
+`CHIP_TOP=top` builds the board top with the same stubs. `PAL_HEX=` and `TEX_HEX=`
 load build-time assets, and frames are read from the RTL framebuffer and palette.
 Keys, live or replayed, reach the UART only when the RTL accepts an FB_SWAP.
 
