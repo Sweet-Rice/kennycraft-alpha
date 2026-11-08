@@ -270,6 +270,13 @@ not post on issue #1. It clears HUPCL on the UART so closing the port leaves
 DTR up: the Arty resets the design on a DTR edge, so only the first open after
 a replug resets the board. It runs on Linux only (`fcntl`, `termios`, v4l2).
 
+`scripts/kenny_keys.py` is the input half of `kc_live.py` for Windows (it also
+runs on Linux and macOS): a small window that sends keys and mouse to the UART
+(`--port COM5`) with the same key bytes and controls, without video, the
+hardware lock or issue #1 posts. It needs pygame-ce and pyserial. Windows raises
+DTR on open and drops it on close, so opening or closing the port may reset the
+game.
+
 ## Pipelined core (P8)
 
 `rtl/core_pipe/` is a pipelined version of the core (IF, F2, ID, EX, MEM,
