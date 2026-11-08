@@ -9,7 +9,8 @@ program/video tools and fpga/patch_bit.sh wait. It does not post on issue #1.
 
 Controls: click the video to capture the mouse (Esc releases it, Esc again quits).
   WASD move, Space jump, arrows look, mouse look, left click break (J), right click
-  place (K), 1-9 or wheel hotbar, E talk, Y/N accept/decline quote, P Nether travel.
+  place (K), 1-9 or wheel hotbar, E talk, Y/N accept/decline quote, P Nether travel,
+  F performance overlay.
 """
 import argparse
 import fcntl
@@ -47,6 +48,7 @@ KEYMAP = {
     pygame.K_LEFT: 0x10, pygame.K_RIGHT: 0x11, pygame.K_UP: 0x12, pygame.K_DOWN: 0x13,
     pygame.K_j: 0x6A, pygame.K_k: 0x6B,
     pygame.K_e: 0x65, pygame.K_y: 0x79, pygame.K_n: 0x6E, pygame.K_p: 0x70,
+    pygame.K_f: 0x66,                                        # performance overlay
     **{getattr(pygame, f'K_{n}'): 0x30 + n for n in range(1, 10)},
 }
 CLICKS = {1: 0x6A, 3: 0x6B}   # left button breaks (J), right button places (K)
