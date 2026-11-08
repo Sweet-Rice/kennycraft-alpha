@@ -7,8 +7,8 @@
 #               `generics` (NAME=VALUE list for synth_design -generic) and
 #               `kc_mmi 1` (the KennyCraft top: write kc.mmi). Targets "top"
 #               (Stage 1, LANES = 8), "top_s0" (Stage 0, LANES = 1) and
-#               "top_s2" (Stage 2: Stage 1 plus the VTRACE ray unit) build
-#               rtl/top.sv.
+#               "top_s2" (Stage 2: Stage 1 plus the VTRACE ray unit and
+#               QRCP) build rtl/top.sv.
 #   FPGA_BUILD_OUT  output directory (the fpga-tools MCP sets it per job;
 #               defaults to build/out/<target> for manual runs).
 #

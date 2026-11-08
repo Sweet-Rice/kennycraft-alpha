@@ -4,7 +4,8 @@
 # $out set. fpga/top_s0/sources.tcl sets kc_stage 0 and sources this file for
 # the Stage 0 build (LANES = 1, no divergence stack, kc_chip), and
 # fpga/top_s2/sources.tcl kc_stage 2 for Stage 2 (Stage 1 plus the VTRACE ray
-# unit, HAS_RAY_UNIT = 1, running the VTRACE kernel kc_chip8_vtrace):
+# unit, HAS_RAY_UNIT = 1, and the per-lane QRCP unit, HAS_QRCP = 1 (D22),
+# running the VTRACE kernel kc_chip8_vtrace):
 #   tools/fpga_mcp.py --project <checkout> --target top_s0 build-wait
 #   tools/fpga_mcp.py --project <checkout> --target top_s2 build-wait
 #
@@ -18,7 +19,7 @@
 if {![info exists kc_stage]} { set kc_stage 1 }
 if {$kc_stage == 2} {
     set hex_dir obj_dir/top_hex/kc_chip8_vtrace
-    set generics {LANES=8 HAS_DIV_STACK=1 HAS_RAY_UNIT=1}
+    set generics {LANES=8 HAS_DIV_STACK=1 HAS_RAY_UNIT=1 HAS_QRCP=1}
 } elseif {$kc_stage == 1} {
     set hex_dir obj_dir/top_hex/kc_chip8
     set generics {LANES=8 HAS_DIV_STACK=1}
