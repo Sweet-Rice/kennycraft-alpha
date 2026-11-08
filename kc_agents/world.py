@@ -72,16 +72,45 @@ def compress(cells):
     return cmds
 
 
+KINDS = {"trader": 0, "contractor": 1, "pig": 2, "zombie": 3}      # game/src/entity.h order
+SPEED = {0: 1.5, 1: 1.5, 2: 1.0, 3: 1.2}                            # blocks/s, entity.c walk_speed
+ENT_MAX = 8
+
+
 class FakeChip:
-    """The chip as the agents see it: ground height, read a cell, place, fill.
-    Rough terrain, and the same checks CR6 puts on the chip (y range, IDs, bedrock)."""
+    """The chip as the agents see it: ground height, read a cell, place, fill, and entities
+    (CR6 SPAWN / MOVE). Rough terrain, and the same checks CR6 puts on the chip."""
 
     def __init__(self, seed=1):
-        rnd = random.Random(seed)
         self.blocks = {}
         self.heights = {}
+        self.ents = {}                  # id -> {"kind", "pos": [x, y, z], "tgt": [x, z]}
         self.reject_rate = 0.0
-        self.rnd = rnd
+        self.rnd = random.Random(seed)
+
+    # ---- entities, as game/src/entity.c does them --------------------------------------
+    def spawn(self, eid, kind, x, z):
+        if not 0 <= eid < ENT_MAX or kind not in SPEED:
+            return False
+        self.ents[eid] = {"kind": kind, "pos": [x, self.ground(int(x), int(z)) + 1, z], "tgt": [x, z]}
+        return True
+
+    def move(self, eid, tx, tz):
+        if eid not in self.ents:
+            return False
+        self.ents[eid]["tgt"] = [tx, tz]
+        return True
+
+    def entity(self, eid):
+        return tuple(self.ents[eid]["pos"])
+
+    def tick(self, dt):
+        for e in self.ents.values():
+            step = SPEED[e["kind"]] * dt
+            p, t = e["pos"], e["tgt"]
+            for a, b in ((0, 0), (2, 1)):
+                p[a] += max(-step, min(step, t[b] - p[a]))
+            p[1] = self.ground(int(p[0] // 1), int(p[2] // 1)) + 1
 
     def ground(self, x, z):
         if (x, z) not in self.heights:

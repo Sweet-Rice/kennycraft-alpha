@@ -127,6 +127,15 @@ class TestContract(unittest.TestCase):
                                                         "block": "stone"}]})
         self.assertFalse(r["ok"])
 
+    def test_worker_walks_to_the_site_on_build(self):
+        c, _ = contract()
+        c.chip.spawn(3, 1, 90.0, 90.0)
+        c.worker = 3
+        c.call("submit_plan", {"name": "hut", "ops": HUT})
+        c.call("quote", {"price": 60, "message": ""})
+        c.call("build", {})
+        self.assertEqual(c.chip.ents[3]["tgt"], [c.origin[0] - 1, c.origin[2] - 1])
+
     def test_bank_clamps_greedy_price(self):
         c, bank = contract()
         rule = c.call("submit_plan", {"name": "hut", "ops": HUT})["rule_price_kcn"]

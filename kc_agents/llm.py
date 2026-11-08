@@ -29,3 +29,24 @@ def nemotron_chat():
         return {"content": msg.content or "", "tool_calls": calls}
 
     return chat
+
+
+def nano_json(timeout=1.5):
+    """Mob brain: Nemotron Nano on the laptop's GPU (llama-server, OpenAI API), JSON out.
+    Returns chat_json(messages) -> dict; raises on timeout or bad JSON (the caller falls back).
+
+      NANO_BASE_URL  default http://127.0.0.1:8080/v1
+      NANO_MODEL     default nemotron-nano (llama-server serves whatever it loaded)
+    """
+    from openai import OpenAI
+    from .mobs import json_reply
+    client = OpenAI(base_url=os.environ.get("NANO_BASE_URL", "http://127.0.0.1:8080/v1"),
+                    api_key="none", timeout=timeout, max_retries=0)
+    model = os.environ.get("NANO_MODEL", "nemotron-nano")
+
+    def chat_json(messages):
+        r = client.chat.completions.create(model=model, messages=messages, temperature=0.7, max_tokens=200,
+                                           response_format={"type": "json_object"})
+        return json_reply(r.choices[0].message.content or "{}")
+
+    return chat_json

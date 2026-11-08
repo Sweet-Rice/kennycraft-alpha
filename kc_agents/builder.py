@@ -53,8 +53,9 @@ TOOLS = [
 
 
 class Contract:
-    def __init__(self, cid, chip, bank, ask_player, origin=(0, 0), zone=(8, 8, 8), seed=0):
+    def __init__(self, cid, chip, bank, ask_player, origin=(0, 0), zone=(8, 8, 8), seed=0, worker=None):
         self.id, self.chip, self.bank, self.ask = cid, chip, bank, ask_player
+        self.worker = worker            # entity id of the contractor villager, walked to the site on build
         self.zone = zone
         ox, oz = origin
         grounds = sorted(chip.ground(ox + x, oz + z) for x in range(zone[0]) for z in range(zone[2]))
@@ -121,6 +122,8 @@ class Contract:
         if self.builds >= 3:
             return {"error": "out of build attempts; cancel"}
         self.builds += 1
+        if self.worker is not None:     # the contractor walks to the corner of the site (CR6 MOVE)
+            self.chip.move(self.worker, self.origin[0] - 1, self.origin[2] - 1)
         ok = 0
         for c in self.cmds:
             ok += self.chip.place(*c[1:]) if c[0] == "place" else self.chip.fill(*c[1:])
