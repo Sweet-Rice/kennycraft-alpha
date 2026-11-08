@@ -7,10 +7,6 @@
 #include "chunks.h"
 #include "arena.h"
 #include "kc_lanes.h"
-#if KC_RASTER
-#include "mesh.h"
-#include "raster.h"
-#endif
 
 #ifndef KC_MAX_STEPS
 #define KC_MAX_STEPS 64        // Stage 0 plan says 16 for 1-3 fps; raise as the hardware gets faster
@@ -23,9 +19,6 @@
 #define DT_MAX Q16(0.35)
 
 static uint32_t last_cycles;
-#if KC_RASTER && defined(KC_HOST)
-int32_t kc_use_raster = 1;    // laptop can flip this at run time to compare with the ray tracer
-#endif
 
 void kc_set_resolution(int32_t width) {
     kc_rparams *p = KC_RP;
@@ -48,9 +41,6 @@ void kc_init(void) {
     kc_set_resolution(KC_WIDTH);
     kc_set_max_steps(KC_MAX_STEPS);
     hal_puts("kc: boot\n");
-#if KC_RASTER
-    mesh_init();
-#endif
     arena_reset();
     game_init();
     last_cycles = hal_mmio_r(MMIO_CYCLES);
@@ -58,15 +48,6 @@ void kc_init(void) {
 
 // Draw the world: game-side preparation on lane 0, then the kernel on all lanes.
 void kc_draw_world(void) {
-#if KC_RASTER
-    if (kc_use_raster) {
-        mesh_update();            // remesh chunks that changed (lane 0, arena scratch)
-        raster_bin();             // per-tile command lists (lane 0)
-        while (hal_mmio_r(MMIO_FB_SWAP)) {}           // 1. last swap done: back buffer is ours (D21)
-        mask_all(); kc_raster_kernel(); mask_set(1);
-        return;
-    }
-#endif
     while (hal_mmio_r(MMIO_FB_SWAP)) {}               // 1. (D21)
     mask_all(); kc_render_frame(); mask_set(1);
 }
