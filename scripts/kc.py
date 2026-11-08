@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """KennyCraft window: keyboard and mouse to the board's 1 Mbaud UART, or with --host
-the laptop build (game/build/kc_host link) played inside this window.
+the laptop build (game/build/kc_host link) played inside this window, or with --kchost
+the game kc-host is already running (KC_CHIP=host), so the villagers, bank and agents work:
+this window shows its frames and sends your keys and mouse to kc-host.
 
 The board UART is only opened under the board claim and hardware lock of
 scripts/board.sh keys (issue #1 taking-board, fpga-tools MCP hardware.lock);
@@ -79,6 +81,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', default='/dev/ttyUSB1', help='board UART (default: %(default)s)')
     parser.add_argument('--host', action='store_true', help='play the laptop build in this window')
+    parser.add_argument('--kchost', nargs='?', const='http://127.0.0.1:8000', metavar='URL',
+                        help="play the game kc-host runs (KC_CHIP=host), with its agents (default %(const)s)")
     args = parser.parse_args(argv)
     try:
         import pygame
@@ -86,7 +90,44 @@ def main(argv=None):
         print('keys: pygame is not installed (needed for the window); pip install pygame', file=sys.stderr)
         return 5
     proc = connection = raw = None
-    if args.host:
+    if args.kchost:
+        import json
+        import urllib.request
+        raw = Path(__file__).resolve().parents[1] / 'game' / 'out' / 'window' / 'frame.rgb'
+        url = args.kchost.rstrip('/') + '/api/input'
+
+        def send(data):
+            req = urllib.request.Request(url, json.dumps({'hex': bytes(data).hex()}).encode(),
+                                         {'Content-Type': 'application/json'})
+            try:
+                urllib.request.urlopen(req, timeout=1).close()
+            except OSError as error:
+                print(f'keys: kc-host not reachable at {url}: {error}', file=sys.stderr)
+        port_errors = ()
+        live = {}                                     # kc-host's latest /events snapshot
+
+        def watch():
+            while True:
+                try:
+                    with urllib.request.urlopen(args.kchost.rstrip('/') + '/events', timeout=30) as stream:
+                        for line in stream:
+                            if line.startswith(b'data:'):
+                                live.clear()
+                                live.update(json.loads(line[5:]))
+                except (OSError, ValueError):
+                    import time
+                    time.sleep(1)
+
+        def post(path, body):
+            req = urllib.request.Request(args.kchost.rstrip('/') + path, json.dumps(body).encode(),
+                                         {'Content-Type': 'application/json'})
+            try:
+                urllib.request.urlopen(req, timeout=5).close()
+            except OSError as error:
+                print(f'keys: {path}: {error}', file=sys.stderr)
+        import threading
+        threading.Thread(target=watch, daemon=True).start()
+    elif args.host:
         try:
             proc, raw = open_host()
         except OSError as error:
@@ -118,13 +159,13 @@ def main(argv=None):
     }
     clicks = {1: 0x6A, 3: 0x6B}   # left button breaks (J), right button places (K)
     try:
-        if connection is None and not args.host:
+        if connection is None and not args.host and not args.kchost:
             connection = serial.Serial(port, baudrate=1_000_000, bytesize=8, parity='N',
                                        stopbits=1, timeout=0, write_timeout=1)
             send = connection.write
         pygame.display.init()
         pygame.font.init()
-        screen = pygame.display.set_mode((640, 480) if args.host else (320, 120))
+        screen = pygame.display.set_mode((640, 480) if args.host or args.kchost else (320, 120))
         pygame.display.set_caption('KennyCraft')
         screen.fill((20, 20, 20))
         font = pygame.font.Font(None, 22)
@@ -135,6 +176,7 @@ def main(argv=None):
         pygame.event.pump()
         focused = pygame.key.get_focused()
         held = set()
+        typing = None                     # --kchost: text for the villager you're talking to
         grabbed = False
         acc = [0, 0]
         clock = pygame.time.Clock()
@@ -151,7 +193,28 @@ def main(argv=None):
             if proc is not None and proc.poll() is not None:
                 print(f'keys: kc_host exited ({proc.returncode})', file=sys.stderr)
                 return 5
+            if args.kchost and typing is None and live.get('prompt'):
+                typing = ''                       # E at a villager: your keys type to them now
+                for key in sorted(held):
+                    send(bytes([keymap[key]]))
+                held.clear()
+            elif args.kchost and typing is not None and not live.get('prompt'):
+                typing = None
             for event in pygame.event.get():
+                if typing is not None and event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_RETURN and typing.strip():
+                        post('/api/request', {'kind': live['prompt'], 'text': typing.strip()})
+                        live['prompt'] = None
+                        typing = None
+                    elif event.key == pygame.K_ESCAPE:
+                        post('/api/close', {})
+                        live['prompt'] = None
+                        typing = None
+                    elif event.key == pygame.K_BACKSPACE:
+                        typing = typing[:-1]
+                    elif event.unicode and event.unicode.isprintable() and len(typing) < 120:
+                        typing += event.unicode
+                    continue
                 esc = event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
                 if esc and grabbed:
                     grab(False)
@@ -198,6 +261,15 @@ def main(argv=None):
                 if len(data) in SIZES:
                     frame = pygame.image.frombuffer(data, SIZES[len(data)], 'RGB')
                     screen.blit(pygame.transform.scale(frame, screen.get_size()), (0, 0))
+                    if args.kchost:               # what the agents say, and the text box
+                        lines = (live.get('log') or [])[-2:]
+                        for i, text in enumerate(lines):
+                            img = font.render(text[9:][:90], True, (255, 255, 255), (0, 0, 0))
+                            screen.blit(img, (6, 6 + 20 * i + 40))
+                        if typing is not None:
+                            box = font.render(f"To the {live.get('prompt')}: {typing}_   (Enter sends, Esc closes)",
+                                              True, (255, 255, 255), (30, 30, 90))
+                            screen.blit(box, (6, screen.get_height() - 70))
                     pygame.display.flip()
             else:
                 in_waiting = getattr(connection, 'in_waiting', 0)
@@ -206,7 +278,7 @@ def main(argv=None):
                     if data:
                         sys.stdout.write(''.join(chr(b) if 0x20 <= b <= 0x7E or b == 10 else f'\\x{b:02X}' for b in data))
                         sys.stdout.flush()
-            clock.tick(60 if args.host else 240)
+            clock.tick(60 if args.host or args.kchost else 240)
     except (OSError, pygame.error, *port_errors) as error:
         print(f'keys: {error}', file=sys.stderr)
         return 5

@@ -63,7 +63,9 @@ class Host:
             rec = shlex.quote(os.environ["KC_REC"]) if os.environ.get("KC_REC") else ""
             opts = " ".join(f"{k}={shlex.quote(os.environ[k])}" for k in ("KC_LINK_FPS", "KC_REC") if os.environ.get(k))
             self.proc = await asyncio.create_subprocess_exec(
-                "wsl", "-e", "bash", "-lc", f"cd '{wsl}' && mkdir -p out/link {rec} && {opts} exec ./build/kc_host link out/link",
+                # KC_RAW: every frame as raw RGB for the game window (scripts/kc.py --kchost)
+                "wsl", "-e", "bash", "-lc", f"cd '{wsl}' && mkdir -p out/link out/window {rec} && "
+                f"KC_RAW=out/window/frame.rgb {opts} exec ./build/kc_host link out/link",
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
             self.bridge = cr6.Bridge(self.proc.stdin.write, on_link=self.linked)
         else:
@@ -192,6 +194,14 @@ async def key(body: dict):
     """A key from the page, as kc.py would send it: bit 7 set on key-down."""
     if host.proc or host.port:
         host.bridge.write(bytes([int(body["code"]) & 0x7F | (0x80 if body["down"] else 0)]))
+
+
+@app.post("/api/input")
+async def raw_input(body: dict):
+    """Raw input bytes for the game, as scripts/kc.py --kchost sends them: keys (bit 7 = down)
+    and mouse-look bytes. Only the game build and the board take input this way."""
+    if host.proc or host.port:
+        host.bridge.write(bytes.fromhex(body["hex"])[:256])
 
 
 @app.post("/api/interact")
