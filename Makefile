@@ -45,6 +45,7 @@ endif
 
 TB_TARGETS :=
 include $(wildcard tb/*/tb.mk)
+include mk/doom.mk
 
 .PHONY: check check-all clean FORCE $(TB_TARGETS)
 
