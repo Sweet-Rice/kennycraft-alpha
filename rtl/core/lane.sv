@@ -8,13 +8,13 @@
 //   multiplier     Zmmul, registered product (second EXECUTE cycle)
 //   address gen    the ALU sum (rs1 + imm) lands in res as the bus address
 //
-// res holds the rd value (ALU, LUI immediate, link, product, lane control
-// result) or, for loads and stores, this lane's address. Load data arrives
-// lane-serially from the LSU: ld_cap marks the cycle in which ld_value is this
-// lane's (already extended) word. It is kept in a holding register, and in WB
-// a lane takes ld_value directly when its data arrives in that cycle (the last
-// lane of the walk) and the holding register otherwise, so every lane writes
-// back together.
+// res holds the rd value (ALU, LUI immediate, link, product, lane control or
+// ray unit result) or, for loads and stores, this lane's address. Load data
+// arrives lane-serially from the LSU: ld_cap marks the cycle in which
+// ld_value is this lane's (already extended) word. It is kept in a holding
+// register, and in WB a lane takes ld_value directly when its data arrives in
+// that cycle (the last lane of the walk) and the holding register otherwise,
+// so every lane writes back together.
 module lane
     import kc_isa_pkg::*;
 #(
@@ -39,6 +39,8 @@ module lane
     input  logic        res_imm,      // LUI
     input  logic        is_lane,      // custom-0
     input  logic [31:0] lane_y,       // BALLOT / MASKGET result (same in every lane)
+    input  logic        ray_en,       // custom-1: latch ray_y (VGET in EX, VTRACE at done)
+    input  logic [31:0] ray_y,        // this lane's VTRACE result or VGET field
 
     output logic [31:0] rs1,          // operands of the instruction in flight
     output logic [31:0] rs2,
@@ -90,7 +92,9 @@ module lane
     );
 
     always_ff @(posedge clk) begin
-        if (ex_en) begin
+        if (ray_en) begin
+            res <= ray_y;
+        end else if (ex_en) begin
             if (res_imm)                          res <= imm;
             else if (is_lane && funct3 == F3_LANEID) res <= 32'(ID);
             else if (is_lane)                     res <= lane_y;
