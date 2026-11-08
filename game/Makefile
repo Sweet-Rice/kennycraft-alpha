@@ -10,11 +10,13 @@
 # Build options (any target): KC_GEN_BITMAP=1 (issue #2's 8 KB bitmap instead of chunk tags),
 # KC_TAG_PERSIST=1 (chunk tags without the boot nonce: stored chunks survive a reset).
 # KC_QRCP=1: 8-lane chip builds use the QRCP instruction for qrcp() (D22; Stage 2 core).
+# KC_FIXED_DT=1: fixed per-frame dt and frame-synchronous chunk loads, so replays retire the
+#   same instructions on any core speed (trace comparison; use with KC_TAG_PERSIST=1).
 SRC      := src/kc_libc.c src/arena.c src/fixed.c src/trace.c src/render.c src/terrain.c src/chunks.c src/game.c src/kc_main.c
 HOST_SRC := host/hal_host.c host/png.c host/main_host.c
 GEN      := gen/kc_tables.h gen/kc_assets.h gen/textures.hex gen/palette.hex
 KC_DEFS  := $(if $(KC_GEN_BITMAP),-DKC_GEN_BITMAP=$(KC_GEN_BITMAP)) $(if $(KC_TAG_PERSIST),-DKC_TAG_PERSIST=$(KC_TAG_PERSIST)) \
-            $(if $(KC_QRCP),-DKC_QRCP=$(KC_QRCP))
+            $(if $(KC_QRCP),-DKC_QRCP=$(KC_QRCP)) $(if $(KC_FIXED_DT),-DKC_FIXED_DT=$(KC_FIXED_DT))
 
 CC       ?= cc
 CFLAGS   := -std=c11 -O2 -Wall -Wextra -Wno-unused-parameter -Isrc -Igen -Ihost $(KC_DEFS)

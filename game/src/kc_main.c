@@ -18,8 +18,19 @@
 
 #define DT_K 5629500u          // 2^48 / CORE_HZ: (cycles * DT_K) >> 32 = seconds in Q16
 #define DT_MAX Q16(0.35)
+// KC_FIXED_DT=1 (replay and trace-comparison builds): every frame steps the player by
+// KC_DT_FIXED instead of the CYCLES time since the last frame, so the game's state and
+// frames depend only on the frame number and the keys, not on how fast the core runs.
+#ifndef KC_FIXED_DT
+#define KC_FIXED_DT 0
+#endif
+#ifndef KC_DT_FIXED
+#define KC_DT_FIXED 5243       // Q16(0.08 s): one frame at 12.5 fps
+#endif
 
+#if !KC_FIXED_DT
 static uint32_t last_cycles;
+#endif
 
 void kc_set_resolution(int32_t width) {
     kc_rparams *p = KC_RP;
@@ -44,7 +55,9 @@ void kc_init(void) {
     hal_puts("kc: boot\n");
     arena_reset();
     game_init();
+#if !KC_FIXED_DT
     last_cycles = hal_mmio_r(MMIO_CYCLES);
+#endif
 }
 
 // Draw the world: game-side preparation on lane 0, then the kernel on all lanes.
@@ -59,9 +72,13 @@ void kc_draw_world(void) {
 void kc_frame(void) {
     arena_reset();                                     // 2.
     read_keys();                                       // 3.
+#if KC_FIXED_DT
+    q16 dt = KC_DT_FIXED;
+#else
     uint32_t now = hal_mmio_r(MMIO_CYCLES);
     q16 dt = (q16)(((uint64_t)(now - last_cycles) * DT_K) >> 32);
     last_cycles = now;
+#endif
     move_player(imin(dt, DT_MAX));                     // 4.
     world_update(qfloor(kc_me.pos[0]), qfloor(kc_me.pos[2]));   // 5.
     pick_and_edit();                                   // 6.
