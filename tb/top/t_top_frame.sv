@@ -27,9 +27,9 @@
 //                 (default 0, i.e. from reset) and FB_SWAP N+1: core cycle,
 //                 PC, lane, world index, loaded value
 //
-// LANES / HAS_DIV_STACK / HAS_RAY_UNIT pick the core (tb/top/tb.mk: 1 / 0 / 0
-// for the one-lane game builds, 8 / 1 / 0 for the 8-lane ones, 8 / 1 / 1 for
-// kc_chip8_vtrace).
+// LANES / HAS_DIV_STACK / HAS_RAY_UNIT / HAS_QRCP pick the core (tb/top/tb.mk:
+// 1 / 0 / 0 / 0 for the one-lane game builds, 8 / 1 / 0 / 0 for the 8-lane
+// ones, 8 / 1 / 1 / 1 for kc_chip8_vtrace).
 //
 // The build has no --timing: tb/top/t_top_frame.cpp drives the ports, the
 // 100 MHz clk (first rising edge at 5 ns), ck_rst (released with the 20th
@@ -43,7 +43,8 @@ module t_top_frame #(
     parameter string DMEM_HEX = "kc_dmem.hex",
     parameter string TEX_HEX  = "textures.hex",
     parameter string PAL_HEX  = "palette.hex",
-    parameter bit    HAS_RAY_UNIT  = 1'b0
+    parameter bit    HAS_RAY_UNIT  = 1'b0,
+    parameter bit    HAS_QRCP      = 1'b0
 ) (
     input logic clk,
     input logic ck_rst,
@@ -65,7 +66,7 @@ module t_top_frame #(
 
     top #(.LANES(LANES), .HAS_DIV_STACK(HAS_DIV_STACK),
           .IMEM_HEX(IMEM_HEX), .DMEM_HEX(DMEM_HEX), .TEX_HEX(TEX_HEX), .PAL_HEX(PAL_HEX),
-          .HAS_RAY_UNIT(HAS_RAY_UNIT)) dut (
+          .HAS_RAY_UNIT(HAS_RAY_UNIT), .HAS_QRCP(HAS_QRCP)) dut (
         .clk, .ck_rst, .uart_rxd_out, .uart_txd_in(1'b1), .led,
         .vga_r, .vga_g, .vga_b, .vga_hs, .vga_vs,
         .ddr3_addr, .ddr3_ba, .ddr3_cas_n, .ddr3_ck_n, .ddr3_ck_p, .ddr3_cke,

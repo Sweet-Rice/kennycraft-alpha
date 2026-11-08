@@ -55,7 +55,8 @@ Production uses `out/vl/kcvl`; the independent fixture uses `out/vl-fixture/kcvl
 `--vcd` needs `TRACE=1`, which builds kcvl with waveform support (a slower model);
 the fixture always has it.
 `STAGE=0 DDR=1` is the default; `STAGE=1` builds 8 lanes with the divergence
-stack. `STAGE=2` adds the ray unit (`HAS_RAY_UNIT=1`) and `t_vtrace`, and builds
+stack. `STAGE=2` adds the ray unit (`HAS_RAY_UNIT=1`), the per-lane QRCP unit
+(`HAS_QRCP=1`) and `t_vtrace`, and builds
 `CHIP_TOP=top`. The default `CHIP_TOP=bench_chip` below Stage 2 wires the shipped
 RTL like `rtl/top.sv` without the ray unit, takes `LANES` and `HAS_DIV_STACK`, and
 has stub clocks (reset releases at once, `ui_clk` is the core clock).

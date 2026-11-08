@@ -1,8 +1,8 @@
 // KennyCraft core, Stages 1 and 2: multi-cycle RV32I + Zmmul + custom-0 lane
-// control, plus custom-2 divergence stack when HAS_DIV_STACK = 1 and custom-1
-// ray unit (VSET, VTRACE, VGET) when HAS_RAY_UNIT = 1, on LANES
-// SIMD lanes with one shared control path (Tai page, GPU Core; Tai_2
-// sections 1 and 2).
+// control, plus custom-2 divergence stack when HAS_DIV_STACK = 1, custom-1
+// ray unit (VSET, VTRACE, VGET) when HAS_RAY_UNIT = 1 and QRCP when
+// HAS_QRCP = 1, on LANES SIMD lanes with one shared control path (Tai page,
+// GPU Core; Tai_2 sections 1 and 2).
 //
 // Grown from Tai's multicycle core (datapath.sv in RISC-V-Core-progression).
 // No pipeline registers, no forwarding, no hazard logic. One FSM walks every
@@ -15,6 +15,7 @@
 //         lane control updates the mask                             1
 //   MUL   second EXECUTE cycle for MUL family (registered product) 1
 //   VT    VTRACE: wait for the ray unit's done pulse              walk + 1
+//   QR    QRCP: step every lane's QRCP unit, latch the result      5
 //   MEM   lane-serial LSU, one bus access per active lane, ascending
 //         order; stores retire on the last lane's access           N + slave wait
 //   WB    every lane writes rd together (the last load lane's data
@@ -49,6 +50,11 @@
 // latches hit_cell (field 0, zero-extended) or t_hit (field 1) in EX and
 // writes rd in active lanes.
 //
+// QRCP (D22, HAS_QRCP = 1; illegal otherwise) runs rtl/core/qrcp.sv in every
+// lane: the unit latches its rs1 in EX, QR steps it through qr_ph 0..3 and
+// latches its result into res at qr_ph 4, and WB writes rd in active lanes
+// (rd = x0 never). Fixed latency: 9 cycles per QRCP (IF, ID, EX, 5 x QR, WB).
+//
 // Errors (Tai_2 sections 1 and 2). An illegal instruction or a fetch outside
 // instruction memory (caught in ID), a taken branch, JAL, JALR, or a DIF or
 // DELSE that jumps, whose target is not 4-aligned (EX, D16: the target is
@@ -71,7 +77,8 @@ module core
     parameter int          LANES         = 1,
     parameter logic [31:0] RESET_VEC     = IMEM_BASE,
     parameter bit          HAS_DIV_STACK = 1'b0,
-    parameter bit          HAS_RAY_UNIT  = 1'b0
+    parameter bit          HAS_RAY_UNIT  = 1'b0,
+    parameter bit          HAS_QRCP      = 1'b0
 ) (
     input  logic                 clk,
     input  logic                 rst,
@@ -111,8 +118,8 @@ module core
 
     localparam int LW = (LANES > 1) ? $clog2(LANES) : 1;
 
-    typedef enum logic [2:0] {
-        S_IF, S_ID, S_EX, S_MUL, S_MEM, S_WB, S_HALT, S_VT
+    typedef enum logic [3:0] {
+        S_IF, S_ID, S_EX, S_MUL, S_MEM, S_WB, S_HALT, S_VT, S_QR
     } state_t;
 
     state_t state;
@@ -122,19 +129,21 @@ module core
     // ------------------------------------------------------------------
     logic [3:0]  d_alu_ctrl;
     logic        d_alu_a_pc, d_r_we, d_res_imm, d_is_load, d_is_store, d_is_mul;
-    logic        d_is_branch, d_is_jal, d_is_jalr, d_is_lane, d_is_div, d_is_ray, d_uniform_wr, d_illegal;
+    logic        d_is_branch, d_is_jal, d_is_jalr, d_is_lane, d_is_div, d_is_ray, d_is_qrcp;
+    logic        d_uniform_wr, d_illegal;
     logic [1:0]  d_alu_b_sel;
     logic [2:0]  d_imm_sig;
     logic [31:0] d_imm;
     logic        id_fault;
 
-    inst_decoder #(.HAS_DIV_STACK(HAS_DIV_STACK), .HAS_RAY_UNIT(HAS_RAY_UNIT)) u_dec (
+    inst_decoder #(.HAS_DIV_STACK(HAS_DIV_STACK), .HAS_RAY_UNIT(HAS_RAY_UNIT),
+                   .HAS_QRCP(HAS_QRCP)) u_dec (
         .inst(imem_rdata), .alu_ctrl(d_alu_ctrl), .alu_a_pc(d_alu_a_pc),
         .alu_b_sel(d_alu_b_sel), .imm_sig(d_imm_sig), .r_we(d_r_we),
         .res_imm(d_res_imm), .is_load(d_is_load), .is_store(d_is_store),
         .is_mul(d_is_mul), .is_branch(d_is_branch), .is_jal(d_is_jal),
         .is_jalr(d_is_jalr), .is_lane(d_is_lane), .is_div(d_is_div), .is_ray(d_is_ray),
-        .uniform_wr(d_uniform_wr), .illegal(d_illegal)
+        .is_qrcp(d_is_qrcp), .uniform_wr(d_uniform_wr), .illegal(d_illegal)
     );
 
     immgen u_imm (.inst(imem_rdata[31:7]), .imm_sig(d_imm_sig), .imm(d_imm));
@@ -145,6 +154,7 @@ module core
     logic [3:0]  ex_alu_ctrl;
     logic        ex_alu_a_pc, ex_r_we, ex_res_imm, ex_is_load, ex_is_store, ex_is_mul;
     logic        ex_is_branch, ex_is_jal, ex_is_jalr, ex_is_lane, ex_is_div, ex_is_ray, ex_uniform_wr;
+    logic        ex_is_qrcp;
     logic [1:0]  ex_alu_b_sel;
     logic [2:0]  ex_funct3;
     logic [2:0]  ex_field;    // funct7[2:0]: VSET / VGET field
@@ -169,6 +179,7 @@ module core
             ex_is_lane    <= d_is_lane;
             ex_is_div     <= d_is_div;
             ex_is_ray     <= d_is_ray;
+            ex_is_qrcp    <= d_is_qrcp;
             ex_uniform_wr <= d_uniform_wr;
             ex_funct3     <= instr_funct3(imem_rdata);
             ex_field      <= imem_rdata[27:25];   // funct7[2:0]
@@ -195,11 +206,15 @@ module core
     logic             ray_en;                 // latch ray_y into res (VGET, VTRACE)
     logic [31:0]      ray_y [LANES];
     logic             vt_nowr;                // VTRACE with a cap of 0: no write
+    logic [2:0]       qr_ph;                  // QRCP step in QR
+    logic             qr_wr;                  // QR, last step: latch the result
+
+    assign qr_wr = HAS_QRCP && (state == S_QR) && (qr_ph == 3'd4);
 
     assign wb_en = (state == S_WB) && ex_r_we && !vt_nowr;
 
     for (genvar i = 0; i < LANES; i++) begin : g_lane
-        lane #(.ID(i)) u_lane (
+        lane #(.ID(i), .HAS_QRCP(HAS_QRCP)) u_lane (
             .clk,
             .id_en(state == S_ID),
             .rs1_addr(instr_rs1(imem_rdata)), .rs2_addr(instr_rs2(imem_rdata)),
@@ -207,6 +222,7 @@ module core
             .alu_ctrl(ex_alu_ctrl), .alu_a_pc(ex_alu_a_pc), .alu_b_sel(ex_alu_b_sel),
             .funct3(ex_funct3), .pc, .imm(ex_imm), .res_imm(ex_res_imm),
             .is_lane(ex_is_lane), .lane_y, .ray_en, .ray_y(ray_y[i]),
+            .qr_load((state == S_EX) && ex_is_qrcp), .qr_en(state == S_QR), .qr_ph, .qr_wr,
             .rs1(l_rs1[i]), .rs2(l_rs2[i]), .alu_y(l_alu[i]), .cmp(l_cmp[i]), .res(l_res[i]),
             .ld_cap(ld_cap[i]), .ld_value,
             .we(l_we[i]), .rd(ex_rd), .is_load(ex_is_load), .wdata(l_wdata[i])
@@ -308,6 +324,16 @@ module core
         if (state == S_EX) next_pc <= take ? target : pc + 32'd4;
     end
 
+    // QRCP step counter: 0 from EX, counts through QR (constant 0 without QRCP)
+    if (HAS_QRCP) begin : g_qr_ph
+        always_ff @(posedge clk) begin
+            if (state == S_EX)      qr_ph <= 3'd0;
+            else if (state == S_QR) qr_ph <= qr_ph + 3'd1;
+        end
+    end else begin : g_no_qr_ph
+        assign qr_ph = 3'd0;
+    end
+
     // ------------------------------------------------------------------
     // Ray unit (custom-1)
     // ------------------------------------------------------------------
@@ -401,10 +427,12 @@ module core
                     else if (ex_is_mul)                  state <= S_MUL;
                     else if (ex_mem)                     state <= S_MEM;
                     else if (ex_vtrace)                  state <= S_VT;
+                    else if (HAS_QRCP && ex_is_qrcp)     state <= S_QR;
                     else                                 state <= S_WB;
                 end
                 S_MUL: state <= S_WB;
                 S_VT:  if (vt_done) state <= S_WB;
+                S_QR:  if (qr_wr) state <= S_WB;
                 S_MEM: begin
                     if (lsu_done) begin
                         if (ex_is_store) begin
