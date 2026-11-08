@@ -26,13 +26,31 @@ and `llvm-nm` on `PATH`. `llvm-size` is optional, for section-size diagnostics.
 macOS can cross-build the chip images with the full LLVM toolchain using
 `make chip chip8 CHIP_CC="clang -fuse-ld=lld"`.
 
-`CC` (default `cc`) builds `kc_host`; `CHIP_CC` (default `clang`) builds the chip ELFs. The chip build compiles the lane-0 game files (`arena.c terrain.c chunks.c game.c kc_main.c cr6.c`) with `-Os` and the kernel files with `-O2`; IMEM is 32 KB. `build/`, `out/`, `gen/` and `assets/` are gitignored.
+`CC` (default `cc`) builds `kc_host`; `CHIP_CC` (default `clang`) builds the chip ELFs. The chip build compiles the lane-0 game files (`arena.c terrain.c chunks.c game.c kc_main.c cr6.c`) with `-Os` and the kernel files with `-O2`; IMEM is 32 KB. At main 12faff7, `.text` is 32,180 bytes in `kc_chip.elf` (Stage 0) and 30,944 in `kc_chip8_vtrace.elf` (Stage 2). The Stage 0/1 golden builds (`scripts/golden.py`) add the shot harness, so they also build `entity.c` with `-Os`; the frames are the same. `build/`, `out/`, `gen/` and `assets/` are gitignored.
 
 Both chip targets run `tools/chip_check.sh` (no `div`/`rem`, float, libgcc calls, `ecall` or CSR instructions; prints section sizes) and `tools/stack_check.sh`; `chip8` also runs `tools/lane_lint.sh`. That script checks the named symbols `qrcp`, `ray_setup`, `kc_shade_pixel`, `kc_shade_pixel_ent`, `ent_box_hit` and `vtrace_ref` only when present: zero branches for the first five, exactly two uniform branches for `vtrace_ref`. It is not an exhaustive audit of every current kernel function.
 
 `tools/stack_check.sh` computes the worst-case stack depth of each call chain that runs on a lane (`main` on lane 0, `kc_render_frame` on lanes 1-7) from the ELF's prologues (`addi sp,sp,-N`) and call graph, against the 1 KB lane stack (limit: second argument or `STACK_LIMIT`, default 1024). It also fails on recursion, on calls it cannot resolve (indirect, or not to a function start) and on unsized stack adjustments. Nothing catches an overflow on the chip (lane n runs into lane n+1's stack, lane 7 into the statics), so keep big locals out of anything the kernel calls.
 
+## Controls
+
+The game reads one byte per key event from the UART: the key code, with bit 7 set for key down and clear for key up (mouse look is bytes 0x14-0x17). `scripts/kc.py`
+and `scripts/kc_live.py` send them from a laptop window; `kc_host link` reads them on stdin.
+
+| Key | Action |
+|---|---|
+| W A S D | Walk |
+| Space | Jump |
+| Arrows | Look (the laptop windows also turn with the mouse) |
+| J / K | Break / place the block in the crosshair |
+| 1–9 | Hotbar: grass, dirt, stone, cobble, log, obsidian, planks, sand, brick |
+| E | Talk to the villager in front of you (CR6 INTERACT) |
+| Y / N | Accept / decline the quote on the HUD (CR6 CONFIRM) |
+| P | Travel to the Nether and back |
+| F | Frames-per-second overlay on/off |
+
 ## Build options
+
 
 Makefile variables (any target): `build/defs` tracks changes to `KC_GEN_BITMAP`,
 `KC_TAG_PERSIST`, `KC_QRCP`, `KC_FIXED_DT` and `KC_DEMO`.
@@ -71,14 +89,14 @@ Environment variables for `kc_host` (`host/hal_host.c`): `KC_DDR_FILL=random|zer
 |---|---|
 | `Makefile` | Asset generation, laptop build and checks, chip ELFs |
 | `src/kc_hal.h` | The only platform switch. Chip: memory map + MMIO from Interfaces v1.0, camera block and `kc_rparams` layout. Host: `host/hal_host.c` |
-| `src/blocks.h` | Block types (air, grass, dirt, stone, cobble, log, leaves, planks, sand, brick, bedrock, 5 spares), world size, build height, seed |
+| `src/blocks.h` | Block types (air, grass, dirt, stone, cobble, log, leaves, planks, sand, brick, bedrock, netherrack, lava, glowstone, obsidian, portal: all 16 4-bit codes), world size, build height, seed, the Nether boundary and the demo village layout |
 | `src/fixed.[ch]` | Q16.16, `qrcp` (1/x: computed seed + Newton, branch-free, no table by default), `qsin`, `sel()` |
 | `src/trace.[ch]` | `ray_setup` + `kc_trace` with the exact VTRACE contract. `vtrace_ref` = C reference for one ray; `KC_VTRACE=1` maps `kc_trace` onto the ray unit |
 | `src/render.[ch]` | Ray-tracing kernel. 4x2 block per lane pass (D15), blocks in rows; frame state and the ray in registers, one LBU + one SB per pixel. Each VTRACE walk overlaps the next block's ray setup (asynchronous VTRACE), and blocks under the hotbar are not traced. Pixel byte per spec |
 | `src/entity.[ch]` | Villager (trader, contractor), chicken and zombie box models (flat colors) that walk to a target; drawn by the ray tracer |
 | `src/kc_libc.c` | memcpy/memset for the freestanding chip build |
 | `src/kc_lanes.h` | LANEID/LMASK/BALLOT/MASKGET/MASKSET/MASKALL: software for 1 lane, `.insn` for 8; `qrcp_hw` (QRCP `.insn`) on 8 lanes only |
-| `src/terrain.[ch]` | Deterministic terrain + trees from absolute coordinates; generates one chunk into its window slot |
+| `src/terrain.[ch]` | Deterministic terrain + trees from absolute coordinates, Nether terrain east of x = 3072 and the `KC_DEMO=1` village; generates one chunk into its window slot |
 | `src/chunks.[ch]` | Issue #2 memory API: world_update/get/set, chunk_load/store tickets, slot_valid, window_origin; tags inside the DDR3 chunks replace the 8 KB generated bitmap (`KC_GEN_BITMAP=1` brings it back) |
 | `src/arena.[ch]` | Per-frame 8 KB arena (`sw/arena.[ch]` with an overridable `ARENA_SIZE`) |
 | `src/game.[ch]` | Keys, physics, picking, place/break, camera, crosshair, selection box + hotbar |
@@ -112,7 +130,28 @@ Environment variables for `kc_host` (`host/hal_host.c`): `KC_DDR_FILL=random|zer
 | `gencost` | Terrain generation cost per chunk, plus a chunk digest |
 | `link <dir>` | stdin = UART RX, stdout = UART TX at ~20 fps, `<dir>/live.png` every 4th frame |
 
+## The Nether
+
+The Nether is the east strip of the same world, from x = 3072 (`NETHER_X0` in `src/blocks.h`), so
+chunk storage, tags and the window need nothing new. `src/terrain.c` fills it with a bedrock
+floor, roof and wall at x = 3072, netherrack floor (y 1..10) and ceiling (y 24..30), lava lakes
+up to y 5 and glowstone hanging from the ceiling.
+
+- **Portals:** obsidian is hotbar slot 6. A frame of obsidian around a 2 wide x 3 tall hole
+  (corners optional), standing along x or z, lights when its last block is placed: the hole
+  fills with portal blocks. Walk into one to travel; it fires again only after you step out.
+  The demo village (`KC_DEMO=1`) has a ruined portal missing one block in front of spawn.
+- **P** travels without a portal.
+- **Travel:** from the overworld you arrive at the same z, 512 blocks past the wall, standing in
+  a new lit portal; going back returns you to where you left. The window reloads around the
+  new spot (one chunk generated per frame), physics waits for it, and you land in the first
+  column with standing room that is not over lava.
+- **Colors:** the Nether has a red sky and fog. Only the palette changes: the sky and fogged
+  entries are rewritten on the way in and out (`set_world_colors` in `src/game.c`, colors from
+  `tools/gen_assets.py`).
+
 ## Entity models
+
 
 The game spawns no entities on its own. Lane-0 code (including CR6 SPAWN) calls `entity_add(kind, x, y, z, facing)`
 with an absolute Q16 feet center; facing 0/1/2/3 means +z/+x/-z/-x.
@@ -186,11 +225,11 @@ This differs from ordinary floor-following movement under an awning.
 - Performance overlay: press **F** in game (`kc.py` and `kc_live.py` send it) for frames per second, top right, from the last frame's CYCLES (20 ns ticks). It costs nothing while off. It is built for the Stage 2 chip and the laptop only: the Stage 0/1 chip builds have no code memory to spare, and `KC_FIXED_DT` builds keep CYCLES off the screen.
 - Software DDA loop (`vtrace_ref`): 53 RV32I instructions per step on `kc_chip8.elf`, 49 on `kc_chip.elf`, counted in `llvm-objdump -d`.
 - The default cap is 64 (`-DKC_MAX_STEPS`). At that cap the 160×120 spawn shot (`g0_spawn`) is 297,672 steps.
-- Stage 2 frame time, measured with `make tb-top-t_top_frame TOP_ELF=kc_chip8_vtrace TOP_SWAPS=6` (add `PIPELINED=1` for the pipelined core): the core cycles between FB_SWAPs at the spawn pose, no entities. The multi-cycle core (`top_s2`) runs at 50 MHz, the pipelined core at 50 MHz (`top_s2p`) or 100 MHz (`top_s2p100`).
+- Stage 2 frame time, measured with `make tb-top-t_top_frame TOP_ELF=kc_chip8_vtrace TOP_SWAPS=6` (add `PIPELINED=1` for the pipelined core): the core cycles between FB_SWAPs at the spawn pose, no entities. 160×120 measured at main 12faff7; 320×240 at 7315b19. The multi-cycle core (`top_s2`) runs at 50 MHz, the pipelined core at 50 MHz (`top_s2p`) or 100 MHz (`top_s2p100`).
 
 | Frame | Multi-cycle core, 50 MHz | Pipelined core, 50 MHz | Pipelined core, 100 MHz |
 |---|---|---|---|
-| 160×120 | 596,341 cycles, 83.8 fps | 246,643 cycles, 202.7 fps | 405.4 fps |
+| 160×120 | 596,381 cycles, 83.8 fps | 246,677 cycles, 202.7 fps | 405.4 fps |
 | 320×240 | 2,296,081 cycles, 21.8 fps | 941,479 cycles, 53.1 fps | 106.2 fps |
 
 - On the board (`top_s2p100`, 160×120) the 60 Hz display is the limit: 59.4 new frames/s while turning.
@@ -199,7 +238,7 @@ This differs from ordinary floor-following movement under an awning.
 
 ## Memory budget (data memory, 32 KB)
 
-Measured on `build/kc_chip.elf` with LLVM 23.1.5 clang/lld at upstream `7315b19`
+Measured on `build/kc_chip.elf` with LLVM 18 clang/lld at main `12faff7`
 (default build options), using `llvm-nm -S` and `llvm-readelf -S -l`; layout from
 `chip/bench/kc.ld` and `crt0.S`. Compiler versions and build options change the
 footprint; these are not measurements of the Stage 2 build.
@@ -211,10 +250,10 @@ footprint; these are not measurements of the Stage 2 build.
 | Per-frame arena (.bss) | 8,192 |
 | Entity boxes, records, row bins, spans, bitmasks and state (.bss) | 14,288 |
 | Chunk slot tables, dirty mask, tag key (.bss) | 118 |
-| Everything else (.rodata + .data + .bss) | 1,647 |
+| Everything else (.rodata + .data + .bss) | 1,659 |
 | Section padding and warm-reset `.data` load copy | 23 |
 | Lane stacks, 8 x 1 KB (0x1000_6000–0x1000_7FFF) | 8,192 |
-| **Total** | **32,716 of 32,768 bytes (52 bytes spare)** |
+| **Total** | **32,728 of 32,768 bytes (40 bytes spare)** |
 
 The `.data` load copy lives after `.bss` and is restored on every chip reset;
 the linker asserts that it ends before the lane stacks at 0x1000_6000.
@@ -230,7 +269,22 @@ On the pipelined core, 0x1000_6000–0x1000_7FFF is the dmem window (8 banks of 
 
 Everything is ray traced: one ray per pixel through the voxel grid (`render.c`, `trace.c`). The Stage 2 build `kc_chip8_vtrace` (built by `tb/top/tb.mk` through this Makefile's `CHIP_ELF` macro with `-DKC_LANES=8 -DKC_VTRACE=1 -DKC_QRCP=1`) walks on the VTRACE unit; the other builds run `vtrace_ref`. Each block face is one flat color (vertex colors), with face shading and fog.
 
-### Memory: 192 KB for rendering and real-time updates (checked at compile time)
+### Look
+
+All of it lives in the palette and in the fog thresholds, so it costs no cycles per pixel:
+
+- **Cool shadows:** each face shade (top, x sides, z sides, bottom) scales red and green more
+  than blue (`SHADE` in `tools/gen_assets.py`), so shaded faces read as sky light instead of
+  flat grey; tops stay true color.
+- **Fog to the horizon:** three fog levels mix 15%, 45% and 100% of the horizon color
+  (`FOG_MIX`), starting at 45%, 65% and 85% of the view distance (`fog_d` in `src/kc_main.c`).
+  The far edge of the world fades into the sky instead of ending in a wall.
+- **Dithered fog bands:** blocks are 4x2 at even coordinates, so each lane's pixel has a fixed
+  checkerboard parity. Odd lanes reach each fog level half a band sooner (`dth` in
+  `src/render.c`), which turns each hard fog ring into a wide checkerboard strip.
+
+### Memory: 192 KB for rendering
+ and real-time updates (checked at compile time)
 
 `src/kc_budget.h` checks its `BUDGET_TOTAL` formula against 192 KiB, including a
 second assertion with two 160x120 framebuffers added. This is not complete

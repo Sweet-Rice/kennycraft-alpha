@@ -2,7 +2,37 @@
 
 An 8-lane SIMD TPU (Tai Processing Unit) grown from a multi-cycle RV32I core, running a voxel game on one Arty A7-100T. HackUTD 2026.
 
-This README describes the current state of the files in this repository. The
+## At a glance
+
+- **The chip:** an RV32I + Zmmul core grown into 8 SIMD lanes with lane-mask instructions and a
+  divergence stack, a VTRACE unit that walks a ray through the voxel grid in hardware, a QRCP
+  reciprocal unit, triple-buffered VGA, a DDR3 chunk store and a UART. A pipelined version of the
+  core with a branch predictor closes timing at 100 MHz on the Arty A7-100T.
+- **The game:** a voxel world of 256 x 256 chunks streamed from DDR3, ray traced with one ray per
+  pixel. Walk, break and place blocks, light obsidian portals to a Nether, and trade with
+  villagers. The same C files build for the chip and for the laptop.
+- **The laptop side:** a bank companion that settles a KCN token on Solana devnet, and Nemotron
+  agents that drive the villagers and a builder contractor over the chip's UART link.
+
+| Result | |
+| --- | --- |
+| Frame rate, pipelined core at 100 MHz (Verilator) | 405 fps at 160×120, 106 fps at 320×240 |
+| On the board | 59.4 new frames/s while turning: the 60 Hz display is the limit |
+| Timing at 100 MHz | WNS +0.100 ns, every clock met; 27,340 LUT, 111.5 BRAM36 |
+
+Try it without a board (Linux or WSL; the window needs pygame):
+
+```sh
+make -C game KC_DEMO=1          # the demo village, laptop build
+python scripts/kc.py --host     # play it in a window
+```
+
+With the villager agents and the bank, run `KC_DEMO=1 KC_CHIP=host python host/kchost.py` and
+then `python scripts/kc.py --kchost` (see [Bank companion](#bank-companion)). Game controls and
+build options are in [`game/README.md`](game/README.md).
+
+This README describes the current state of the files in this repository.
+ The
 [GitHub wiki](https://github.com/Sweet-Rice/kennycraft-alpha/wiki) holds the
 design history; decision numbers such as D22 refer to it.
 
@@ -85,6 +115,8 @@ Changing the URL changes control/events, not frame delivery.
 | J/K or captured left/right click | Break/place |
 | 1–9 | Select hotbar slot |
 | E, Y/N | Interact, accept/decline a quote when linked to the companion |
+| P | Travel to the Nether and back (or build an obsidian portal and walk in) |
+| F | Frames-per-second overlay on/off |
 
 The first click only captures the mouse. Losing focus releases held keys and
 mouse capture. Esc closes an active villager text box; otherwise it releases
@@ -304,11 +336,11 @@ core clock WNS +0.100 ns at 10 ns, hold +0.030 ns, every clock met;
 
 Frames of the current game in Verilator (`t_top_frame` at the spawn pose,
 core cycles between FB_SWAPs; the two cores' 160×120 frames are
-byte-identical):
+byte-identical; 160×120 measured at main 12faff7, 320×240 at 7315b19):
 
 | Frame | Multi-cycle core (`top_s2`, 50 MHz) | Pipelined core (`top_s2p100`, 100 MHz) |
 | --- | --- | --- |
-| 160×120 | 596,341 cycles = 83.8 fps | 246,643 cycles = 405.4 fps |
+| 160×120 | 596,381 cycles = 83.8 fps | 246,677 cycles = 405.4 fps |
 | 320×240 | 2,296,081 cycles = 21.8 fps | 941,479 cycles = 106.2 fps |
 
 On the board (Arty A7-100T, 160×120 game): it boots (`kc: boot`,
