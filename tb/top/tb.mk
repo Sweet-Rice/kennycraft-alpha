@@ -6,14 +6,14 @@
 #   kc_chip8         8 lanes, ray tracer         (Stage 1 core: LANES = 8 with
 #   kc_chip_raster   1 lane, tile rasterizer      HAS_DIV_STACK = 1 for the
 #   kc_chip8_raster  8 lanes, tile rasterizer     kc_chip8* builds, else Stage 0)
-#   kc_chip8_vtrace  8 lanes, ray tracer on the VTRACE unit (Kennedy's
-#                    KC_VTRACE = 1 kc_trace; Stage 2 core: HAS_RAY_UNIT = 1,
-#                    HAS_QRCP = 1)
+#   kc_chip8_vtrace  8 lanes, ray tracer on the VTRACE unit with qrcp() on the
+#                    QRCP instruction (Kennedy's KC_VTRACE = 1 kc_trace and
+#                    KC_QRCP = 1; Stage 2 core: HAS_RAY_UNIT = 1, HAS_QRCP = 1)
 # The raster builds link with chip/stub_kc.ld (kc.ld + the D17 GPU memory).
 # game/Makefile has no target for kc_chip8_vtrace yet, so tb/top instantiates
 # game's own CHIP_ELF macro for it (variant chip8_vtrace, -DKC_LANES=8
-# -DKC_VTRACE=1): same per-file -Os/-O2, CHIP_LDFLAGS, and the chip_check,
-# lane_lint and stack_check scripts as kc_chip8, into game/build/.
+# -DKC_VTRACE=1 -DKC_QRCP=1): same per-file -Os/-O2, CHIP_LDFLAGS, and the
+# chip_check, lane_lint and stack_check scripts as kc_chip8, into game/build/.
 #
 #   top-hex          memory images for rtl/top.sv, one directory per game build:
 #                    $(TOP_GEN)/<build>/kc_imem.hex, kc_dmem.hex (from the
@@ -82,7 +82,7 @@ game/build/kc_chip_raster.elf game/build/kc_chip8_raster.elf &: $(GAME_DEPS)
 
 # kc_chip8_vtrace through game's own CHIP_ELF macro (fed on stdin as a second
 # makefile), then game's three chip checks on the ELF, exactly as `make chip8`.
-GAME_VTRACE_MK = $$(eval $$(call CHIP_ELF,chip8_vtrace,-DKC_LANES=8 -DKC_VTRACE=1,$$(SRC),chip/bench/kc.ld))
+GAME_VTRACE_MK = $$(eval $$(call CHIP_ELF,chip8_vtrace,-DKC_LANES=8 -DKC_VTRACE=1 -DKC_QRCP=1,$$(SRC),chip/bench/kc.ld))
 game/build/kc_chip8_vtrace.elf: $(GAME_DEPS)
 	printf '%s\n' '$(GAME_VTRACE_MK)' | $(MAKE) -C game -f Makefile -f - build/kc_chip8_vtrace.elf
 	cd game && sh tools/chip_check.sh build/kc_chip8_vtrace.elf && \

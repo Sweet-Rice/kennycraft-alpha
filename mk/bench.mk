@@ -141,8 +141,9 @@ endif
 TEST_ARGS = --stage $(STAGE) --cc "$(CC)" --objcopy "$(OBJCOPY)" --nm "$(CROSS)nm" --cflags "$(CFLAGS)"
 
 # Stage 2 (ray unit, rtl/top.sv) runs every test plus t_vtrace, and the golden
-# shot with Kennedy's VTRACE kernel (game/src/trace.c, KC_VTRACE = 1) against
-# the plain C (software DDA) reference.
+# shot with Kennedy's VTRACE kernel (game/src/trace.c, KC_VTRACE = 1) and qrcp()
+# on the QRCP instruction (KC_QRCP = 1, D22) against the plain C (software DDA)
+# reference.
 .PHONY: check-bench check-stage
 check-bench:
 	$(MAKE) check-fixture
@@ -151,7 +152,7 @@ check-bench:
 	$(MAKE) check-stage STAGE=2
 	$(MAKE) golden-check
 	$(MAKE) golden-check STAGE=1 CHIP_TOP=top GOLDEN_VL=out/golden/vl1
-	$(MAKE) golden-check STAGE=2 GOLDEN_VL=out/golden/vl2 GAME_CHIP_CC="$(GAME_CHIP_CC) -DKC_VTRACE=1"
+	$(MAKE) golden-check STAGE=2 GOLDEN_VL=out/golden/vl2 GAME_CHIP_CC="$(GAME_CHIP_CC) -DKC_VTRACE=1 -DKC_QRCP=1"
 check-stage: vl-build
 	$(PYTHON) scripts/run_tests.py $(TEST_ARGS) $(TESTS)
 
