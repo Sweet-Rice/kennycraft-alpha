@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parent.parent
 TOKEN = Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
 MEMO = Pubkey.from_string("Memo4c2pN8afCj432Lb7RMVKi9PbQnnW7ewFFaV3oAH")  # what spl-token --with-memo uses
 KINDS = {"exchange_in", "exchange_out", "fund", "release", "fee", "refund"}
+RATE = 10  # KCN per dollar (placeholder)
 
 # tx/lvbh hold the last signed attempt: it is rebroadcast until its blockhash
 # expires, and only then rebuilt, so a timeout can never pay twice.
@@ -95,6 +96,31 @@ class Ledger:
 
     def queued(self):
         return self.db.execute("SELECT * FROM entries WHERE status = 'queued' ORDER BY id").fetchall()
+
+
+async def exchange(ledger, nessie, dollars, to_game=True):
+    """The banker villager. to_game: $ -> KCN (Nessie withdrawal), else KCN -> $ (Nessie deposit).
+
+    Nessie goes first and the ledger entry is written only once Nessie accepted
+    the transaction, so a NessieError (show "bank is closed", or "not enough
+    money" for type insufficient_funds) leaves everything unchanged. Returns the entry id.
+    """
+    if type(dollars) is not int or dollars <= 0:
+        raise ValueError(f"bad amount {dollars!r}")
+    kcn, cents = dollars * RATE, dollars * 100
+    kind, src, dst, move, undo = (("exchange_in", "treasury", "player", "withdrawals", "deposits") if to_game
+                                  else ("exchange_out", "player", "treasury", "deposits", "withdrawals"))
+    if ledger.balance(src) < kcn:
+        raise InsufficientFunds(f"{src} has {ledger.balance(src)} KCN, needs {kcn}")
+    desc = f"KC {kind} {kcn} KCN #{time.time_ns()}"
+    await nessie.move(move, cents, desc)
+    # ponytail: Nessie can still decline at settlement (~1 min later); only the bank
+    # touches this account, so funds checked at create time stay put.
+    try:
+        return ledger.post(kind, src, dst, kcn)
+    except InsufficientFunds:  # KCN spent while Nessie was answering: give the dollars back
+        await nessie.move(undo, cents, desc + " undo")
+        raise
 
 
 class Settler:

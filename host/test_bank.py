@@ -2,9 +2,10 @@
 
     python host/test_bank.py            ledger rules only (no network)
     python host/test_bank.py devnet     also: 20 transfers through an RPC outage
+    python host/test_bank.py nessie     also: $5 -> 50 KCN and back on Nessie + devnet
 
-The devnet run uses a throwaway ledger and moves 10 KCN treasury -> player and
-back, so wallet balances end where they started (fees ~0.0001 SOL).
+Live runs use a throwaway ledger and put every balance back where it started
+(the devnet run costs ~0.0001 SOL in fees).
 """
 import asyncio
 import sys
@@ -12,7 +13,8 @@ import tempfile
 import time
 from pathlib import Path
 
-from bank import InsufficientFunds, Ledger, Settler
+from bank import InsufficientFunds, Ledger, Settler, exchange
+from nessie import Nessie, NessieError
 
 
 def ledger_rules():
@@ -32,6 +34,87 @@ def ledger_rules():
             pass
     assert len(led.queued()) == 1 and led.balance("a") == 3
     print("ledger rules ok")
+
+
+class FakeNessie:
+    def __init__(self):
+        self.moves, self.fail, self.during = [], None, None
+
+    async def move(self, kind, cents, desc):
+        if self.fail:
+            raise NessieError(self.fail, "fake")
+        if self.during:
+            hook, self.during = self.during, None
+            hook()
+        self.moves.append((kind, cents))
+
+
+async def exchange_rules():
+    led = Ledger(Path(tempfile.mkdtemp()) / "t.db", wallets={"treasury", "player"})
+    led.seed({"treasury": 1000})
+    n = FakeNessie()
+    await exchange(led, n, 5)
+    assert led.balance("player") == 50 and n.moves == [("withdrawals", 500)]
+    await exchange(led, n, 5, to_game=False)
+    assert led.balance("player") == 0 and n.moves[-1] == ("deposits", 500)
+
+    for args, err in [((1, False), InsufficientFunds), ((0,), ValueError), ((101,), InsufficientFunds)]:
+        try:
+            await exchange(led, n, *args)
+            raise AssertionError(f"accepted {args}")
+        except err:
+            pass
+    n.fail = "unreachable"
+    try:
+        await exchange(led, n, 5)
+        raise AssertionError("exchanged while Nessie was down")
+    except NessieError:
+        pass
+    assert len(n.moves) == 2 and len(led.queued()) == 2
+
+    n.fail = None
+    await exchange(led, n, 5)                                         # player has 50
+    n.during = lambda: led.post("fund", "player", "treasury", 50)   # spent mid-exchange
+    try:
+        await exchange(led, n, 5, to_game=False)
+        raise AssertionError("paid out KCN the player no longer had")
+    except InsufficientFunds:
+        pass
+    assert n.moves[-2:] == [("deposits", 500), ("withdrawals", 500)]  # dollars given back
+    print("exchange rules ok")
+
+
+async def drain(s):
+    task = asyncio.create_task(s.run())
+    t0 = time.time()
+    while s.ledger.queued():
+        assert time.time() - t0 < 300, f"{len(s.ledger.queued())} still queued"
+        await asyncio.sleep(1)
+    task.cancel()
+    return time.time() - t0
+
+
+async def nessie_live():
+    led = Ledger(Path(tempfile.mkdtemp()) / "t.db")
+    s = Settler(led)
+    assert not await s.reconcile(), "chain and fresh ledger disagree"
+    start = await s.chain_balances()
+    n = Nessie()
+    usd0 = await n.available_cents()
+
+    await exchange(led, n, 5)
+    usd1 = await n.available_cents()
+    assert usd1 == usd0 - 500 and led.balance("player") == start["player"] + 50, (usd1, led.balance("player"))
+    print(f"$5 -> 50 KCN: Nessie {usd0 / 100:.2f} -> {usd1 / 100:.2f}, HUD {start['player']} -> {led.balance('player')}")
+
+    await exchange(led, n, 5, to_game=False)
+    assert led.balance("player") == start["player"]
+    print(f"50 KCN -> $5: HUD back to {led.balance('player')}, Nessie deposit pending")
+
+    print(f"devnet settled both in {await drain(s):.0f} s")
+    assert not await s.reconcile() and await s.chain_balances() == start
+    descs = [t["description"] for t in await n.transactions(4)]
+    assert sum(d.startswith("KC exchange_") for d in descs) >= 2, descs
 
 
 async def devnet():
@@ -69,5 +152,8 @@ async def devnet():
 
 if __name__ == "__main__":
     ledger_rules()
+    asyncio.run(exchange_rules())
     if sys.argv[1:] == ["devnet"]:
         asyncio.run(devnet())
+    if sys.argv[1:] == ["nessie"]:
+        asyncio.run(nessie_live())
