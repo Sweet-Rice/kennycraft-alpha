@@ -2,7 +2,7 @@
 vLLM/NIM box, or llama-server on the laptop. Only the base URL and model change.
 
   NEMOTRON_BASE_URL  default https://integrate.api.nvidia.com/v1
-  NEMOTRON_MODEL     default nvidia/nemotron-3-super-120b-a12b
+  NEMOTRON_MODEL     default nvidia/nemotron-3-ultra-550b-a55b
   NVIDIA_API_KEY     key for the hosted API (any string for a local server)
 """
 import json
@@ -14,7 +14,7 @@ def nemotron_chat():
     from openai import OpenAI
     client = OpenAI(base_url=os.environ.get("NEMOTRON_BASE_URL", "https://integrate.api.nvidia.com/v1"),
                     api_key=os.environ.get("NVIDIA_API_KEY", "none"))
-    model = os.environ.get("NEMOTRON_MODEL", "nvidia/nemotron-3-super-120b-a12b")
+    model = os.environ.get("NEMOTRON_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
 
     def chat(messages, tools):
         msg = client.chat.completions.create(model=model, messages=messages, tools=tools,
