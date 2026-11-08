@@ -85,6 +85,8 @@ Changing the URL changes control/events, not frame delivery.
 | J/K or captured left/right click | Break/place |
 | 1–9 | Select hotbar slot |
 | E, Y/N | Interact, accept/decline a quote when linked to the companion |
+| P | Travel to the Nether and back (or build an obsidian portal and walk in) |
+| F | Frames-per-second overlay on/off |
 
 The first click only captures the mouse. Losing focus releases held keys and
 mouse capture. Esc closes an active villager text box; otherwise it releases
