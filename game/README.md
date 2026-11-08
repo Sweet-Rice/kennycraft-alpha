@@ -32,7 +32,25 @@ Both chip targets run `tools/chip_check.sh` (no `div`/`rem`, float, libgcc calls
 
 `tools/stack_check.sh` computes the worst-case stack depth of each call chain that runs on a lane (`main` on lane 0, `kc_render_frame` on lanes 1-7) from the ELF's prologues (`addi sp,sp,-N`) and call graph, against the 1 KB lane stack (limit: second argument or `STACK_LIMIT`, default 1024). It also fails on recursion, on calls it cannot resolve (indirect, or not to a function start) and on unsized stack adjustments. Nothing catches an overflow on the chip (lane n runs into lane n+1's stack, lane 7 into the statics), so keep big locals out of anything the kernel calls.
 
+## Controls
+
+The game reads one byte per key event from the UART: the key code, with bit 7 set for key down and clear for key up (mouse look is bytes 0x14-0x17). `scripts/kc.py`
+and `scripts/kc_live.py` send them from a laptop window; `kc_host link` reads them on stdin.
+
+| Key | Action |
+|---|---|
+| W A S D | Walk |
+| Space | Jump |
+| Arrows | Look (the laptop windows also turn with the mouse) |
+| J / K | Break / place the block in the crosshair |
+| 1–9 | Hotbar: grass, dirt, stone, cobble, log, obsidian, planks, sand, brick |
+| E | Talk to the villager in front of you (CR6 INTERACT) |
+| Y / N | Accept / decline the quote on the HUD (CR6 CONFIRM) |
+| P | Travel to the Nether and back |
+| F | Frames-per-second overlay on/off |
+
 ## Build options
+
 
 Makefile variables (any target): `build/defs` tracks changes to `KC_GEN_BITMAP`,
 `KC_TAG_PERSIST`, `KC_QRCP`, `KC_FIXED_DT` and `KC_DEMO`.
