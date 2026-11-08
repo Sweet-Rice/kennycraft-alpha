@@ -16,8 +16,8 @@
 #include "kc_hal.h"
 
 enum { HELLO = 0x01, BYE = 0x02, PLACE = 0x10, BREAK = 0x11, FILL = 0x12, SPAWN = 0x20, MOVE = 0x21,
-       Q_PLAYER = 0x30, Q_BLOCKS = 0x31, SET_BALANCE = 0x40, SET_QUOTE = 0x41, SET_CONTRACT = 0x42,
-       STATUS = 0x81, HELLO_ACK = 0x82, R_PLAYER = 0x83, R_BLOCKS = 0x84, EVENT = 0x8F };
+       Q_PLAYER = 0x30, Q_BLOCKS = 0x31, Q_ENTITY = 0x33, SET_BALANCE = 0x40, SET_QUOTE = 0x41, SET_CONTRACT = 0x42,
+       STATUS = 0x81, HELLO_ACK = 0x82, R_PLAYER = 0x83, R_BLOCKS = 0x84, R_ENTITY = 0x86, EVENT = 0x8F };
 enum { R_OK, R_CRC, R_BAD_OP, R_ZONE, R_BAD_BLOCK, R_PROTECTED, R_RATE, R_BUSY, R_NOT_LINKED, R_BAD_ENTITY };
 enum { EV_INTERACT = 3, EV_CONFIRM = 4 };
 
@@ -136,8 +136,10 @@ static int32_t run(uint8_t seq, uint8_t op, const uint8_t *p, int32_t n) {
         return R_OK;
     }
     case Q_BLOCKS: {
-        if (n != 7 || (p[5] & 0xCC) || (p[6] & 0xFC)) break;      // at most 4 x 4 x 4
-        uint32_t x = u16(p), z = u16(p + 2), y = p[4], sx = (p[5] & 3u) + 1, sz = (p[5] >> 4) + 1u, sy = p[6] + 1u;
+        // x, z, y, (sx-1) | (sy-1) << 2 | (sz-1) << 4 (at most 4 x 4 x 4). Reply: one nibble per
+        // cell, low nibble first, x fastest, then z, then y (the layout kc_agents/cr6.py sends).
+        if (n != 6 || (p[5] & 0xC0)) break;
+        uint32_t x = u16(p), z = u16(p + 2), y = p[4], sx = (p[5] & 3u) + 1, sy = ((p[5] >> 2) & 3u) + 1, sz = (p[5] >> 4) + 1u;
         uint8_t r[32] = { 0 };
         uint32_t c = 0;
         for (uint32_t j = 0; j < sy; j++)
@@ -145,6 +147,17 @@ static int32_t run(uint8_t seq, uint8_t op, const uint8_t *p, int32_t n) {
                 for (uint32_t i = 0; i < sx; i++, c++)
                     r[c >> 1] |= (uint8_t)(world_get((int)(x + i), (int)(y + j), (int)(z + k)) << ((c & 1) << 2));
         send(seq, R_BLOCKS, r, (int32_t)((c + 1) >> 1));
+        return R_OK;
+    }
+    case Q_ENTITY: {                                            // id -> id, x, z (1/16), y (1/8), state
+        if (n != 1) break;
+        if (p[0] >= entity_count()) return R_BAD_ENTITY;
+        q16 e[3];
+        int32_t facing;
+        entity_get(p[0], e, &facing);
+        uint32_t x = (uint32_t)e[0] >> 12, z = (uint32_t)e[2] >> 12, y = (uint32_t)e[1] >> 13;
+        uint8_t r[7] = { p[0], (uint8_t)x, (uint8_t)(x >> 8), (uint8_t)z, (uint8_t)(z >> 8), (uint8_t)y, 0 };
+        send(seq, R_ENTITY, r, 7);                              // state byte: 0 until STATE exists
         return R_OK;
     }
     case SET_BALANCE: if (n != 2) break;

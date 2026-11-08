@@ -718,10 +718,20 @@ static int cmd_cr6(void) {
     o = cr6_step();
     check(o.rop == 0x83 && (uint32_t)(o.rp[0] | o.rp[1] << 8) == (uint32_t)kc_me.pos[0] >> 12 && o.rp[4] == (uint32_t)kc_me.pos[1] >> 13,
           "Q_PLAYER: x, z in 1/16 block, y in 1/8 block");
-    le16(p, (uint32_t)px + 3); le16(p + 2, (uint32_t)pz); p[4] = (uint8_t)ty; p[5] = 1; p[6] = 0;
-    cr6_push(15, 0x31, p, 7, 0);
+    le16(p, (uint32_t)px + 3); le16(p + 2, (uint32_t)pz); p[4] = (uint8_t)ty; p[5] = 1;   // sx 2, sy 1, sz 1
+    cr6_push(15, 0x31, p, 6, 0);
     o = cr6_step();
     check(o.rop == 0x84 && o.rn == 1 && o.rp[0] == (B_PLANKS | B_DIRT << 4), "Q_BLOCKS 2x1x1: planks, dirt (nibbles)");
+    p[5] = 1 << 2;                                                                          // sx 1, sy 2, sz 1
+    cr6_push(21, 0x31, p, 6, 0);
+    o = cr6_step();
+    check(o.rop == 0x84 && o.rp[0] == (B_PLANKS | B_COBBLE << 4), "Q_BLOCKS 1x2x1: planks, cobble above (y after x and z)");
+    p[0] = 0;
+    cr6_push(22, 0x33, p, 1, 0);
+    o = cr6_step();
+    { q16 e[3]; int32_t f; entity_get(0, e, &f);
+      check(o.rop == 0x86 && o.rn == 7 && o.rp[0] == 0 && (uint32_t)(o.rp[1] | o.rp[2] << 8) == (uint32_t)e[0] >> 12,
+            "Q_ENTITY 0: R_ENTITY id, x, z (1/16), y (1/8), state"); }
 
     le16(p, 1234);
     cr6_push(16, 0x40, p, 2, 0);
