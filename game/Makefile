@@ -39,7 +39,9 @@ chip_opt    = $(if $(filter $(GAME_FILES),$(notdir $(1))),$(GAME_OPT),$(KERNEL_O
 
 # Per-frame arena size override, applied to the laptop AND chip builds alike (default 8 KB in
 # src/arena.h). Measured peak (kc_host sweep): 288 B. make clean after changing.
-ifdef ARENA_SIZE
+# KC_DEMO=1 defaults to 4 KB: next to an 8 KB arena the village table overflows the Stage 2 DMEM.
+ARENA_SIZE ?= $(if $(filter-out 0,$(KC_DEMO)),4096)
+ifneq ($(ARENA_SIZE),)
 CFLAGS     += -DARENA_SIZE=$(ARENA_SIZE)
 CHIP_FLAGS += -DARENA_SIZE=$(ARENA_SIZE)
 endif
