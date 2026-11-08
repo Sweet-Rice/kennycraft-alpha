@@ -53,10 +53,11 @@ make vl-fixture RUN_ARGS="--headless --frames 5 --record out/keys.txt"
 
 Production uses `out/vl/kcvl`; the independent fixture uses `out/vl-fixture/kcvl`.
 `STAGE=0 DDR=1` is the default; `STAGE=1` builds 8 lanes with the divergence
-stack. `STAGE=2` adds `t_vtrace`, which needs the ray unit in the core (P7).
-The default `CHIP_TOP=bench_chip` wires the shipped RTL like `rtl/top.sv` but takes
-`LANES` and `HAS_DIV_STACK`, with stub clocks (reset releases at once, `ui_clk` is
-the core clock). `CHIP_TOP=top` builds the board top and runs Stage 0. `PAL_HEX=` and `TEX_HEX=`
+stack. `STAGE=2` adds the ray unit (`HAS_RAY_UNIT=1`) and `t_vtrace`, and builds
+`CHIP_TOP=top`. The default `CHIP_TOP=bench_chip` below Stage 2 wires the shipped
+RTL like `rtl/top.sv` without the ray unit, takes `LANES` and `HAS_DIV_STACK`, and
+has stub clocks (reset releases at once, `ui_clk` is the core clock).
+`CHIP_TOP=top` builds the board top with the same stubs. `PAL_HEX=` and `TEX_HEX=`
 load build-time assets, and frames are read from the RTL framebuffer and palette.
 Keys, live or replayed, reach the UART only when the RTL accepts an FB_SWAP.
 
