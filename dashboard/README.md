@@ -19,7 +19,7 @@ Open http://127.0.0.1:3000. Without public addresses, the page shows setup instr
 | Variable                              | Meaning                                                                                                                                                              |
 | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `KCN_MINT`                            | Existing devnet SPL token mint; required                                                                                                                             |
-| `KCN_WALLETS`                         | Comma-separated `label=address`; `player` required. Optional `banker`, `escrow`, `builder`, `miner`, `farmer`. Addresses may be owners or individual token accounts. |
+| `KCN_WALLETS`                         | Comma-separated `label=address`; `player` required. Optional `treasury`, `escrow`, `builder`, `miner`, `farmer`, `banker`. Addresses may be owners or individual token accounts. |
 | `SOLANA_RPC_URL`                      | Defaults to public devnet RPC; a provider URL remains server-side                                                                                                    |
 | `SOLANA_CLUSTER`                      | Unset or `devnet` only                                                                                                                                               |
 | `KCN_PER_USD`                         | Positive illustrative game-bank rate; defaults to 10 KCN per dollar                                                                                                  |
@@ -29,13 +29,14 @@ Only public Solana addresses are needed. Never enter a seed phrase, private key,
 
 ## Reading the display
 
-- Every Solana request asks for **finalized** commitment. Confirmation latency is separate from the ~5-second completion-based balance poll. Reads in a snapshot are not an atomic same-slot view.
+- Every Solana request asks for **confirmed** commitment, the level kc-host's settler waits for. Confirmation latency is separate from the ~5-second completion-based balance poll. Reads in a snapshot are not an atomic same-slot view.
 - Hero, supply, wallet table, and deltas retain exact decimal strings derived with `bigint`. Only chart geometry and the approximate fixed-rate dollar equivalent use floating point.
 - Chart points are observations collected during this browser session (newest 120), not reconstructed history. One initial point is a dot. Mint/player changes reset the session.
 - Activity refreshes at most once per 15 seconds, with one shared in-flight refresh. It examines up to 10 signatures per owner/token account, unions the newest 20, and keeps up to 100 finalized transaction results. Transaction reads are limited to two concurrently. Same-slot order is not a total chronology; this is not a complete ledger.
-- Named banker/escrow movements are **inferred from configured roles**, not verified fiat settlement or contract-job completion. Untracked counterparties remain in deltas. Missing token metadata is omitted with a warning, not inferred as mint/burn. Failed transactions have no balance deltas.
+- Activity is labeled from the memo kc-host's settler writes on every transfer (`KC#<contract> <kind> e<entry>`): exchanges, escrow funding, releases, fees, refunds and material trades. Transfers without that memo fall back to labels inferred from the configured roles.
+- Token accounts are looked up once a minute (public devnet allows 10 `getTokenAccountsByOwner` calls per 10 s); each poll reads every balance with one `getMultipleAccounts`. Untracked counterparties remain in deltas. Missing token metadata is omitted with a warning, not inferred as mint/burn. Failed transactions have no balance deltas.
 - Balance read failures retain the last successful snapshot with a stale banner and its real timestamp. Activity failures preserve previous activity independently. Hidden tabs pause both polls; returning fetches immediately. No overlapping interval requests.
-- The Nessie panel reads the supplied mock account, deposits, and withdrawals. Partial list failures retain the account and other list. Mock dollars are not correlated with KCN transfers without a shared backend reference.
+- The Nessie panel reads the v2 sandbox account (`v2-prod-api.nessieisreal.com`, Bearer key) and its recent transactions; a pending withdrawal lowers the available balance before the balance itself. kc-host's exchanges are described `KC exchange_in <n> KCN #…`, which ties a dollar movement to its KCN transfer. A failed transactions list keeps the account visible with a warning.
 - Remote descriptions and memos are rendered as escaped text. Explorer links explicitly select devnet.
 
 `GET /api/kcn` returns the snapshot, 503 configuration errors, or a sanitized 502 RPC error. `GET /api/bank` returns `{configured:false}` without both optional keys, otherwise actual mock account data or a sanitized 502. Mutation methods return 405. Responses use `Cache-Control: no-store`. Keep this judge display on loopback; public hosting/authentication is out of scope.

@@ -58,7 +58,8 @@ function loadConfig(): ChainConfig {
   };
 }
 let config: ChainConfig | undefined;
-const commitment = "finalized" as const;
+// "confirmed" matches kc-host's settler; "finalized" showed payments ~13 s after they landed.
+const commitment = "confirmed" as const;
 const tokenPrograms: Record<string, true> = {
   TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA: true,
   TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb: true,
@@ -83,7 +84,14 @@ function readTokenData(data: unknown, mint: string, label: string): bigint {
     throw new Error(`Invalid token amount for ${label}`);
   return BigInt(amount);
 }
-async function resolveWallet(wallet: TrackedWallet, cfg: ChainConfig) {
+// Which token accounts hold each wallet's KCN. Public devnet allows only 10
+// getTokenAccountsByOwner calls per 10 s, so this lookup is cached and redone
+// once a minute (or when an account closes); every poll then reads all balances
+// with a single getMultipleAccounts.
+const ACCOUNTS_TTL_MS = 60000;
+let accountsByWallet: Map<string, string[]> | undefined;
+let accountsAt = 0;
+async function findTokenAccounts(wallet: TrackedWallet, cfg: ChainConfig) {
   const accounts = await cfg.rpc
     .getTokenAccountsByOwner(
       address(wallet.address),
@@ -91,25 +99,62 @@ async function resolveWallet(wallet: TrackedWallet, cfg: ChainConfig) {
       { encoding: "jsonParsed", commitment },
     )
     .send({ abortSignal: AbortSignal.timeout(12000) });
-  let raw = 0n;
-  const tokenAccounts: string[] = [];
-  for (const item of accounts.value) {
-    raw += readTokenData(item.account.data, cfg.mint, wallet.label);
-    tokenAccounts.push(item.pubkey);
+  for (const item of accounts.value)
+    readTokenData(item.account.data, cfg.mint, wallet.label);
+  if (accounts.value.length)
+    return accounts.value.map((item) => item.pubkey as string);
+  const own = await cfg.rpc
+    .getAccountInfo(address(wallet.address), {
+      encoding: "jsonParsed",
+      commitment,
+    })
+    .send({ abortSignal: AbortSignal.timeout(12000) });
+  if (own.value && Object.hasOwn(tokenPrograms, own.value.owner)) {
+    readTokenData(own.value.data, cfg.mint, wallet.label);
+    return [wallet.address];
   }
-  if (!accounts.value.length) {
-    const own = await cfg.rpc
-      .getAccountInfo(address(wallet.address), {
-        encoding: "jsonParsed",
-        commitment,
-      })
-      .send({ abortSignal: AbortSignal.timeout(12000) });
-    if (own.value && Object.hasOwn(tokenPrograms, own.value.owner)) {
-      raw = readTokenData(own.value.data, cfg.mint, wallet.label);
-      tokenAccounts.push(wallet.address);
-    }
+  return [];
+}
+async function resolveWallets(cfg: ChainConfig) {
+  if (!accountsByWallet || Date.now() - accountsAt >= ACCOUNTS_TTL_MS) {
+    const found = new Map<string, string[]>();
+    for (const wallet of cfg.wallets)
+      // one at a time: stays under the method limit
+      found.set(wallet.address, await findTokenAccounts(wallet, cfg));
+    accountsByWallet = found;
+    accountsAt = Date.now();
   }
-  return { ...wallet, tokenAccounts, raw };
+  const all = cfg.wallets.flatMap((w) => accountsByWallet!.get(w.address)!);
+  const infos = all.length
+    ? (
+        await cfg.rpc
+          .getMultipleAccounts(
+            all.map((a) => address(a)),
+            { encoding: "jsonParsed", commitment },
+          )
+          .send({ abortSignal: AbortSignal.timeout(12000) })
+      ).value
+    : [];
+  const rawByAccount = new Map<string, bigint>();
+  all.forEach((account, i) => {
+    const info = infos[i];
+    const wallet = cfg.wallets.find((w) =>
+      accountsByWallet!.get(w.address)!.includes(account),
+    )!;
+    if (!info) accountsAt = 0; // closed since the lookup: find the accounts again next poll
+    rawByAccount.set(
+      account,
+      info ? readTokenData(info.data, cfg.mint, wallet.label) : 0n,
+    );
+  });
+  return cfg.wallets.map((wallet) => {
+    const tokenAccounts = accountsByWallet!.get(wallet.address)!;
+    const raw = tokenAccounts.reduce(
+      (sum, a) => sum + rawByAccount.get(a)!,
+      0n,
+    );
+    return { ...wallet, tokenAccounts, raw };
+  });
 }
 
 type Activity = { events: KcnEvent[]; warnings: string[]; fetchedAt: string };
@@ -123,9 +168,8 @@ async function refreshActivity(
   wallets: ResolvedWallet[],
   decimals: number,
 ): Promise<Activity> {
-  const addresses = new Set(
-    wallets.flatMap((w) => [w.address, ...w.tokenAccounts]),
-  );
+  // Every KCN transfer touches a token account, so owners add nothing but RPC calls.
+  const addresses = new Set(wallets.flatMap((w) => w.tokenAccounts));
   const lists = await Promise.all(
     [...addresses].map((a) =>
       cfg.rpc
@@ -209,7 +253,7 @@ async function refreshActivity(
     if (!deltas.length) continue;
     events.push({
       ...base,
-      ...classify(deltas, decimals),
+      ...classify(deltas, decimals, item.memo),
       failed: false,
       deltas: deltas.map((d) => ({
         label: d.label,
@@ -275,7 +319,7 @@ export async function getKcnState(): Promise<KcnState> {
     cfg.rpc
       .getTokenSupply(cfg.mint, { commitment })
       .send({ abortSignal: AbortSignal.timeout(12000) }),
-    Promise.all(cfg.wallets.map((w) => resolveWallet(w, cfg))),
+    resolveWallets(cfg),
   ]);
   const seen = new Set<string>();
   for (const wallet of resolved)

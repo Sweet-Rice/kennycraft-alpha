@@ -24,6 +24,7 @@ let decimals: number,
   nullTransaction: boolean;
 let signatures: string[], activeTransactions: number, peakTransactions: number;
 let transactionReads: Record<string, number>;
+let calls: Record<string, number>;
 interface Gate {
   promise: Promise<void>;
   resolve: () => void;
@@ -76,12 +77,14 @@ beforeEach(async () => {
   activeTransactions = 0;
   peakTransactions = 0;
   transactionReads = {};
+  calls = {};
   transactionGate = null;
   twoTransactions = Promise.withResolvers<void>();
   server = createServer(async (request, response) => {
     let body = "";
     for await (const chunk of request) body += chunk;
     const { method, params = [], id } = JSON.parse(body);
+    calls[method] = (calls[method] ?? 0) + 1;
     let result: unknown;
     if (
       (mode === "activity-error" && method === "getSignaturesForAddress") ||
@@ -109,6 +112,17 @@ beforeEach(async () => {
             : params[0] === banker
               ? [account(bankToken, banker, rawBanker)]
               : [],
+      };
+    else if (method === "getMultipleAccounts")
+      result = {
+        context: { slot: 100 },
+        value: (params[0] as string[]).map((a) =>
+          a === playerToken
+            ? account(playerToken, player, rawPlayer).account
+            : a === bankToken
+              ? account(bankToken, banker, rawBanker).account
+              : null,
+        ),
       };
     else if (method === "getAccountInfo")
       result = {
@@ -198,7 +212,18 @@ afterEach(async () => {
   server.closeAllConnections();
   await closed.promise;
 });
-describe("finalized state boundary", () => {
+describe("confirmed state boundary", () => {
+  it("looks token accounts up once a minute and reads balances in one call per poll", async () => {
+    await getState();
+    rawPlayer = "40";
+    vi.setSystemTime(new Date("2026-11-08T12:00:05Z"));
+    expect((await getState()).player.balance).toBe("40");
+    expect(calls.getTokenAccountsByOwner).toBe(2); // player + banker, first poll only
+    expect(calls.getMultipleAccounts).toBe(2);
+    vi.setSystemTime(new Date("2026-11-08T12:01:01Z"));
+    await getState();
+    expect(calls.getTokenAccountsByOwner).toBe(4);
+  });
   it("retains exact amounts beyond Number precision at the JSON boundary", async () => {
     decimals = 6;
     rawPlayer = "9007199254740993";

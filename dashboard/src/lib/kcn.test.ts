@@ -5,9 +5,11 @@ import {
   classify,
   ConfigError,
   formatUnits,
+  memoKind,
   parseWallets,
   tokenDeltas,
   type Delta,
+  type Role,
   type ResolvedWallet,
   type TokenBalance,
 } from "./kcn";
@@ -164,6 +166,30 @@ describe("evidence-limited classification", () => {
     expect(classify([movement("player", 50n)], 0).kind).toBe("mint");
     expect(classify([movement("player", -50n)], 0).kind).toBe("burn");
   });
+});
+it("labels transfers from kc-host's memo first, then from roles including the treasury", () => {
+  const d = (label: string, role: Role, raw: bigint) => ({
+    owner: label,
+    label,
+    role,
+    raw,
+  });
+  const pay = [d("escrow", "escrow", -6n), d("treasury", "treasury", 6n)];
+  expect(classify(pay, 0, "[13] KC#7 fee e59")).toEqual({
+    kind: "fee",
+    title: "Contract fee to the treasury (contract #7)",
+  });
+  expect(classify(pay, 0, null).kind).toBe("fee");
+  const buy = [d("treasury", "treasury", -50n), d("player", "player", 50n)];
+  expect(classify(buy, 0, "KC exchange_in e41").kind).toBe("bank_buy");
+  expect(classify(buy, 0, "KC trade_sell e60").kind).toBe("trade_sell");
+  expect(classify(buy, 0, "unrelated memo").kind).toBe("bank_buy");
+  expect(memoKind("KC#3 teleport e1")).toBeNull();
+  expect(
+    parseWallets("player=valid-p,treasury=valid-t", (a) =>
+      a.startsWith("valid"),
+    ).wallets[1].role,
+  ).toBe("treasury");
 });
 it("retains the newest 120 observations without mutating exact strings", () => {
   const exact = "9007199254740993";

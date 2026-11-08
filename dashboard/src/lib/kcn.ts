@@ -1,4 +1,5 @@
-export type Role = "player" | "banker" | "escrow" | "worker" | "other";
+export type Role =
+  "player" | "banker" | "treasury" | "escrow" | "worker" | "other";
 export interface TrackedWallet {
   label: string;
   address: string;
@@ -21,6 +22,9 @@ export type EventKind =
   | "escrow_fund"
   | "escrow_release"
   | "escrow_refund"
+  | "fee"
+  | "trade_buy"
+  | "trade_sell"
   | "transfer"
   | "failed";
 export interface KcnEvent {
@@ -60,6 +64,7 @@ export class ConfigError extends Error {
 const roles: Record<string, Role> = {
   player: "player",
   banker: "banker",
+  treasury: "treasury",
   escrow: "escrow",
   builder: "worker",
   miner: "worker",
@@ -153,10 +158,36 @@ export function tokenDeltas(
     .filter((d) => d.raw !== 0n)
     .sort((a, b) => (a.raw < b.raw ? -1 : a.raw > b.raw ? 1 : 0));
 }
+// kc-host's settler writes "KC#<contract> <kind> e<entry>" (or "KC <kind> e<entry>") as the
+// memo of every transfer, so the bank's own label beats inferring one from wallet roles.
+const MEMO_KINDS: Record<string, [EventKind, string]> = {
+  exchange_in: ["bank_buy", "Banker: dollars → KCN"],
+  exchange_out: ["bank_sell", "Banker: KCN → dollars"],
+  fund: ["escrow_fund", "Contract funded into escrow"],
+  release: ["escrow_release", "Escrow paid the contractor"],
+  fee: ["fee", "Contract fee to the treasury"],
+  refund: ["escrow_refund", "Escrow refunded the player"],
+  trade_buy: ["trade_buy", "Bought materials from the trader"],
+  trade_sell: ["trade_sell", "Sold materials to the trader"],
+};
+export function memoKind(
+  memo: string | null | undefined,
+): { kind: EventKind; title: string } | null {
+  const m = memo?.match(/\bKC(?:#(\d+))? ([a-z_]+) e\d+/);
+  const known = m && MEMO_KINDS[m[2]];
+  if (!known) return null;
+  return {
+    kind: known[0],
+    title: m[1] ? `${known[1]} (contract #${m[1]})` : known[1],
+  };
+}
 export function classify(
   deltas: Delta[],
   decimals: number,
+  memo?: string | null,
 ): { kind: EventKind; title: string } {
+  const fromMemo = memoKind(memo);
+  if (fromMemo) return fromMemo;
   const nonzero = deltas.filter((d) => d.raw !== 0n);
   const total = nonzero.reduce((sum, d) => sum + d.raw, 0n);
   if (total > 0n && nonzero.every((d) => d.raw > 0n))
@@ -175,6 +206,9 @@ export function classify(
     const movements: Record<string, EventKind> = {
       "banker:player": "bank_buy",
       "player:banker": "bank_sell",
+      "treasury:player": "bank_buy",
+      "player:treasury": "bank_sell",
+      "escrow:treasury": "fee",
       "player:escrow": "escrow_fund",
       "escrow:worker": "escrow_release",
       "escrow:player": "escrow_refund",

@@ -13,6 +13,7 @@ import {
 import {
   appendObservation,
   balanceChange,
+  memoKind,
   shorten,
   type KcnEvent,
   type KcnState,
@@ -161,6 +162,9 @@ function ActivityRow({ event, fresh }: { event: KcnEvent; fresh: boolean }) {
     "escrow_fund",
     "escrow_release",
     "escrow_refund",
+    "fee",
+    "trade_buy",
+    "trade_sell",
   ].includes(event.kind);
   return (
     <li className={`activity-row ${fresh ? "new-event" : ""}`}>
@@ -173,10 +177,10 @@ function ActivityRow({ event, fresh }: { event: KcnEvent; fresh: boolean }) {
         <span
           className={`badge ${event.failed ? "text-rose-300" : "text-slate-400"}`}
         >
-          {event.failed ? "Failed · finalized" : "Finalized"}
+          {event.failed ? "Failed · confirmed" : "Confirmed"}
         </span>
       </div>
-      {inferred && (
+      {inferred && !memoKind(event.memo) && (
         <p className="mt-1 text-xs text-amber-200/80">
           Inferred from configured wallet roles
         </p>
@@ -237,7 +241,7 @@ export default function LiveDashboard() {
             KennyCraft <span className="text-slate-600">·</span> KCN Live
           </h1>
           <p className="mt-2 text-sm text-slate-400">
-            Solana devnet · finalized{" "}
+            Solana devnet · confirmed{" "}
             <span className="mx-2 text-slate-700">/</span> No signing. No funds
             moved.
           </p>
@@ -312,7 +316,7 @@ export default function LiveDashboard() {
       )}
       {!data && !kcn.error && (
         <section className="panel mb-6" role="status">
-          Reading finalized KCN balances…
+          Reading confirmed KCN balances…
         </section>
       )}
       {data && view && (
@@ -429,7 +433,7 @@ export default function LiveDashboard() {
                 {data.mint.supply} KCN
               </span>
             </span>
-            <span>Balance polls ~5s · finality adds confirmation latency</span>
+            <span>Balance polls ~5s · confirmation adds about a second</span>
           </div>
           <section className="panel mb-5">
             <h2 className="section-title">Tracked wallets</h2>
@@ -492,7 +496,7 @@ export default function LiveDashboard() {
                       event={e}
                       fresh={Boolean(
                         view.highlights[e.signature] &&
-                          now - view.highlights[e.signature] < 5000,
+                        now - view.highlights[e.signature] < 5000,
                       )}
                     />
                   ))}
@@ -536,7 +540,7 @@ export default function LiveDashboard() {
                     event={event}
                     fresh={Boolean(
                       view.highlights[event.signature] &&
-                        now - view.highlights[event.signature] < 5000,
+                      now - view.highlights[event.signature] < 5000,
                     )}
                   />
                 ))}
@@ -573,6 +577,8 @@ export default function LiveDashboard() {
                     {money.format(b.account.balance)}
                   </p>
                   <p className="mt-2 text-xs text-slate-500">
+                    {b.account.available !== b.account.balance &&
+                      `${money.format(b.account.available)} available (withdrawals settle in ~1 min) · `}
                     Retrieved mock dollar balance · {timestamp(bank.state!.at)}
                   </p>
                   {b.warnings?.map((w) => (
