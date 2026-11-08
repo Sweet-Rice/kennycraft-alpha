@@ -67,15 +67,22 @@ def build_shot(args, name, pose, work):
                f'-DKC_SHOT_DZ={pose["dz"]}', f'-DKC_SHOT_YAW={pose["yaw"]}',
                f'-DKC_SHOT_PITCH={pose["pitch"]}']
     cc = args.cc.split()
+    # Per-file -O like game/Makefile's chip_opt; the later -O overrides the one in CHIP_FLAGS.
+    game_files = game_variable(game, 'GAME_FILES')
+    game_opt, kernel_opt = game_variable(game, 'GAME_OPT'), game_variable(game, 'KERNEL_OPT')
     # Compile from game/ like game/Makefile, whose flags use -Isrc -Igen.
-    main_obj = (work / 'kc_main.o').resolve()
-    subprocess.run([*cc, *flags, *defines, '-Dmain=kc_game_main', '-c', str(loop[0].resolve()),
-                    '-o', str(main_obj)], cwd=game, check=True)
+    objects = []
+    for source in [s for s in sources if s not in loop] + loop:  # kc_main.o links last
+        opt = game_opt if source.name in game_files else kernel_opt
+        renamed = ['-Dmain=kc_game_main'] if source in loop else []
+        obj = (work / f'{source.stem}.o').resolve()
+        subprocess.run([*cc, *flags, *opt, *defines, *renamed, '-c', str(source.resolve()),
+                        '-o', str(obj)], cwd=game, check=True)
+        objects.append(obj)
     elf = (work / 'kc.elf').resolve()
-    rest = [str(s.resolve()) for s in sources if s not in loop]
     subprocess.run([*cc, *flags, *defines, '-T', str(Path('sw/kc.ld').resolve()),
                     str(Path('sw/crt0.S').resolve()), str(Path('tb/harness/shots/shot.c').resolve()),
-                    *rest, str(main_obj), '-o', str(elf)], cwd=game, check=True)
+                    *map(str, objects), '-o', str(elf)], cwd=game, check=True)
     images = work / 'out'
     images.mkdir(exist_ok=True)
     for memory, sections, offset in (('imem', ['.text'], '0'), ('dmem', ['.rodata', '.data'], '0x100')):
