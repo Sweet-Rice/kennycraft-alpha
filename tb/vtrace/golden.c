@@ -17,9 +17,11 @@
 // The expected values come from Kennedy's vtrace_ref(), which follows the
 // wiki VTRACE rule (Tai page, One step): strict-< tie-break, tMax += tDelta
 // saturating at 0x7FFF_FFFF, max_steps = 0 leaves the result untouched. Every
-// ray is also run through model(), an independent C model of the same rule,
-// and the two must agree bit for bit on result, hit_cell and t_hit (misses
-// included), and both must leave the result untouched for max_steps = 0.
+// ray is also run through model(), an independent C model of the same rule.
+// On a hit the two must agree bit for bit on result, hit_cell and t_hit; on a
+// miss face axis, face sign, block type, hit_cell and t_hit are undefined
+// (Shared, VTRACE result; Tai_2 P6 item 5), so only hit and steps must agree.
+// Both must leave the result untouched for max_steps = 0.
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -84,13 +86,20 @@ static int same(const kc_hit *a, const kc_hit *b) {
     return a->res == b->res && a->cell == b->cell && a->t == b->t;
 }
 
+// Two results of the same ray agree: every field on a hit, hit and steps only
+// on a miss (the other fields are undefined there).
+static int agree(const kc_hit *a, const kc_hit *b) {
+    if (HIT_HIT(a->res) != HIT_HIT(b->res) || HIT_STEPS(a->res) != HIT_STEPS(b->res)) return 0;
+    return !HIT_HIT(a->res) || same(a, b);
+}
+
 // Expected result for one ray: vtrace_ref, checked against model().
 static kc_hit expect(const kc_ray *r, int ms) {
     static const kc_hit sentinel = { 0xDEADBEEFu, 0xFEEDF00Du, (q16)0x5A5A5A5A };
     kc_hit ref, mw, z0 = sentinel, z1 = sentinel;
     vtrace_ref(r, ms, &ref);
     model(r, ms, &mw);
-    if (!same(&mw, &ref)) fail("model != vtrace_ref", r, ms, &mw, &ref);
+    if (!agree(&mw, &ref)) fail("model != vtrace_ref", r, ms, &mw, &ref);
     vtrace_ref(r, 0, &z0);
     model(r, 0, &z1);
     if (!same(&z0, &sentinel)) fail("vtrace_ref wrote the result for max_steps = 0", r, 0, &z0, &sentinel);
@@ -132,7 +141,8 @@ static void write_groups(const char *dir, const char *name, const group_t *g, in
 
 static void print_stats(const char *set) {
     printf("golden: %s: %d rays, %d hit, %d left the world, %d stopped by the cap, "
-           "steps avg %.1f max %d; vtrace_ref == wiki model on all %d (and untouched at max_steps = 0)\n",
+           "steps avg %.1f max %d; vtrace_ref == wiki model on all %d (every field on hits, hit and "
+           "steps on misses; untouched at max_steps = 0)\n",
            set, st.rays, st.hits, st.exits, st.caps, st.rays ? (double)st.steps_sum / st.rays : 0.0,
            st.steps_max, st.rays);
     memset(&st, 0, sizeof st);

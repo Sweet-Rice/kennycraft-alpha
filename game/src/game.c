@@ -8,6 +8,7 @@
 #include "kc_hal.h"
 
 kc_player kc_me;
+_Static_assert(WORLD_CHUNKS * CHUNK_W < 32767, "aim / place are int16");
 
 // Movement constants (Q16.16, folded at compile time; no float code is emitted).
 #define WALK_SPEED  Q16(4.3)
@@ -95,11 +96,11 @@ static void update_aim(void) {
     kc_me.aim_hit = HIT_HIT(h.res) && h.t <= REACH;
     if (!kc_me.aim_hit) return;
 
-    kc_me.aim[0] = CELL_X(h.cell) + wx0;
-    kc_me.aim[1] = CELL_Y(h.cell);
-    kc_me.aim[2] = CELL_Z(h.cell) + wz0;
+    kc_me.aim[0] = (int16_t)(CELL_X(h.cell) + wx0);
+    kc_me.aim[1] = (int16_t)CELL_Y(h.cell);
+    kc_me.aim[2] = (int16_t)(CELL_Z(h.cell) + wz0);
     for (int32_t i = 0; i < 3; i++) kc_me.place[i] = kc_me.aim[i];
-    kc_me.place[HIT_AXIS(h.res)] += HIT_NEG(h.res) ? 1 : -1;   // the cell the ray came from
+    kc_me.place[HIT_AXIS(h.res)] += (int16_t)(HIT_NEG(h.res) ? 1 : -1);   // the cell the ray came from
 }
 
 static void do_break(void) {
@@ -110,7 +111,7 @@ static void do_break(void) {
 
 static void do_place(void) {
     if (!kc_me.aim_hit) return;
-    int32_t *p = kc_me.place;
+    const int16_t *p = kc_me.place;
     if (p[1] < 1 || p[1] > BUILD_MAX_Y) return;
     if (world_get(p[0], p[1], p[2]) != B_AIR) return;
     if (box_overlaps_block(p[0], p[1], p[2])) return;
@@ -151,10 +152,10 @@ static void game_key(uint8_t b) {
     case KEY_BREAK: if (down) kc_me.want_break = 1; return;   // done in pick_and_edit()
     case KEY_PLACE: if (down) kc_me.want_place = 1; return;
     default:
-        if ((b & 0x7F) >= '1' && (b & 0x7F) <= '9' && down) kc_me.selected = (b & 0x7F) - '1';
+        if ((b & 0x7F) >= '1' && (b & 0x7F) <= '9' && down) kc_me.selected = (uint8_t)((b & 0x7F) - '1');
         return;
     }
-    if (down) kc_me.held |= bit; else kc_me.held &= ~bit;
+    if (down) kc_me.held |= (uint16_t)bit; else kc_me.held &= (uint16_t)~bit;
 }
 
 void read_keys(void) {

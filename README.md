@@ -12,7 +12,6 @@ The design doc is the [GitHub wiki](https://github.com/Sweet-Rice/kennycraft-alp
 | `tb/` | Verilator testbenches; each `tb/<area>/tb.mk` registers its targets with `make check` |
 | `fpga/` | `arty.xdc`, `build.tcl` (non-project Vivado flow), per-target `sources.tcl` |
 | `build/` | `build.tcl` entry and `summarize.py` for the fpga-tools MCP build contract |
-| `prompts/` | Stage agent prompts (preamble plus prompt, from Tai_2) |
 
 ## Checks
 

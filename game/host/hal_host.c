@@ -2,7 +2,7 @@
 // hal_host.c — laptop emulation of the chip's memory map.
 // Mirrors the hardware rules from the Interfaces section so chunk and render code is tested
 // as-is: world window with WIN_ORIGIN ring addressing and SLOT_VALID (invalid reads = air),
-// a DDR3 chunk engine, double framebuffer with FB_SWAP, UART RX FIFO, CYCLES counter.
+// a DDR3 chunk engine (random at power-on), double framebuffer with FB_SWAP, UART RX FIFO, CYCLES counter.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,7 +19,8 @@ static uint32_t win_origin, slot_valid;
 static uint8_t  fb[2][FB_STRIDE * 240];
 static int      back = 1;
 static uint32_t frame_count, fb_mode, leds;
-static uint8_t *ddr[256 * 256];           // chunk store, allocated on first write
+static uint8_t *ddr[256 * 256];           // chunk store, allocated on first touch
+static int      ddr_fill = 1;             // KC_DDR_FILL: what never-written DDR3 holds (power-on)
 static uint32_t chunk_done;
 static uint8_t  rx_fifo[256];
 static uint32_t rx_head, rx_tail;
@@ -38,6 +39,9 @@ static uint64_t now_ns(void) {
 void host_init(int realtime_clock) {
     realtime = realtime_clock;
     storage_ok = getenv("KC_NO_STORAGE") == NULL;
+    const char *f = getenv("KC_DDR_FILL");    // random (default) | zero | bedrock | ones
+    ddr_fill = !f || !strcmp(f, "random") ? 1 : !strcmp(f, "zero") ? 0 : !strcmp(f, "bedrock") ? 2 :
+               !strcmp(f, "ones") ? 3 : 1;
     t0_ns = now_ns();
 }
 
@@ -65,6 +69,7 @@ void hal_win_set(int32_t x, int32_t y, int32_t z, uint8_t t) {
         fprintf(stderr, "hal: world write out of window (%d,%d,%d)\n", x, y, z);
         abort();
     }
+    hstats.world_writes++;
     bram_world[phys(x, y, z, NULL)] = t & 15;
 }
 
@@ -82,19 +87,41 @@ const uint8_t *host_back_buffer(void)  { return fb[back]; }
 const uint16_t *host_palette(void)     { return kc_palette; }
 int host_fb_mode(void)                 { return (int)fb_mode; }
 
+// Real DDR3 is not initialized at power-on: fill a chunk's 4 KB (8192 nibbles, one per byte
+// here) the first time it is touched. "bedrock" = 0xAA bytes, every nibble 10 = B_BEDROCK.
+static uint8_t *ddr_chunk(uint32_t id) {
+    if (ddr[id]) return ddr[id];
+    ddr[id] = malloc(16 * 32 * 16);
+    uint32_t r = id * 2654435761u + 12345u;
+    for (int i = 0; i < 16 * 32 * 16; i++) {
+        r = r * 1664525u + 1013904223u;
+        ddr[id][i] = ddr_fill == 1 ? (uint8_t)(r >> 28) : ddr_fill == 2 ? 10 : ddr_fill == 3 ? 15 : 0;
+    }
+    return ddr[id];
+}
+
+const char *host_ddr_fill_name(void) {
+    static const char *n[] = { "zero", "random", "bedrock (0xAA)", "ones (0xFF)" };
+    return n[ddr_fill];
+}
+
+// Test hook: DDR3 chunk dst gets a copy of chunk src (models an addressing mix-up).
+void host_ddr_copy(uint32_t src, uint32_t dst) { memcpy(ddr_chunk(dst), ddr_chunk(src), 16 * 32 * 16); }
+
 // ---- chunk engine: chunk (cx,cz) <-> slot (cx&3, cz&3). DDR3 order y, z, x. -----------------
 static void chunk_cmd(uint32_t cmd) {
     uint32_t cx = cmd & 255, cz = (cmd >> 8) & 255, id = cz * 256 + cx;
     int store = (cmd >> 31) & 1;
     uint32_t sx = (cx & 3) * 16, sz = (cz & 3) * 16;
-    if (store && !ddr[id]) ddr[id] = calloc(16 * 32 * 16, 1);
+    uint8_t *d = ddr_chunk(id);
+    if (store && ((slot_valid >> ((cz & 3) * 4 + (cx & 3))) & 1)) hstats.stores_from_valid++;
     for (uint32_t y = 0; y < 32; y++)
         for (uint32_t z = 0; z < 16; z++)
             for (uint32_t x = 0; x < 16; x++) {
                 uint8_t *b = &bram_world[WIN_INDEX(sx + x, y, sz + z)];
                 uint32_t c = (y * 16 + z) * 16 + x;
-                if (store) ddr[id][c] = *b;
-                else *b = ddr[id] ? ddr[id][c] : 0;
+                if (store) d[c] = *b;
+                else *b = d[c];
             }
     if (store) hstats.chunk_stores++; else hstats.chunk_loads++;
     chunk_done++;
@@ -143,3 +170,15 @@ void hal_mmio_w(uint32_t off, uint32_t v) {
 // ---- host-side hooks -----------------------------------------------------------------------
 void host_push_key(uint8_t b) { rx_fifo[rx_head++ & 255] = b; }
 void host_advance_cycles(uint32_t c) { cycles += c; }
+
+// Reset button: chip registers go back to their reset values and CYCLES restarts. BRAM and
+// DDR3 keep their contents. cycles0 stands in for the boot-to-boot jitter of the first DDR3
+// loads (they cross into the DDR3 controller's clock domain), which the boot nonce samples.
+void host_reset(uint32_t cycles0) {
+    win_origin = 0; slot_valid = 0; chunk_done = 0; fb_mode = 0; leds = 0;
+    rx_head = rx_tail = 0;
+    cycles = cycles0;
+}
+
+uint32_t host_slot_valid(void) { return slot_valid; }
+uint8_t host_bram_phys(uint32_t px, uint32_t y, uint32_t pz) { return bram_world[WIN_INDEX(px & 63, y & 31, pz & 63)] & 15; }
