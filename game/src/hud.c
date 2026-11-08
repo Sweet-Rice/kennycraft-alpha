@@ -7,13 +7,13 @@
 static const uint16_t font[] = {
     0x7B6F, 0x2C97, 0x73E7, 0x73CF, 0x5BC9, 0x79CF, 0x79EF, 0x7249, 0x7BEF, 0x7BCF,   // 0-9
     0x5BAD, 0x7927, 0x6B6D, 0x5BD2, 0x12A4, 0x72C2,                                  // K C N Y / ?
-    0x79A4, 0x7BE4, 0x5FED, 0x79E7, 0x0002,                                          // F P M E .
+    0x79A4, 0x7BE4,                                                                  // F P
 };
 static int32_t glyph(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c == 'S') return 5;                                // same shape as 5
     return c == 'K' ? 10 : c == 'C' ? 11 : c == 'N' ? 12 : c == 'Y' ? 13 : c == '/' ? 14 : c == '?' ? 15
-         : c == 'F' ? 16 : c == 'P' ? 17 : c == 'M' ? 18 : c == 'E' ? 19 : c == '.' ? 20 : -1;
+         : c == 'F' ? 16 : c == 'P' ? 17 : -1;
 }
 
 void hud_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint8_t c) {

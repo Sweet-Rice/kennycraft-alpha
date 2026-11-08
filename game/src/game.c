@@ -7,10 +7,21 @@
 #include "render.h"
 #include "cr6.h"
 #include "hud.h"
-#include "entity.h"
 #include "kc_main.h"
 #include "kc_hal.h"
 #include "kc_tables.h"
+
+// The performance overlay is built for the Stage 2 chip and the laptop only: the Stage 0/1
+// chip builds have no IMEM to spare, and KC_FIXED_DT builds keep CYCLES off the screen.
+#if (defined(KC_CHIP) && !KC_VTRACE) || KC_FIXED_DT
+#define KC_PERF_HUD 0
+#else
+#define KC_PERF_HUD 1
+#endif
+
+#if KC_PERF_HUD
+static uint8_t perf_on;   // F toggles the overlay
+#endif
 
 kc_player kc_me;
 _Static_assert(WORLD_CHUNKS * CHUNK_W < 32767, "aim / place are int16");
@@ -56,7 +67,6 @@ static void set_world_colors(int32_t nether) {
     pal_world = nether;
 }
 
-static uint8_t perf_on;   // F toggles the performance overlay (draw_perf)
 static const uint8_t hotbar[9] = { B_GRASS, B_DIRT, B_STONE, B_COBBLE, B_LOG, B_OBSIDIAN, B_PLANKS, B_SAND, B_BRICK };
 
 // ---------------------------------------------------------------- collision -------------
@@ -288,7 +298,9 @@ static void game_key(uint8_t b) {
     case KEY_PLACE: if (down) kc_me.want_place = 1; return;
     case KEY_E: case KEY_Y: case KEY_N: if (down) cr6_key(b & 0x7F); return;
     case KEY_P: if (down && !landing) travel(); return;
+#if KC_PERF_HUD
     case KEY_F: if (down) perf_on ^= 1; return;
+#endif
     case MOUSE_LEFT:  if (down) kc_me.yaw = (kc_me.yaw - MOUSE_STEP) & (Q16_INT(ANG_FULL) - 1); return;
     case MOUSE_RIGHT: if (down) kc_me.yaw = (kc_me.yaw + MOUSE_STEP) & (Q16_INT(ANG_FULL) - 1); return;
     case MOUSE_UP:    if (down) kc_me.pitch = iclamp(kc_me.pitch + MOUSE_STEP, -PITCH_MAX, PITCH_MAX); return;
@@ -456,50 +468,19 @@ static void draw_aim_box(int32_t W, int32_t H, uint8_t c) {
     }
 }
 
-#if !KC_FIXED_DT
-// Unsigned divide by shift and subtract: the chip has no DIV. Lane 0, a few times a frame.
-static uint32_t udiv(uint32_t n, uint32_t d) {
-    uint32_t q = 0, r = 0;
-    for (int32_t i = 31; i >= 0; i--) {
-        r = (r << 1) | ((n >> i) & 1u);
-        if (r >= d) { r -= d; q |= 1u << i; }
-    }
-    return q;
-}
-#endif
-
-// Performance overlay, top right: frames per second and frame time from the last frame's
-// CYCLES (20 ns ticks), the entity count, and a bar split into draw (white: entity prep, swap
-// wait, kernel) and the rest of the frame (gold). Not in KC_FIXED_DT builds, which keep
-// CYCLES off the screen.
+#if KC_PERF_HUD
+// Performance overlay, top right: frames per second from the last frame's CYCLES (20 ns ticks).
 static void draw_perf(int32_t W) {
-#if !KC_FIXED_DT
-    uint32_t f = kc_perf.frame;
+    uint32_t f = kc_frame_cycles;
     if (!perf_on || !f) return;
-    int32_t s = W == 320 ? 2 : 1, y = 3 * s;
-    uint8_t white = PIX(COLOR_WHITE, 0, 0), gold = PIX(kc_face_color[B_SAND * 3], 0, 0);
-    char b[3][12];
-    char *o = hud_num(b[0], udiv(50000000u + (f >> 1), f));        // fps, rounded
-    *o++ = ' '; *o++ = 'F'; *o++ = 'P'; *o++ = 'S'; *o = 0;
-    uint32_t ms10 = udiv(f + 2500u, 5000u);                         // tenths of a ms
-    o = hud_num(b[1], udiv(ms10, 10u));
-    *o++ = '.'; *o++ = (char)('0' + (ms10 - udiv(ms10, 10u) * 10u)); *o++ = ' '; *o++ = 'M'; *o++ = 'S'; *o = 0;
-    o = b[2]; *o++ = 'E'; *o++ = ' '; o = hud_num(o, (uint32_t)entity_count()); *o = 0;
-    for (int32_t i = 0; i < 3; i++) {
-        int32_t n = 0;
-        while (b[i][n]) n++;
-        hud_text(W - n * 4 * s - 3 * s, y, s, b[i], i ? white : gold);
-        y += 8 * s;
-    }
-    int32_t bw = 32 * s, x = W - bw - 3 * s;
-    int32_t dw = (int32_t)udiv(kc_perf.draw * 32u, f) * s;           // draw's share of the frame
-    hud_rect(x - s, y - s, bw + 2 * s, 4 * s, PIX(COLOR_BLACK, 0, 0));
-    hud_rect(x, y, imin(dw, bw), 2 * s, white);
-    hud_rect(x + imin(dw, bw), y, bw - imin(dw, bw), 2 * s, gold);
-#else
-    (void)W;
-#endif
+    int32_t s = W == 320 ? 2 : 1;
+    uint32_t n = 50000000u + (f >> 1), fps = 0;   // 1 s of CYCLES / f, rounded; no DIV on the chip,
+    while (n >= f) { n -= f; fps++; }            // and fps is a few hundred at most
+    char b[10], *o = hud_num(b, fps);
+    o[0] = ' '; o[1] = 'F'; o[2] = 'P'; o[3] = 'S'; o[4] = 0;
+    hud_text(W - (int32_t)(o + 4 - b) * 4 * s - 3 * s, 3 * s, s, b, PIX(COLOR_WHITE, 0, 0));
 }
+#endif
 
 void game_draw_overlay(void) {
     int32_t W = KC_RP->width, H = KC_RP->height;
@@ -528,5 +509,7 @@ void game_draw_overlay(void) {
             }
     }
     cr6_draw_hud(W);
+#if KC_PERF_HUD
     draw_perf(W);
+#endif
 }
