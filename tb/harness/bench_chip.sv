@@ -223,6 +223,7 @@ module bench_chip #(
         .vt_max_steps  (),
         /* verilator lint_on PINCONNECTEMPTY */
         .vt_done       (1'b0),
+        .vt_busy       (1'b0),
         .vt_result     (vt_result),
         .vt_hit_cell   (vt_hit_cell),
         .vt_t_hit      (vt_t_hit)

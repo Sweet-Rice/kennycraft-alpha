@@ -79,6 +79,7 @@ module core_pipe
     output logic                 vt_start,
     output logic [7:0]           vt_max_steps,
     input  logic                 vt_done,
+    input  logic                 vt_busy,
     input  logic [15:0]          vt_result   [LANES],
     input  logic [16:0]          vt_hit_cell [LANES],
     input  logic [31:0]          vt_t_hit    [LANES]
@@ -99,10 +100,11 @@ module core_pipe
     logic stop;       // halted: nothing more is fetched
     logic m_valid, m_done, m_ready;
     logic e_valid, e_go, e_halt, e_redirect;
+    logic e_ray_wait; // VGET or VTRACE in EX while a walk runs: EX holds, MEM gets a bubble
     logic [31:0] e_next;
 
     assign m_ready = !m_valid || m_done;
-    assign adv     = m_ready;
+    assign adv     = m_ready && !e_ray_wait;
     assign e_go    = e_valid && adv;
     assign flush   = e_go && (e_halt || e_redirect);
 
@@ -434,9 +436,11 @@ module core_pipe
         assign vt_start     = e_go && !e_fault && e_vtrace;
         assign vt_max_steps = cap;
         assign vt_wr        = m_valid && m_vt && vt_done;
+        assign e_ray_wait   = e_valid && (e_vtrace || e_vget) && vt_busy;
 
         for (genvar i = 0; i < LANES; i++) begin : g_y
-            assign ray_y[i] = e_field[0] ? vt_t_hit[i] : {15'd0, vt_hit_cell[i]};
+            assign ray_y[i] = e_field[1] ? {16'd0, vt_result[i]} :
+                              e_field[0] ? vt_t_hit[i] : {15'd0, vt_hit_cell[i]};
             assign vt_y[i]  = {16'd0, vt_result[i]};
         end
     end else begin : g_no_ray
@@ -449,6 +453,7 @@ module core_pipe
         assign vt_start     = 1'b0;
         assign vt_max_steps = '0;
         assign vt_wr        = 1'b0;
+        assign e_ray_wait   = 1'b0;
         for (genvar i = 0; i < LANES; i++) begin : g_y
             assign vt_cfg_data[i] = '0;
             assign ray_y[i]       = '0;
@@ -459,7 +464,7 @@ module core_pipe
         logic unused_ray;
         /* verilator lint_on UNUSEDSIGNAL */
         always_comb begin
-            unused_ray = vt_done ^ e_is_ray ^ (^e_field);
+            unused_ray = vt_done ^ vt_busy ^ e_is_ray ^ (^e_field);
             for (int i = 0; i < LANES; i++)
                 unused_ray ^= (^vt_result[i]) ^ (^vt_hit_cell[i]) ^ (^vt_t_hit[i]);
         end
@@ -478,7 +483,7 @@ module core_pipe
             m_valid <= 1'b0;
             m_walk  <= 1'b0;
         end else if (m_ready) begin
-            m_valid <= e_valid;
+            m_valid <= e_valid && !e_ray_wait;
             m_walk  <= e_lsu_go;
         end else if (lsu_done) begin
             m_walk  <= 1'b0;
@@ -502,7 +507,7 @@ module core_pipe
             m_mem        <= e_mem;
             m_mul        <= e_is_mul;
             m_qr         <= HAS_QRCP && e_is_qrcp;
-            m_vt         <= e_vtrace;
+            m_vt         <= e_vtrace && e_r_we;    // rd = x0: asynchronous, no wait
             m_cnt        <= '0;
             m_tail       <= 1'b0;
             m_vt_tail    <= 1'b0;

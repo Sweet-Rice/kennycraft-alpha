@@ -1,6 +1,6 @@
 /* t_illegal: every illegal case halts with ERR.ILLEGAL and the right ERR_PC
    (Tai_2 sections 1 and 2): DIV, ECALL, a CSR read, a misaligned LW and VGET
-   field 2, plus the other DIV/REM forms, EBREAK, misaligned LH/SW/SH,
+   field 3, plus the other DIV/REM forms, EBREAK, misaligned LH/SW/SH,
    custom-0 funct3 010 (QRCP) without HAS_QRCP, custom-1/custom-2
    instructions whose unit is absent in Stage 0, an all-zero word, a fetch
    outside instruction memory, a taken JALR, branch and JAL whose target is
@@ -76,8 +76,8 @@ _start:
     .org 0x380                  /* 10: misaligned SH, must not store */
     sh     t0, (TB_MARK - DMEM_BASE + 1)(t0)
     NOT_REACHED
-    .org 0x3c0                  /* 11: VGET a2, field 2 (reserved) */
-    .insn r 0x2B, 2, 2, a2, x0, x0
+    .org 0x3c0                  /* 11: VGET a2, field 3 (reserved) */
+    .insn r 0x2B, 2, 3, a2, x0, x0
     NOT_REACHED
     .org 0x400                  /* 12: VTRACE, cap 0; illegal without the ray unit */
     .insn r 0x2B, 1, 0, a2, a1, x0

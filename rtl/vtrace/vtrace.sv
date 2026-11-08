@@ -5,7 +5,11 @@
 //   0 start cell {z[5:0], y[4:0], x[5:0]} in bits 16:0
 //   1-3 tMax x, y, z (Q16.16)    4-6 tDelta x, y, z (Q16.16)
 //   7 step signs, bit 0 x, 1 y, 2 z, 1 = stepping negative
-// The walk updates cell and tMax in place.
+// The walk updates cell and tMax in place. VSET writes a shadow copy of the
+// field and marks it dirty; the next walk starts from the dirty fields' new
+// values and the others' current ones (a VTRACE without VSET resumes where
+// the last walk stopped, as before). So VSET may run during a walk: the core
+// can set up the next ray while this one walks (asynchronous VTRACE).
 //
 // One step (wiki "One step", ties as written there: x only on a strict
 // minimum, then y if tMaxY < tMaxZ, else z; tMax compares are signed):
@@ -143,6 +147,23 @@ module vtrace #(parameter int LANES = 8, parameter int WORLD_LATENCY = 2) (
     logic signed [31:0] tmx, tmy, tmz;     // tMax, Q16.16
     logic signed [31:0] tdx, tdy, tdz;     // tDelta, Q16.16
     logic [2:0]         neg;               // step signs, 1 = negative
+    // VSET shadow and its dirty bits (one per field), taken at the next launch
+    logic [16:0]        q_cell;
+    logic [31:0]        q_tmx, q_tmy, q_tmz, q_tdx, q_tdy, q_tdz;
+    logic [2:0]         q_neg;
+    logic [7:0]         dirty;
+    // the values the walk steps from: at launch the dirty fields' new ones
+    wire                take = launch;
+    wire signed [6:0]   ex = (take && dirty[0]) ? {1'b0, q_cell[5:0]}   : cx;
+    wire signed [6:0]   ey = (take && dirty[0]) ? {2'b0, q_cell[10:6]}  : cy;
+    wire signed [6:0]   ez = (take && dirty[0]) ? {1'b0, q_cell[16:11]} : cz;
+    wire signed [31:0]  etmx = (take && dirty[1]) ? q_tmx : tmx;
+    wire signed [31:0]  etmy = (take && dirty[2]) ? q_tmy : tmy;
+    wire signed [31:0]  etmz = (take && dirty[3]) ? q_tmz : tmz;
+    wire signed [31:0]  etdx = (take && dirty[4]) ? q_tdx : tdx;
+    wire signed [31:0]  etdy = (take && dirty[5]) ? q_tdy : tdy;
+    wire signed [31:0]  etdz = (take && dirty[6]) ? q_tdz : tdz;
+    wire [2:0]          eneg = (take && dirty[7]) ? q_neg : neg;
     // the step that produced the current cell
     logic               s_sign;
     logic [1:0]         s_axis;
@@ -163,16 +184,16 @@ module vtrace #(parameter int LANES = 8, parameter int WORLD_LATENCY = 2) (
     logic [16:0]        r_cell;
 
     // ---- step: pick the axis with the smallest tMax ----
-    wire                sel_x = (tmx < tmy) && (tmx < tmz);
-    wire                sel_y = !sel_x && (tmy < tmz);
+    wire                sel_x = (etmx < etmy) && (etmx < etmz);
+    wire                sel_y = !sel_x && (etmy < etmz);
     wire                sel_z = !sel_x && !sel_y;
-    wire signed [31:0]  tm    = sel_x ? tmx : sel_y ? tmy : tmz;
-    wire signed [31:0]  td    = sel_x ? tdx : sel_y ? tdy : tdz;
+    wire signed [31:0]  tm    = sel_x ? etmx : sel_y ? etmy : etmz;
+    wire signed [31:0]  td    = sel_x ? etdx : sel_y ? etdy : etdz;
     wire signed [32:0]  sum   = 33'(tm) + 33'(td);
     // saturate at 0x7FFF_FFFF on positive overflow
     wire signed [31:0]  tm_n  = (sum[32:31] == 2'b01) ? 32'sh7FFF_FFFF : sum[31:0];
     wire [1:0]          axis  = sel_x ? 2'd0 : sel_y ? 2'd1 : 2'd2;
-    wire                sgn   = neg[axis];
+    wire                sgn   = eneg[axis];
     wire signed [6:0]   delta = sgn ? -7'sd1 : 7'sd1;
 
     // ---- check of the latched step ----
@@ -181,20 +202,19 @@ module vtrace #(parameter int LANES = 8, parameter int WORLD_LATENCY = 2) (
     assign live_next[l] = live[l] && !oob && !solid;
 
     always_ff @(posedge clk) begin
+      if (rst) dirty <= '0;
+      else if (cfg_we && lane_mask[l]) dirty[cfg_field] <= 1'b1;
+      else if (stepping[l] && launch) dirty <= '0;
       if (cfg_we && lane_mask[l]) begin
         unique case (cfg_field)
-          3'd0: begin
-            cx <= {1'b0, cfg_data[l][5:0]};
-            cy <= {2'b0, cfg_data[l][10:6]};
-            cz <= {1'b0, cfg_data[l][16:11]};
-          end
-          3'd1: tmx <= cfg_data[l];
-          3'd2: tmy <= cfg_data[l];
-          3'd3: tmz <= cfg_data[l];
-          3'd4: tdx <= cfg_data[l];
-          3'd5: tdy <= cfg_data[l];
-          3'd6: tdz <= cfg_data[l];
-          3'd7: neg <= cfg_data[l][2:0];
+          3'd0: q_cell <= cfg_data[l][16:0];
+          3'd1: q_tmx  <= cfg_data[l];
+          3'd2: q_tmy  <= cfg_data[l];
+          3'd3: q_tmz  <= cfg_data[l];
+          3'd4: q_tdx  <= cfg_data[l];
+          3'd5: q_tdy  <= cfg_data[l];
+          3'd6: q_tdz  <= cfg_data[l];
+          3'd7: q_neg  <= cfg_data[l][2:0];
         endcase
       end
       if (latching[l]) begin               // before the step below overwrites them
@@ -202,9 +222,12 @@ module vtrace #(parameter int LANES = 8, parameter int WORLD_LATENCY = 2) (
         k_axis <= s_axis; k_sign <= s_sign; k_t <= s_t; k_steps <= s_steps;
       end
       if (stepping[l]) begin
-        if (sel_x) begin cx <= cx + delta; tmx <= tm_n; end
-        if (sel_y) begin cy <= cy + delta; tmy <= tm_n; end
-        if (sel_z) begin cz <= cz + delta; tmz <= tm_n; end
+        // launch: take every field (the dirty ones are new), then step
+        cx <= ex; cy <= ey; cz <= ez; tmx <= etmx; tmy <= etmy; tmz <= etmz;
+        tdx <= etdx; tdy <= etdy; tdz <= etdz; neg <= eneg;
+        if (sel_x) begin cx <= ex + delta; tmx <= tm_n; end
+        if (sel_y) begin cy <= ey + delta; tmy <= tm_n; end
+        if (sel_z) begin cz <= ez + delta; tmz <= tm_n; end
         s_axis  <= axis;
         s_sign  <= sgn;
         s_t     <= tm;

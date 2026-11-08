@@ -34,7 +34,7 @@ module t_illegal_tb;
             3: return "REMU";       4: return "ECALL";      5: return "EBREAK";
             6: return "CSR read";   7: return "misaligned LW";
             8: return "misaligned LH";  9: return "misaligned SW";
-            10: return "misaligned SH"; 11: return "VGET field 2";
+            10: return "misaligned SH"; 11: return "VGET field 3";
             12: return "VTRACE cap 0 (unit absent)"; 13: return "QRCP (unit absent)";
             14: return HAS_DIV_STACK ? "DENDIF, empty stack" : "DENDIF (Stage 0)";
             15: return "fetch outside imem";

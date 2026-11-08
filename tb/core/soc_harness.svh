@@ -64,7 +64,7 @@ logic        ddr_reg_stall;
 always #(CLK_NS / 2) clk = ~clk;
 
 // Ray unit port
-logic             vt_cfg_we, vt_start, vt_done;
+logic             vt_cfg_we, vt_start, vt_done, vt_busy;
 logic [2:0]       vt_cfg_field;
 logic [LANES-1:0] vt_lane_mask;
 logic [31:0]      vt_cfg_data [LANES];
@@ -74,7 +74,6 @@ logic [16:0]      vt_hit_cell [LANES];
 logic [31:0]      vt_t_hit    [LANES];
 
 if (HAS_RAY_UNIT) begin : g_vtrace
-    logic        vt_busy;
     logic [16:0] vt_world_addr [LANES];
     logic [3:0]  vt_world_data [LANES];
 
@@ -90,6 +89,7 @@ if (HAS_RAY_UNIT) begin : g_vtrace
     );   // world_data is all air here, so world_phase needs no model
 end else begin : g_no_vtrace
     assign vt_done = 1'b0;
+    assign vt_busy = 1'b0;
     always_comb for (int l = 0; l < LANES; l++) begin
         vt_result[l]   = '0;
         vt_hit_cell[l] = '0;
@@ -117,7 +117,7 @@ kc_soc #(
     .world_req(), .world_we(), .world_addr(), .world_wdata(),
     .world_ready(1'b0), .world_rdata(8'h00),
     .vt_cfg_we, .vt_cfg_field, .vt_lane_mask, .vt_cfg_data, .vt_start, .vt_max_steps,
-    .vt_done, .vt_result, .vt_hit_cell, .vt_t_hit
+    .vt_done, .vt_busy, .vt_result, .vt_hit_cell, .vt_t_hit
 );
 /* verilator lint_on PINCONNECTEMPTY */
 

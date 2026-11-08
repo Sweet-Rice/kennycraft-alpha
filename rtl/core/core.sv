@@ -53,9 +53,13 @@
 // vt_cfg_we in EX with vt_cfg_field = funct7 and vt_cfg_data = each lane's
 // rs1. VTRACE pulses vt_start in EX with vt_max_steps = the scalar lane's
 // rs1[7:0], waits in VT for vt_done, latches each lane's {16'b0, result} and
-// writes it to rd in active lanes; a cap of 0 or M = 0 writes nothing. VGET
-// latches hit_cell (field 0, zero-extended) or t_hit (field 1) in EX and
-// writes rd in active lanes.
+// writes it to rd in active lanes; a cap of 0 or M = 0 writes nothing.
+// VTRACE with rd = x0 starts the walk and retires at once (asynchronous
+// VTRACE): the walk runs while the core goes on, and VSET may set up the next
+// ray meanwhile (the ray unit keeps a shadow copy). VGET latches hit_cell
+// (field 0, zero-extended), t_hit (field 1) or {16'b0, result} (field 2) in
+// EX and writes rd in active lanes. VGET and VTRACE wait in EX while vt_busy
+// (a walk is still running).
 //
 // QRCP (D22, HAS_QRCP = 1; illegal otherwise) runs rtl/core/qrcp.sv in every
 // lane: the unit latches its rs1 in EX, QR steps it through qr_ph 0..2 and
@@ -114,6 +118,7 @@ module core
     output logic                 vt_start,
     output logic [7:0]           vt_max_steps,
     input  logic                 vt_done,
+    input  logic                 vt_busy,
     input  logic [15:0]          vt_result   [LANES],
     input  logic [16:0]          vt_hit_cell [LANES],
     input  logic [31:0]          vt_t_hit    [LANES]
@@ -345,6 +350,7 @@ module core
     // Ray unit (custom-1)
     // ------------------------------------------------------------------
     logic ex_vtrace;
+    logic ray_wait;     // VGET or VTRACE in EX while a walk runs: stay in EX
 
     if (HAS_RAY_UNIT) begin : g_ray
         logic [7:0] cap;
@@ -356,13 +362,15 @@ module core
         assign vt_cfg_we    = (state == S_EX) && ex_is_ray && (ex_funct3 == F3_VSET);
         assign vt_cfg_field = ex_field;
         assign vt_cfg_data  = l_rs1;
-        assign vt_start     = (state == S_EX) && ex_vtrace;
+        assign ray_wait     = ex_is_ray && (ex_vtrace || (ex_funct3 == F3_VGET)) && vt_busy;
+        assign vt_start     = (state == S_EX) && ex_vtrace && !vt_busy;
         assign vt_max_steps = cap;
-        assign ray_en       = ex_is_ray && (((state == S_EX) && (ex_funct3 == F3_VGET)) ||
+        assign ray_en       = ex_is_ray && (((state == S_EX) && (ex_funct3 == F3_VGET) && !vt_busy) ||
                                             ((state == S_VT) && vt_done));
 
         for (genvar i = 0; i < LANES; i++) begin : g_y
             assign ray_y[i] = (ex_funct3 != F3_VGET) ? {16'd0, vt_result[i]} :
+                              ex_field[1]            ? {16'd0, vt_result[i]} :
                               ex_field[0]            ? vt_t_hit[i] : {15'd0, vt_hit_cell[i]};
         end
 
@@ -372,6 +380,7 @@ module core
         end
     end else begin : g_no_ray
         assign ex_vtrace    = 1'b0;
+        assign ray_wait     = 1'b0;
         assign vt_lane_mask = '0;
         assign vt_cfg_we    = 1'b0;
         assign vt_cfg_field = '0;
@@ -388,7 +397,7 @@ module core
         logic unused_ray;
         /* verilator lint_on UNUSEDSIGNAL */
         always_comb begin
-            unused_ray = vt_done ^ ex_is_ray ^ (^ex_field);
+            unused_ray = vt_done ^ vt_busy ^ ex_is_ray ^ (^ex_field);
             for (int i = 0; i < LANES; i++)
                 unused_ray ^= (^vt_result[i]) ^ (^vt_hit_cell[i]) ^ (^vt_t_hit[i]);
         end
@@ -431,9 +440,10 @@ module core
                 S_ID:  state <= id_fault ? S_HALT : S_EX;
                 S_EX: begin
                     if (ex_halt)                         state <= S_HALT;
+                    else if (ray_wait)                   state <= S_EX;
                     else if (ex_is_mul)                  state <= S_MUL;
                     else if (ex_mem)                     state <= S_MEM;
-                    else if (ex_vtrace)                  state <= S_VT;
+                    else if (ex_vtrace && ex_r_we)       state <= S_VT;
                     else if (HAS_QRCP && ex_is_qrcp)     state <= S_QR;
                     else                                 state <= S_WB;
                 end

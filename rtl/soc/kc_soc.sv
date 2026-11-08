@@ -82,6 +82,7 @@ module kc_soc
     output logic             vt_start,
     output logic [7:0]       vt_max_steps,
     input  logic             vt_done,
+    input  logic             vt_busy,       // a walk is running (asynchronous VTRACE)
     input  logic [15:0]      vt_result   [LANES],
     input  logic [16:0]      vt_hit_cell [LANES],
     input  logic [31:0]      vt_t_hit    [LANES]
@@ -112,7 +113,7 @@ module kc_soc
             .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,
             .err_set, .err_pc, .halted(err_led), .pc,
             .vt_cfg_we, .vt_cfg_field, .vt_lane_mask, .vt_cfg_data, .vt_start, .vt_max_steps,
-            .vt_done, .vt_result, .vt_hit_cell, .vt_t_hit
+            .vt_done, .vt_busy, .vt_result, .vt_hit_cell, .vt_t_hit
         );
     end else begin : g_core
         core #(.LANES(LANES), .HAS_DIV_STACK(HAS_DIV_STACK), .HAS_RAY_UNIT(HAS_RAY_UNIT),
@@ -122,7 +123,7 @@ module kc_soc
             .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,
             .err_set, .err_pc, .halted(err_led), .pc,
             .vt_cfg_we, .vt_cfg_field, .vt_lane_mask, .vt_cfg_data, .vt_start, .vt_max_steps,
-            .vt_done, .vt_result, .vt_hit_cell, .vt_t_hit
+            .vt_done, .vt_busy, .vt_result, .vt_hit_cell, .vt_t_hit
         );
     end
 

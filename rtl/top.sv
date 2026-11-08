@@ -109,7 +109,7 @@ module top #(
     logic [7:0]  world_wdata;
     logic [3:0]  core_world_rdata;
 
-    logic        vt_cfg_we, vt_start, vt_done;
+    logic        vt_cfg_we, vt_start, vt_done, vt_busy;
     logic [2:0]  vt_cfg_field;
     logic [LANES-1:0] vt_lane_mask;
     logic [31:0] vt_cfg_data [LANES];
@@ -142,7 +142,7 @@ module top #(
         .world_req, .world_we, .world_addr, .world_wdata,
         .world_ready(world_req), .world_rdata({4'b0, core_world_rdata}),
         .vt_cfg_we, .vt_cfg_field, .vt_lane_mask, .vt_cfg_data, .vt_start, .vt_max_steps,
-        .vt_done, .vt_result, .vt_hit_cell, .vt_t_hit
+        .vt_done, .vt_busy, .vt_result, .vt_hit_cell, .vt_t_hit
     );
 
     // ------------------------------------------------------------------
@@ -171,7 +171,6 @@ module top #(
     // WORLD_LATENCY = 2 cycles later through world_remap and world_mem's
     // two-phase sharing of each copy's ports (D17). Lanes the core does not
     // have read address 0.
-    logic        vt_busy;
     logic        vt_phase;      // vtrace WAIT cycle index: world_mem's read phase
     logic [16:0] vt_addr       [VT_LANES];
     logic [16:0] vt_paddr      [VT_LANES];

@@ -167,7 +167,7 @@ bool ref_illegal(uint32_t op, uint32_t f3, uint32_t f7, uint32_t rs2, bool ray, 
         if (f3 >= 3) return true;
         if (f3 == 0) return f7 >= 8;                         // VSET fields 0..7
         if (f3 == 1) return f7 != 0;
-        return f7 >= 2;                                      // VGET fields 0..1
+        return f7 >= 3;                                      // VGET fields 0..2
     case 0x5B: return f3 >= 3 || !div;
     default: return true;                                    // SYSTEM and undefined
     }
@@ -198,8 +198,8 @@ void check_illegal_list() {
         {"C1_F3_111", enc_r(0x2B, 7, 0, A0, A1, 0), true, true},
         // VTRACE with funct7 != 0
         {"VTRACE_F7", enc_r(0x2B, 1, 1, A0, A1, 0), true, true},
-        // VGET with funct7 >= 2 (field 2 reserved for fog)
-        {"VGET_F2",   enc_r(0x2B, 2, 2, A0, 0, 0), true, true},
+        // VGET with funct7 >= 3 (field 3 reserved for fog)
+        {"VGET_F3",   enc_r(0x2B, 2, 3, A0, 0, 0), true, true},
         {"VGET_F127", enc_r(0x2B, 2, 127, A0, 0, 0), true, true},
         // custom-2 with funct3 011..111
         {"C2_F3_011", enc_r(0x5B, 3, 0, 0, 0, 0), true, true},
@@ -246,6 +246,7 @@ void check_illegal_list() {
         {"DELSE_JUNK", enc_b(0x5B, 1, 31, 31, -8), false, false},
         {"VSET_F7", enc_r(0x2B, 0, 7, 0, A1, 0), true, false},
         {"VGET_F0", enc_r(0x2B, 2, 0, A0, 0, 0), true, false},
+        {"VGET_F2", enc_r(0x2B, 2, 2, A0, 0, 0), true, false},   // VTRACE result
         // Not defined by Tai_2, so illegal
         {"VSET_F8",   enc_r(0x2B, 0, 8, 0, A1, 0), true, true},
         {"VSET_F127", enc_r(0x2B, 0, 127, 0, A1, 0), true, true},
