@@ -8,15 +8,17 @@
 #               `kc_mmi 1` (the KennyCraft top: write kc.mmi). Targets "top"
 #               (Stage 1, LANES = 8), "top_s0" (Stage 0, LANES = 1),
 #               "top_s2" (Stage 2: Stage 1 plus the VTRACE ray unit and
-#               QRCP) and "top_s2p" (top_s2 on the pipelined core,
-#               PIPELINED = 1) build rtl/top.sv.
+#               QRCP), "top_s2p" (top_s2 on the pipelined core,
+#               PIPELINED = 1) and "top_s2p100" (top_s2p with the core
+#               clock at 100 MHz, CORE_MHZ = 100) build rtl/top.sv.
 #   FPGA_BUILD_OUT  output directory (the fpga-tools MCP sets it per job;
 #               defaults to build/out/<target> for manual runs).
 #
 # Run from the repo root:  vivado -mode batch -source fpga/build.tcl
 # The MCP enters through build/build.tcl, which sources this file.
 #
-# Outputs in $out: top.bit, timing.rpt, utilization.rpt (+ _hier), routed.dcp,
+# Outputs in $out: top.bit, timing.rpt, paths.rpt and paths_summary.rpt (the
+# core clock's worst setup paths), utilization.rpt (+ _hier), routed.dcp,
 # top.mmi (write_mem_info: XPM memories only, i.e. the ddr_bridge FIFOs) and,
 # for the rtl/top.sv targets, kc.mmi (fpga/kc_mmi.tcl): the imem, dmem and texture
 # BRAMs, which are inferred and so missing from top.mmi. The palette is not in
@@ -77,6 +79,13 @@ phys_opt_design
 route_design
 
 report_timing_summary -report_unconstrained -check_timing_verbose -file $out/timing.rpt
+# The 200 worst setup endpoints of the core clock, one path each, for
+# critical-path work (paths.rpt) and a one-line-per-path summary.
+set kc_core_clk [get_clocks -quiet clk0_raw]
+if {[llength $kc_core_clk]} {
+    report_timing -group $kc_core_clk -max_paths 200 -nworst 1 -sort_by slack -path_type summary -file $out/paths_summary.rpt
+    report_timing -group $kc_core_clk -max_paths 30 -nworst 1 -sort_by slack -file $out/paths.rpt
+}
 report_utilization -file $out/utilization.rpt
 report_utilization -hierarchical -hierarchical_depth 4 -file $out/utilization_hier.rpt
 check_timing -verbose -file $out/check_timing.rpt
