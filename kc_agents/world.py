@@ -72,7 +72,7 @@ def compress(cells):
     return cmds
 
 
-KINDS = {"trader": 0, "contractor": 1, "pig": 2, "zombie": 3}      # game/src/entity.h order
+KINDS = {"trader": 0, "contractor": 1, "chicken": 2, "zombie": 3}      # game/src/entity.h order
 SPEED = {0: 1.5, 1: 1.5, 2: 1.0, 3: 1.2}                            # blocks/s, entity.c walk_speed
 ENT_MAX = 8
 

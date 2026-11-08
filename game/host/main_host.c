@@ -149,16 +149,16 @@ static int cmd_models(void) {
     entity_clear();
     models_render("base",base);
     const int32_t dx[ENT_KINDS] = {2,5,4,7}, dz[ENT_KINDS] = {5,2,4,6}, facing[ENT_KINDS] = {2,3,2,3};
-    int32_t pig_x = 0, pig_z = 0;
+    int32_t chick_x = 0, chick_z = 0;
     for (int32_t k = 0; k < ENT_KINDS; k++) {
         int32_t x = sx+dx[k], z = sz+dz[k];
         while (terrain_tree_at(x,z)) x++;
         entity_add(k,Q16_INT(x)+Q16_HALF,Q16_INT(terrain_height(x,z)+1),Q16_INT(z)+Q16_HALF,facing[k]);
-        if (k == ENT_PIG) { pig_x = x; pig_z = z; }
+        if (k == ENT_CHICKEN) { chick_x = x; chick_z = z; }
     }
     models_render("m0_models",model);
     int changed = 0, bad = 0, brick = 0, wood = 0;
-    const uint32_t colors = (1u<<0)|(1u<<1)|(1u<<2)|(1u<<3)|(1u<<6)|(1u<<9)|(1u<<11)|(1u<<13);
+    const uint32_t colors = (1u<<0)|(1u<<1)|(1u<<2)|(1u<<3)|(1u<<6)|(1u<<8)|(1u<<9)|(1u<<11)|(1u<<13)|(1u<<14);
     for (int32_t y = 0; y < KC_RP->height; y++)
         for (int32_t x = 0; x < KC_RP->width; x++) {
             int32_t i = y*FB_STRIDE+x;
@@ -175,7 +175,7 @@ static int cmd_models(void) {
     check(wood >= 20,"at least 20 light-wood entity pixels");
 
     entity_clear();
-    entity_add(ENT_ZOMBIE,Q16_INT(pig_x)+Q16_HALF,Q16(2.0),Q16_INT(pig_z)+Q16_HALF,2);
+    entity_add(ENT_ZOMBIE,Q16_INT(chick_x)+Q16_HALF,Q16(2.0),Q16_INT(chick_z)+Q16_HALF,2);
     models_render("buried",hidden);
     check(!memcmp(base,hidden,sizeof hidden),"buried entity leaves the frame unchanged");
     entity_clear();
@@ -184,8 +184,8 @@ static int cmd_models(void) {
     models_render("behind",hidden);
     check(!memcmp(base,hidden,sizeof hidden),"entity behind the camera leaves the frame unchanged");
     entity_clear();
-    for (int32_t i = 0; i < ENT_MAX; i++) entity_add(ENT_PIG,bx,by,bz,0);
-    check(entity_add(ENT_PIG,bx,by,bz,0) == -1,"ninth entity is rejected");
+    for (int32_t i = 0; i < ENT_MAX; i++) entity_add(ENT_CHICKEN,bx,by,bz,0);
+    check(entity_add(ENT_CHICKEN,bx,by,bz,0) == -1,"ninth entity is rejected");
     entity_clear();
     check(entity_add(ENT_KINDS,bx,by,bz,0) == -1,"invalid entity kind is rejected");
 
@@ -202,7 +202,7 @@ static int cmd_models(void) {
     check(wp[1] == Q16_INT(terrain_height(wx+4,wz)+1),"walking entity stands on the ground, not the canopy");
     entity_clear();
 
-    const char *names[ENT_KINDS] = {"m1_trader","m1_contractor","m1_pig","m1_zombie"};
+    const char *names[ENT_KINDS] = {"m1_trader","m1_contractor","m1_chicken","m1_zombie"};
     kc_set_resolution(320);
     for (int32_t k = 0; k < ENT_KINDS; k++) {
         entity_clear();

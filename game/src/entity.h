@@ -4,7 +4,7 @@
 #include "fixed.h"
 #include "trace.h"
 
-enum { ENT_TRADER, ENT_CONTRACTOR, ENT_PIG, ENT_ZOMBIE, ENT_KINDS };
+enum { ENT_TRADER, ENT_CONTRACTOR, ENT_CHICKEN, ENT_ZOMBIE, ENT_KINDS };
 #define ENT_MAX 8
 #define ENT_PARTS_MAX 9
 #define ENT_BOX_MAX (ENT_MAX * ENT_PARTS_MAX)
