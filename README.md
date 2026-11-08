@@ -42,6 +42,15 @@ design history; decision numbers such as D22 refer to it.
 `KC_LINK_FPS=50 KC_REC=/tmp/kcrec` makes the game build run a 50 fps clock and save every
 frame. Nemotron reasoning is off by default for speed; `NEMOTRON_THINKING=1` turns it on.
 
+Host dependencies are listed in `host/requirements.txt`. Bank setup is
+described by `scripts/setup_kcn.sh` (devnet token/configuration and keys) and
+`host/nessie.py` (`NESSIE_KEY` and `NESSIE_ACCOUNT`, from the environment or
+`.env`). Fake-chip mode still uses the configured bank services.
+
+`KC_CHIP=host` currently launches Windows `wsl` and constructs a Windows-drive
+path: run `kchost.py` with Windows Python against the WSL-built game in the
+shared checkout. It is not a native Linux/macOS game-process launcher.
+
 With the existing bank configuration in place, run `python host/kchost.py` and
 open http://127.0.0.1:8000. The Wallets card includes a native-canvas player KCN
 chart fed by the page's existing `/events` stream; no separate dashboard,
@@ -54,6 +63,35 @@ These are game-ledger balances, including queued payments, not reconstructed
 on-chain history. Existing ledger settlement badges and devnet transaction
 links remain available. The chart is read-only; companion game/bank controls
 are unchanged.
+
+### Laptop game window
+
+Build the Linux/WSL game first (`make -C game`, or `make -C game KC_DEMO=1`
+for the village), then install pygame for the Python running the window.
+
+| Command | Behavior |
+| --- | --- |
+| `python scripts/kc.py --host` | Start the standalone laptop game in a window; no board, bank or villager agents |
+| `python scripts/kc.py --kchost` | Attach to the already-running `KC_CHIP=host` companion above, including agents and villager text input |
+
+`--kchost [URL]` defaults to `http://127.0.0.1:8000`. It reads frames from the
+local `game/out/window/frame.rgb`; the game and window must share that file.
+Changing the URL changes control/events, not frame delivery.
+
+| Input | Action |
+| --- | --- |
+| W/A/S/D, Space | Walk, jump |
+| Arrows or captured mouse motion | Look |
+| J/K or captured left/right click | Break/place |
+| 1–9 | Select hotbar slot |
+| E, Y/N | Interact, accept/decline a quote when linked to the companion |
+
+The first click only captures the mouse. Losing focus releases held keys and
+mouse capture. Esc closes an active villager text box; otherwise it releases
+capture, or exits if already released. When a villager prompt opens in
+`--kchost`, type a request and press Enter to send it. `make keys` remains the
+separate UART-only window; it does not start either laptop mode.
+
 
 ## Checks
 
@@ -73,6 +111,11 @@ Not in `make check`: `make tracediff-base-core` (every tb/core test except the
 divergence-stack ones against the Stage 0 core of git ref `CORE_BASE_REF`),
 `make qrcp-exhaustive` and `make qrcp-bench-inc`. `make tb-core-t_cpi` (part of
 `make check`) also prints the measured CPI per instruction class.
+
+With Verilator 5.054, the current pipelined RTL fails to compile at the
+streaming concatenation in `rtl/core_pipe/lane_pipe.sv`. A passing pipeline
+test run on an earlier revision does not establish compatibility with this
+revision or Verilator version.
 
 ## FPGA
 

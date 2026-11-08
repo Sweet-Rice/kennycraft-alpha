@@ -35,7 +35,7 @@ Both chip targets run `tools/chip_check.sh` (no `div`/`rem`, float, libgcc calls
 ## Build options
 
 Makefile variables (any target): `build/defs` tracks changes to `KC_GEN_BITMAP`,
-`KC_TAG_PERSIST`, `KC_QRCP` and `KC_FIXED_DT`.
+`KC_TAG_PERSIST`, `KC_QRCP`, `KC_FIXED_DT` and `KC_DEMO`.
 
 | Option | Effect |
 |---|---|
@@ -118,11 +118,13 @@ with an absolute Q16 feet center; facing 0/1/2/3 means +z/+x/-z/-x.
 The table holds eight entities; invalid kinds/facings or a full table return -1.
 `entity_clear()` empties it; `entity_count()` reports its size.
 
-`entity_move(id, x, z)` sets a walk target; `entity_tick(dt)` (lane 0, once per frame)
-steps each entity toward it at its kind's speed (chicken 1.0, zombie 1.2, villagers
-1.5 blocks/s), turns it to face the direction of travel and stands it on the column's
-top non-tree block (leaves and logs are skipped, so mobs walk under canopies).
-No collision or pathfinding: the laptop plans the route.
+`entity_move(id, x, z)` sets a walk target; `entity_tick(dt)` (lane 0, once per
+frame) advances at the kind's speed (chicken 1.0, zombie 1.2, villagers 1.5
+blocks/s per axis). In loaded columns it follows the floor under the entity,
+not roofs or awnings overhead: it steps up one block when clear, falls onto
+support below, and stops at taller obstacles. Air, leaves, logs and portal
+blocks do not count as solid support or obstacles. Movement is straight-line,
+without pathfinding; the laptop chooses the route.
 
 `kc_draw_world()` calls `entity_prepare()` after `write_camera()`. It builds
 eye-relative model-part boxes, per-box screen bounds, and per-block-row spans,
@@ -146,6 +148,12 @@ It saves `base`, `m0_models`, `m1_trader`, `m1_contractor`, `m1_chicken`, `m1_zo
 ## CR6 link
 
 `src/cr6.c` (lane 0) speaks the CR6 UART protocol: frames `A5 | len | seq | op | payload | crc8` (CRC-8 poly 0x07). Nothing changes until the laptop sends HELLO, so key replays and golden frames are unaffected. Ops: HELLO, BYE, PLACE, BREAK, FILL, SPAWN, MOVE, Q_PLAYER, Q_BLOCKS, Q_ENTITY, SET_BALANCE, SET_QUOTE, SET_CONTRACT; the chip answers with HELLO_ACK, STATUS (one per drain while linked), R_PLAYER, R_BLOCKS, R_ENTITY and EVENT (INTERACT on E, CONFIRM on Y/N). Edits are only accepted inside the 16^3 zone the player set by pressing E next to an entity, at y 1..28, block types 1..9 (or air), in loaded chunks, never into the player, one edit command per frame of at most 256 cells, paid from a cell bucket (up to 512, refilled 16 per frame). PLACE only goes into air, a non-air FILL only fills air cells, and bedrock is never changed. SPAWN and MOVE must be within 32 blocks of the player. `cr6_draw_hud` draws balance, quote and contract bars when linked.
+
+CR6 `MOVE` walks by default. Set bit 7 of its entity-ID byte to teleport
+instead; the remaining seven bits are the ID, and x/z use 1/16-block units.
+Teleporting onto a loaded column places the entity above its highest solid
+block (including a roof); an unloaded column preserves its previous height.
+This differs from ordinary floor-following movement under an awning.
 
 ## Assets and pixel format
 

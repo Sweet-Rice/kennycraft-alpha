@@ -6,7 +6,7 @@ Laptop-side agents that act in the game world. Three sizes:
 |---|---|---|
 | Chickens, zombies | Rules (wander, flee, chase) | none |
 | Villagers (trader, contractor) within 24 blocks of the player | One JSON decision per call, 2 villagers per call, memory of the last 3 actions; rules on any timeout (3 s), error or bad answer | Nemotron Nano, local (`llama-server` on the laptop GPU) |
-| Builder contractor, when hired | Multi-step tool agent: survey, plan, price, quote, build, inspect, get paid | Nemotron Ultra by default, hosted or on an OpenAI-compatible server |
+| Builder contractor, when hired | Supplied site survey, blueprint/custom plan and quote; the host completes build/inspection/payment automatically after acceptance | Nemotron Ultra by default, hosted or on an OpenAI-compatible server |
 | Banker and trader, through `host/` | Tool agents for confirmed currency exchanges and material trades | The same configured tool model as the builder |
 
 The model only chooses actions. Code limits one mob decision to 8 blocks per
@@ -19,7 +19,8 @@ adapters), not a full chip readback. An unsampled wrong block can therefore
 remain even when inspection passes and payment is released.
 
 Builder quotes are clamped to 0.5x-1.5x of the plan's rule price after the
-player's material discount, at most 200 KCN and the player's balance.
+player's material discount, limited by the player's balance and a configurable
+cap: 200 KCN by default, 400 for the host's `KC_DEMO=1` contracts.
 Successful release charges a 10% treasury fee (`bank.py`).
 
 `Contract.cancel()` in `FUNDED` or `BUILT` counts matching target cells through
@@ -31,12 +32,21 @@ ends normally in `FUNDED`, `BUILT` or `VERIFIED`, `run()` invokes this method.
 The host's interrupt/error cleanup is separate: `Orchestrator.stop()` also
 handles `VERIFIED`, using the same pro-rata split and setting `REFUNDED`.
 
+`run()` includes the site survey with the initial model request.
+`use_blueprint` selects a cottage, tower, stall or longhouse, fitting it to the
+zone; `materials` can override floor, walls, roof and trim. Custom builds still
+use `submit_plan`. The host calls `run(..., autopilot=True)`: after the player
+accepts a quote, `finish()` builds, samples the result and requests payment,
+retrying up to three builds before cancellation. The standalone demo and
+builder CLI leave autopilot off.
+
 ## Files
 | File | What |
 |---|---|
 | `world.py` | Blocks, plan expansion (`expand`), CR6 PLACE/FILL compression (`compress`), `FakeChip` (terrain, blocks, entities that walk like `game/src/entity.c`) |
 | `mobs.py` | `MobManager`: rule brain, Nano villager brain, validation, fallback |
-| `builder.py` | The builder agent: tools, `Contract` state machine, agent loop (`run`) |
+| `builder.py` | Builder tools, `Contract` state machine, `run` agent loop and `finish` automatic completion |
+| `blueprints.py` | Cottage, tower, stall and longhouse catalog, zone fitting and per-part materials |
 | `banker.py` | Banker visit tools: balances, payment history, chain lookup and player-confirmed exchanges |
 | `trader.py` | Trader visit tools: material stock and player-confirmed purchases/sales with bounded prices |
 | `bank.py` | What agents may ask of the bank (`balance`, `fund`, `release`, `refund`), `rule_price`, `clamp_price` and a `FakeBank` |
@@ -72,6 +82,7 @@ Run from the repo root. The model paths need the `openai` package; the tests and
 | `NANO_BASE_URL` | `http://127.0.0.1:8080/v1` |
 | `NANO_MODEL` | `nemotron-nano` (llama-server serves whatever it loaded) |
 | `NANO_API_KEY` | `none`; key for a hosted Nano endpoint |
+| `NEMOTRON_THINKING` | Off unless set to `1`; enables reasoning before tool calls |
 
 With both `NEMOTRON_BASE_URL` and `NVIDIA_API_KEY` set, connection errors,
 timeouts and server 5xx errors on the primary tool-model endpoint fall back to
