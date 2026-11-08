@@ -52,7 +52,7 @@ include $(wildcard tb/*/tb.mk)
 # lint, check-bench and t_top_frame do not wait for it. A new tb.mk rule
 # that uses $(VL_TB) must match one of these patterns.
 VL_TB_USERS := tb-core-% tracediff-core-% tracediff-base-core-% tb-ddr-% tb-display-% \
-               tb-vtrace-% tb-qrcp-unit
+               tb-vtrace-% tb-qrcp-unit tb-qrcp-pipe-eq
 $(filter $(VL_TB_USERS),$(TB_TARGETS) $(addprefix tracediff-base-core-,$(CORE_BASE_ALL))): | $(VLRT_OBJS)
 
 $(VLRT)/key: FORCE

@@ -30,7 +30,8 @@ module kc_soc
     parameter bit    HAS_DIV_STACK = 1'b0,  // custom-2 divergence stack in the core
     parameter bit    HAS_RAY_UNIT  = 1'b0,  // custom-1 ray unit (vt_* ports)
     parameter bit    HAS_QRCP      = 1'b0,  // QRCP in every lane (D22)
-    parameter bit    PIPELINED     = 1'b0   // 5-stage core_pipe instead of core
+    parameter bit    PIPELINED     = 1'b0,  // 5-stage core_pipe instead of core
+    parameter int    FB_RD_LAT     = 1      // fb port A read latency (display FB_RD_LAT)
 ) (
     input  logic        clk,
     input  logic        rst,
@@ -181,7 +182,7 @@ module kc_soc
     logic [7:0]  mmio_addr;
     logic [31:0] mmio_wdata, mmio_rdata;
 
-    decoder u_decoder (
+    decoder #(.FB_RD_LAT(FB_RD_LAT)) u_decoder (
         .clk, .rst,
         .req(bus_req), .we(bus_we), .addr(bus_addr), .be(bus_be), .wdata(bus_wdata),
         .ready(bus_ready), .rdata(bus_rdata),
@@ -243,7 +244,8 @@ module kc_soc
     logic       tx_start, tx_busy, rx_pop, rx_avail;
     logic [7:0] tx_data, rx_data;
 
-    mmio u_mmio (
+    // CYCLES ticks every 20 ns whatever the core clock (50 or 100 MHz)
+    mmio #(.CYCLE_DIV(CLK_HZ / 50_000_000)) u_mmio (
         .clk, .rst,
         .req(mmio_req), .we(mmio_we), .addr(mmio_addr[7:2]), .wdata(mmio_wdata),
         .ready(mmio_ready), .rdata(mmio_rdata),

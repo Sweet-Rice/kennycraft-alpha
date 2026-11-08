@@ -43,6 +43,7 @@ Makefile variables (any target): `build/defs` tracks changes to `KC_GEN_BITMAP`,
 | `KC_TAG_PERSIST=1` | Chunk tags without the boot nonce: stored chunks survive a reset |
 | `KC_QRCP=1` | 8-lane chip builds use the QRCP instruction for `qrcp()` (D22, Stage 2 core); other builds keep `fixed.c` |
 | `KC_FIXED_DT=1` | Fixed per-frame dt (`KC_DT_FIXED`, Q16 0.08 s) and frame-synchronous chunk loads, so replays retire the same instructions on any core speed; use with `KC_TAG_PERSIST=1` |
+| `KC_DEMO=1` | The demo village (`src/terrain.c`, numbers in `src/blocks.h`): flat grass, banker / trader / contractor stalls around a plaza and well, a chicken pen, houses, a 14x14 build plot and a ruined obsidian portal missing one block. You spawn facing it. Talking to any villager makes the plot the CR6 contract zone. Run kc-host with `KC_DEMO=1` too |
 | `ARENA_SIZE=n` | Per-frame arena size for laptop and chip (default 8 KB, `src/arena.h`); `make clean` after changing |
 
 Source defines without a Makefile variable (pass through `CC`/`CHIP_CC`):
@@ -175,12 +176,14 @@ It saves `base`, `m0_models`, `m1_trader`, `m1_contractor`, `m1_chicken`, `m1_zo
 
 - Software DDA loop (`vtrace_ref`): 53 RV32I instructions per step on `kc_chip8.elf`, 49 on `kc_chip.elf`, counted in `llvm-objdump -d`.
 - The default cap is 64 (`-DKC_MAX_STEPS`). At that cap the 160×120 spawn shot (`g0_spawn`) is 297,672 steps.
-- Stage 2 frame time, measured with `make tb-top-t_top_frame TOP_ELF=kc_chip8_vtrace TOP_SWAPS=6` (add `PIPELINED=1` for the pipelined core): the CYCLES between FB_SWAPs at the spawn pose, 160×120, no entities. fps at 50 MHz.
+- Stage 2 frame time, measured with `make tb-top-t_top_frame TOP_ELF=kc_chip8_vtrace TOP_SWAPS=6` (add `PIPELINED=1` for the pipelined core): the core cycles between FB_SWAPs at the spawn pose, no entities. The multi-cycle core (`top_s2`) runs at 50 MHz, the pipelined core at 50 MHz (`top_s2p`) or 100 MHz (`top_s2p100`).
 
-| Multi-cycle core | Pipelined core |
-|---|---|
-| 591,378 cycles, 84.5 fps | 253,550 cycles, 197.2 fps |
+| Frame | Multi-cycle core, 50 MHz | Pipelined core, 50 MHz | Pipelined core, 100 MHz |
+|---|---|---|---|
+| 160×120 | 596,341 cycles, 83.8 fps | 246,643 cycles, 202.7 fps | 405.4 fps |
+| 320×240 | 2,296,081 cycles, 21.8 fps | 941,479 cycles, 53.1 fps | 106.2 fps |
 
+- On the board (`top_s2p100`, 160×120) the 60 Hz display is the limit: 59.4 new frames/s while turning.
 - How the kernel uses the hardware: the hotbar's 9 opaque slots are drawn over every frame, so `write_camera` passes their rectangle in `kc_rparams` and covered block rows run the block loop over two ranges (no per-block test). With asynchronous VTRACE (`VTRACE x0` starts the walk, `VGET 3` and `VGET 1` wait for it), the kernel builds the next block's ray in registers while the walk runs, reads this walk's result, sets and starts the next ray, and only then shades and stores this block. A row's first block is started before the loop and its last block is shaded after it, which keeps the fog thresholds and the face table in registers.
 - Entity overlays run through `ent_composite` / `composite`, with `box_hit` inlined, on top of the world-ray path.
 
@@ -210,6 +213,8 @@ configuration with the default 8 KB arena. Reduce other allocations before
 enabling it.
 
 No malloc anywhere: every structure is a fixed-size static array, sized at compile time.
+
+On the pipelined core, 0x1000_6000–0x1000_7FFF is the dmem window (8 banks of distributed RAM, so a lane-stack spill or reload takes one cycle). `.rodata` and `.data` must end below 0x1000_6000: `fpga/patch_bit.sh` refuses dmem images that change the window, which then needs a Vivado rebuild.
 
 ## Rendering
 

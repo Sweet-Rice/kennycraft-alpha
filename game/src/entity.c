@@ -84,6 +84,25 @@ int32_t entity_move(int32_t id, q16 tx, q16 tz) {
     return 0;
 }
 
+// What an entity stands on and can't walk through: trees, portals and air don't count.
+// One out-of-line copy: inlined at each use it cost ~300 bytes of IMEM.
+__attribute__((noinline)) static int32_t solid(int32_t x, int32_t y, int32_t z) {
+    int32_t t = world_get(x, y, z);
+    return t != B_AIR && t != B_LEAVES && t != B_LOG && t != B_PORTAL;
+}
+
+int32_t entity_teleport(int32_t id, q16 x, q16 z) {
+    if ((uint32_t)id >= (uint32_t)nents) return -1;
+    ents[id].pos[0] = ents[id].tgt[0] = x;
+    ents[id].pos[2] = ents[id].tgt[1] = z;
+    int32_t ax = qfloor(x), az = qfloor(z), top = 31;
+    if (world_loaded(ax, az)) {                       // land on top of the column (the build)
+        while (top > 0 && !solid(ax, top, az)) top--;
+        ents[id].pos[1] = Q16_INT(top + 1);
+    }
+    return 0;
+}
+
 void entity_get(int32_t id, q16 pos[3], int32_t *facing) {
     for (int32_t a = 0; a < 3; a++) pos[a] = ents[id].pos[a];
     *facing = ents[id].facing;
@@ -96,16 +115,20 @@ void entity_tick(q16 dt) {
         q16 step = qmul(walk_speed[ents[i].kind], dt);
         q16 dx = ents[i].tgt[0] - ents[i].pos[0], dz = ents[i].tgt[1] - ents[i].pos[2];
         if (!dx && !dz) continue;
+        q16 ox = ents[i].pos[0], oz = ents[i].pos[2];
         ents[i].pos[0] += iclamp(dx, -step, step);
         ents[i].pos[2] += iclamp(dz, -step, step);
         ents[i].facing = (uint8_t)(iabs(dx) > iabs(dz) ? (dx > 0 ? 1 : 3) : (dz > 0 ? 0 : 2));
-        int32_t x = qfloor(ents[i].pos[0]), z = qfloor(ents[i].pos[2]), top = 31;
+        int32_t x = qfloor(ents[i].pos[0]), z = qfloor(ents[i].pos[2]), y = qfloor(ents[i].pos[1]);
         if (!world_loaded(x, z)) continue;             // column not loaded: keep the height
-        for (; top > 0; top--) {                     // trees don't count: walk under the canopy
-            int32_t t = world_get(x, top, z);
-            if (t != B_AIR && t != B_LEAVES && t != B_LOG) break;
-        }
-        ents[i].pos[1] = Q16_INT(top + 1);
+        // Walk on the floor under you (a roof or a stall's awning stays overhead): step up one
+        // block, fall onto what's below, and stop at anything taller.
+        if (solid(x, y, z)) {
+            if (y < 30 && !solid(x, y + 1, z) && !solid(x, y + 2, z)) y++;
+            else { ents[i].pos[0] = ox; ents[i].pos[2] = oz; ents[i].tgt[0] = ox; ents[i].tgt[1] = oz; continue; }
+        } else
+            while (y > 1 && !solid(x, y - 1, z)) y--;
+        ents[i].pos[1] = Q16_INT(y);
     }
 }
 void entity_clear(void) { nents = 0; }

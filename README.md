@@ -11,9 +11,9 @@ design history; decision numbers such as D22 refer to it.
 | Path | What |
 | --- | --- |
 | `rtl/core/` | Multi-cycle core (`core.sv`) and its leaf modules: lane datapath, ALU, register file, decoder, LSU, MUL, QRCP, divergence stack |
-| `rtl/core_pipe/` | 5-stage pipelined core (`core_pipe.sv`, `lane_pipe.sv`) built from `rtl/core`'s leaf modules |
+| `rtl/core_pipe/` | Pipelined core, IF, F2, ID, EX, MEM, WB (`core_pipe.sv`, `lane_pipe.sv`), with its BTB (`btb.sv`), LSU (`lsu_pipe.sv`), MUL (`mul_pipe.sv`), QRCP (`qrcp_pipe.sv`) and dmem-window port (`win_lsu.sv`); otherwise built from `rtl/core`'s leaf modules |
 | `rtl/soc/` | `kc_soc.sv` (core, imem, dmem, textures), address decoder, MMIO, UART, byte bridge for the byte-wide regions |
-| `rtl/mem/` | `memory_arr.sv`, `world_mem.sv` |
+| `rtl/mem/` | `memory_arr.sv`, `world_mem.sv`, `dmem_win.sv` (the pipelined core's dmem window) |
 | `rtl/display/` | Framebuffers, palette, VGA timing, clock generator |
 | `rtl/ddr/` | DDR3 chunk store: chunk engine, DDR bridge, world remap, `ddr_clk.sv`, `ddr_model.sv` (simulation MIG), MIG project files in `mig/` |
 | `rtl/vtrace/` | VTRACE ray unit |
@@ -31,6 +31,16 @@ design history; decision numbers such as D22 refer to it.
 | `tight_setup_hold_pins.txt` | Vivado table of the 68 `u_bridge` FIFO and calibration-sync pins with tight setup and hold (clocks `clk50_unbuf`, `clk_pll_i`) |
 
 ## Bank companion
+
+| Command | Runs against |
+| --- | --- |
+| `python host/kchost.py` | A byte-level fake chip (no board, no game build) |
+| `KC_CHIP=host python host/kchost.py` | The game's laptop build (`game/build/kc_host link` in WSL); `KC_GAME_DIR` picks the folder |
+| `KC_CHIP=serial KC_PORT=COM5 python host/kchost.py` | The Arty's UART at 1 Mbaud; keys come from the page's key box |
+| `KC_DEMO=1 KC_CHIP=host python host/kchost.py` | The demo village (build the game with `make KC_DEMO=1`): villagers at their stalls, chickens in the pen, builds on the plot, and the player starts with 300 KCN from the treasury |
+
+`KC_LINK_FPS=50 KC_REC=/tmp/kcrec` makes the game build run a 50 fps clock and save every
+frame. Nemotron reasoning is off by default for speed; `NEMOTRON_THINKING=1` turns it on.
 
 With the existing bank configuration in place, run `python host/kchost.py` and
 open http://127.0.0.1:8000. The Wallets card includes a native-canvas player KCN
@@ -77,17 +87,22 @@ vivado -mode batch -source fpga/build.tcl      # KC_TARGET=<name> picks fpga/<na
 | `top_s0` | Stage 0: `LANES=1`, no divergence stack | `kc_chip` |
 | `top_s2` | Stage 2: Stage 1 plus `HAS_RAY_UNIT=1`, `HAS_QRCP=1`, `FB_COUNT=3` | `kc_chip8_vtrace` |
 | `top_s2p` | `top_s2` with `PIPELINED=1` | `kc_chip8_vtrace` |
+| `top_s2p100` | `top_s2p` with a 100 MHz core clock (`CORE_MHZ=100`) and timing-driven directives | `kc_chip8_vtrace` |
 | `ddr_test` | Standalone DDR3 chunk store test (`fpga/ddr_test/`) | none |
 | `display_test` | Standalone display pattern (`fpga/display_test/`) | none |
 
 Outputs go to `FPGA_BUILD_OUT` (default `build/out/<target>`): `top.bit`,
-timing and utilization reports, `routed.dcp`, `top.mmi`, and for the
+timing and utilization reports (`timing.rpt`, `utilization.rpt` and its
+`_hier` version, and the core clock's worst setup paths in `paths.rpt` and
+`paths_summary.rpt`), `routed.dcp`, `top.mmi`, and for the
 `rtl/top.sv` targets `kc.mmi` (imem, dmem and texture BRAMs; the RAMB18
-palette is left out). `fpga/patch_bit.sh <build_dir> <hex_dir> <out_dir> [program]`
+palette is left out). Builds use at most 14 threads. `fpga/patch_bit.sh <build_dir> <hex_dir> <out_dir> [program]`
 patches new `kc_imem.hex`, `kc_dmem.hex` and `textures.hex` into a built
 `top.bit` with updatemem and, with `program`, programs it through
 `fpga/program.tcl` under the hardware lock in `FPGA_STATE` (required). A
-changed `palette.hex` needs a rebuild.
+changed `palette.hex` needs a rebuild, and so does, on the pipelined
+targets, a `kc_dmem.hex` that changes dmem 0x6000 to 0x7FFF (the dmem
+window, below); `patch_bit.sh` refuses such images.
 
 ## Bench
 
@@ -170,11 +185,21 @@ open. Both refuse while another agent holds the board, and post
 `kc-bench`). `kc.mmi` has no palette BRAM, so a `PAL_HEX` change needs a
 Vivado rebuild.
 
+`scripts/kc_live.py` plays the board in one window: it shows the HDMI capture
+card (ffmpeg, `--video /dev/video2`, MJPEG `--capture 1280x720`, scaled to a
+4:3 `--size 960x720`) and sends keys and mouse to the UART (`--port
+/dev/ttyUSB1`) with `scripts/kc.py`'s key bytes. Click to capture the mouse;
+Esc releases it, Esc again quits. It needs pygame-ce, pyserial and ffmpeg,
+and holds the same hardware lock while open (`--no-lock` skips it), but does
+not post on issue #1. It clears HUPCL on the UART so closing the port leaves
+DTR up: the Arty resets the design on a DTR edge, so only the first open after
+a replug resets the board. It runs on Linux only (`fcntl`, `termios`, v4l2).
+
 ## Pipelined core (P8)
 
-`rtl/core_pipe/` is a 5-stage version of the core (IF, ID, EX, MEM, WB) with
-the same ports and parameters as `rtl/core/core.sv`, built from its leaf
-modules. `PIPELINED = 1` (the last parameter of `rtl/top.sv` and
+`rtl/core_pipe/` is a pipelined version of the core (IF, F2, ID, EX, MEM,
+WB) with the same ports and parameters as `rtl/core/core.sv`, built from its
+leaf modules. `PIPELINED = 1` (a parameter of `rtl/top.sv` and
 `rtl/soc/kc_soc.sv`) selects it, and the core sits at `g_core.u_core`
 whichever core is built. It retires the same instructions, masks and
 register writes as the multi-cycle core. Back-to-back instruction costs are
@@ -182,32 +207,25 @@ below; dependencies, prediction misses and peripheral waits add stalls.
 
 | Class | Cycles |
 | --- | --- |
-| ALU, LUI, AUIPC, FENCE, MASKGET, BALLOT, LANEID, VSET, VGET | 1 |
-| Independent MUL family | 1 |
-| Correctly predicted conditional branch or JAL | 1 |
-| Mispredicted branch/JAL, JALR, LMASK, MASKSET, MASKALL, DIF, DELSE, DENDIF (flush 2) | 3 |
-| Bus-only loads and stores without the dmem/framebuffer store fast path | G + 1 |
-| Bus-only stores whose last group targets dmem or framebuffer | G |
-| QRCP | 3 after the previous retirement; 4 after a store with an extra MEM tail; 5 after a flush |
-| Load-use or MUL-use | +1 bubble |
+| ALU, LUI, AUIPC, FENCE, MASKGET, BALLOT, LANEID, VSET, VGET, not-taken branch | 1 |
+| MUL family | 2 |
+| Taken branch or JAL that the BTB predicts, right target | 1 |
+| Other taken branch or JAL, JALR, branch predicted taken but not taken, LMASK, MASKSET, MASKALL, DIF, DELSE, DENDIF (flush 4) | 5 |
+| Load, N bus accesses (groups of coalesced lanes) | N + 3 (+3 per lane for world LW and texture LW; +2 per framebuffer read access on the top) |
+| Store, N bus accesses, every bus lane to dmem or the framebuffer | N + 1 |
+| Store, N bus accesses, otherwise | N + 2 (+3 per lane for world SW) |
+| Load or store lanes in the dmem window (0x6000 to 0x7FFF) | 1 when every lane is in its own stack's bank, else one more than the words the busiest bank serves; in parallel with the bus lanes |
+| QRCP | 8 after the previous retirement (12 after a flush) |
+| Load-use, mul-use | +1 bubble |
 | VTRACE rd (rd != x0) | start until done, plus 1 |
 | VTRACE x0 | 1; the walk runs on |
 
-For memory operations whose active lanes all use the bus path, G counts bus
-cycles: one per coalesced dmem/framebuffer word group, otherwise one per active
-lane, with three extra cycles per world LW/SW or texture LW. Slave wait states
-add to these counts. The dedicated dmem window below bypasses this bus path;
-mixed window/bus operations wait for both paths to finish.
-
-The table's instruction costs are not every individual retirement gap: a
-flush's bubbles and a non-fast bus store's extra MEM cycle delay the following
-retirement. The QRCP row explicitly reports gaps from the previous retirement.
-
-Branches, JALR and the uniform check (ERR.DIVERGE) resolve in EX. The mask
-and divergence stack are written in EX, and every mask writer flushes behind
-it. ERR halts report the faulting instruction's own PC. While a VTRACE x0
-walk is in flight, the next custom-1 instruction waits in EX, and world
-accesses and MMIO stores wait in MEM.
+Branches and the branch uniform check (ERR.DIVERGE) resolve in EX; a JALR's
+target uniformity is checked in MEM from registers. The redirect is
+registered (flush 4). The mask and divergence stack are written in EX, and
+every mask writer flushes behind it. ERR halts report the faulting
+instruction's own PC. While a VTRACE x0 walk is in flight, the next custom-1
+instruction waits in EX, and world accesses and MMIO stores wait in MEM.
 
 - **BTB** (`rtl/core_pipe/btb.sv`): 64 entries of distributed RAM, looked up
   from the fetch PC, with 2-bit counters. A hit predicted taken fetches the
@@ -220,9 +238,41 @@ accesses and MMIO stores wait in MEM.
   and values as the dmem BRAM, which still holds the rest. It is initialized
   from `kc_dmem.hex` at build time; `fpga/patch_bit.sh` refuses images that
   change that range.
-- **MUL** writes its product straight into WB and is forwarded from WB only.
-  **QRCP** (`rtl/core_pipe/qrcp_pipe.sv`) does its two Newton steps in two MEM
-  cycles and produces the result in the third, bit-exact with `rtl/core/qrcp.sv`.
+- **LSU** (`rtl/core_pipe/lsu_pipe.sv`): `rtl/core/lsu.sv` with a registered
+  bus request and registered read data. **MUL** (`rtl/core_pipe/mul_pipe.sv`)
+  is two MEM cycles into WB, forwarded from WB only (mul-use bubble);
+  **QRCP** (`rtl/core_pipe/qrcp_pipe.sv`) is seven register stages,
+  bit-exact with `rtl/core/qrcp.sv`.
+
+### 100 MHz (`top_s2p100`)
+
+`CORE_MHZ` (a parameter of `rtl/top.sv`, default 50) sets the core clock; the
+`top_s2p100` Vivado target builds the pipelined Stage 2 design at 100 MHz
+with timing-driven directives (`kc_timing_opt` in `fpga/build.tcl`). On
+pipelined tops the framebuffer reads take 3 cycles and the chunk engine
+buffers its DDR3 beats. MMIO CYCLES counts 20 ns ticks at either clock, so
+software timing is unchanged.
+
+`top_s2p100`, build `build_20261108_115553_1f9ddd` (main 7315b19's game):
+core clock WNS +0.100 ns at 10 ns, hold +0.030 ns, every clock met;
+27,340 LUT, 14,971 FF, 111.5 BRAM36, 48 DSP. The bitstream and its
+`kc.mmi` are the pre-release
+[top_s2p100-pr71-rc1](https://github.com/Sweet-Rice/kennycraft-alpha/releases/tag/top_s2p100-pr71-rc1).
+
+Frames of the current game in Verilator (`t_top_frame` at the spawn pose,
+core cycles between FB_SWAPs; the two cores' 160×120 frames are
+byte-identical):
+
+| Frame | Multi-cycle core (`top_s2`, 50 MHz) | Pipelined core (`top_s2p100`, 100 MHz) |
+| --- | --- | --- |
+| 160×120 | 596,341 cycles = 83.8 fps | 246,643 cycles = 405.4 fps |
+| 320×240 | 2,296,081 cycles = 21.8 fps | 941,479 cycles = 106.2 fps |
+
+On the board (Arty A7-100T, 160×120 game): it boots (`kc: boot`,
+`kc: ddr3 chunk store ready` on the UART), the error LED stays off, the
+capture card sees 59.4 new frames/s while turning (the 60 Hz display is
+the limit), live play over the UART works, and a 60 s soak shows no blank
+or frozen frames.
 
 ```sh
 make tb-core-pipe-<t>          # any tb/core test on the pipelined core
@@ -242,7 +292,8 @@ same for bench traces (`scripts/tracecollapse.py`). For a replay that matches
 on both cores, build the game with `KC_FIXED_DT=1 KC_TAG_PERSIST=1`.
 
 The Stage 2 bitstream on the pipelined core is `KC_TARGET=top_s2p`
-(`fpga/top_s2p/`), which is `top_s2` with `PIPELINED=1`.
+(`fpga/top_s2p/`), which is `top_s2` with `PIPELINED=1`, at 50 MHz, and
+`KC_TARGET=top_s2p100` (`fpga/top_s2p100/`) at 100 MHz.
 
 ## Credits
 

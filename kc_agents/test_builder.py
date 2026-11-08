@@ -90,6 +90,60 @@ class TestContract(unittest.TestCase):
         self.assertEqual(c2.state, "PAID")
         self.assertEqual(bank2.items, {"brick": 5, "planks": 0})
 
+    def test_blueprints_fit_and_pass_the_plan_checks(self):
+        from .blueprints import CATALOG, ops
+        for zone, expect in (((6, 8, 6), {"cottage", "tower", "stall"}), ((12, 10, 12), set(CATALOG))):
+            fits = set()
+            for name in CATALOG:
+                c, _ = contract()
+                c.zone = zone
+                r = c.use_blueprint(name)
+                if r["ok"]:
+                    fits.add(name)
+                    self.assertGreater(r["commands"], 0)
+                else:
+                    self.assertIn("doesn't fit", r["errors"][0])
+            self.assertEqual(fits, expect, zone)
+        brick, _ = ops("cottage", (6, 8, 6), {"walls": "brick", "roof": None})
+        self.assertTrue(any(o.get("block") == "brick" and o["op"] == "walls" for o in brick))
+        self.assertIn("can't be placed", ops("cottage", (6, 8, 6), {"walls": "bedrock"})[1])
+        self.assertIn("no blueprint", ops("castle", (6, 8, 6))[1])
+
+    def test_autopilot_builds_inspects_and_collects_after_yes(self):
+        c, bank = contract()
+        r = run("a cottage", c, scripted([("use_blueprint", {"name": "cottage"})],
+                                         [("quote", {"price": 60, "message": "ok"})]),
+                log=lambda t: None, autopilot=True)
+        self.assertEqual(c.state, "PAID")
+        self.assertIn("Done", r)
+        self.assertEqual(bank.wallets["escrow"], 0)
+        bad, bank = contract()
+        bad.chip.reject_rate = 1.0                          # the chip refuses everything
+        run("a cottage", bad, scripted([("use_blueprint", {"name": "cottage"})],
+                                       [("quote", {"price": 60, "message": "ok"})]),
+            log=lambda t: None, autopilot=True)
+        self.assertEqual((bad.state, bank.wallets["escrow"], bank.wallets["player"]), ("REFUNDED", 0, 200))
+
+    def test_price_cap_is_per_contract(self):
+        for cap, want in ((200, 200), (400, 400)):
+            c, bank = contract(player=1000)
+            c.cap = cap
+            c.zone = (12, 10, 12)
+            r = c.use_blueprint("longhouse")
+            self.assertTrue(r["ok"], r)
+            self.assertGreater(r["rule_price_kcn"] * 3 // 2, 400)
+            self.assertEqual(c.quote(10 ** 6, "big")["price_kcn"], want)
+
+    def test_site_survey_rides_with_the_request(self):
+        c, _ = contract()
+        seen = []
+        def chat(messages, tools):
+            seen.append(messages[1]["content"])
+            return {"content": "done", "tool_calls": []}
+        run("a cottage", c, chat, log=lambda t: None, next_tool={})
+        self.assertIn("Site survey", seen[0])
+        self.assertIn("zone_size_xyz", seen[0])
+
     def test_floating_build_is_rejected(self):
         c, _ = contract()
         up = [dict(op, at=[op["at"][0], op["at"][1] + 3, op["at"][2]]) for op in HUT]

@@ -395,7 +395,7 @@ static int cmd_play(void) {
         pose(Q16_INT(rx), Q16(30.0), Q16_INT(rz), 0, 0);
         check(world_get(rx, 27, rz) == B_AIR && world_stats_tag_hits() == 0,
               "same-jitter reset: no tag from the previous boot accepted, edit gone");
-        // Visit the world corner: chunk (0, 0) is generated (bedrock over the counter cells)
+        // Visit the world corner: chunk (1, 0) is generated (bedrock over the counter cells)
         // and stored on leaving, so its tag write must put the counter back.
         uint32_t c2 = world_boot_count();
         pose(Q16(8.0), Q16(30.0), Q16(8.0), 0, 0);
@@ -404,7 +404,7 @@ static int cmd_play(void) {
         world_reboot();
         kc_init();
         printf("  boot counter across a corner visit: %u -> %u\n", (unsigned)c2, (unsigned)world_boot_count());
-        check(world_boot_count() == c2 + 1, "boot counter survives chunk (0, 0) being generated and stored in play");
+        check(world_boot_count() == c2 + 1, "boot counter survives chunk (1, 0) being generated and stored in play");
         check(world_boot_nonce() != n2, "nonce changes again after the corner visit");
     }
 
@@ -763,6 +763,19 @@ static int cmd_cr6(void) {
     key(KEY_E, 1); key(KEY_E, 0);
     o = cr6_step();
     check(o.ev == 3 && o.ev_arg == 0, "E next to the contractor: EVENT INTERACT entity 0");
+
+    {   // MOVE with bit 7 of the id set: the contractor is there at once, no walking
+        q16 at[3];
+        int32_t facing;
+        p[0] = 0x80; le16(p + 1, (uint32_t)(px + 5) * 16 + 8); le16(p + 3, (uint32_t)(pz + 1) * 16 + 8);
+        cr6_push(200, 0x21, p, 5, 0);
+        int ok = cr6_step().status == OK;
+        entity_get(0, at, &facing);
+        check(ok && qfloor(at[0]) == px + 5 && qfloor(at[2]) == pz + 1, "MOVE with the teleport bit: there at once");
+        p[0] = 0x80; le16(p + 1, (uint32_t)(px + 2) * 16 + 8); le16(p + 3, (uint32_t)pz * 16 + 8);
+        cr6_push(201, 0x21, p, 5, 0);
+        cr6_step();
+    }
 
     le16(p, (uint32_t)px + 3); le16(p + 2, (uint32_t)pz); p[4] = (uint8_t)ty; p[5] = B_PLANKS;
     cr6_push(6, 0x10, p, 6, 0);

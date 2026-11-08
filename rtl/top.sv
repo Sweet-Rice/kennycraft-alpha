@@ -1,7 +1,7 @@
 // KennyCraft top level on the Digilent Arty A7-100T (Tai page, CPU Core,
 // Module hierarchy).
 //
-//   clk (E3, 100 MHz) -> BUFG -> clk_gen  50 MHz core, 25 MHz pixel
+//   clk (E3, 100 MHz) -> BUFG -> clk_gen  CORE_MHZ (50 or 100) core, 25 MHz pixel
 //                             -> ddr_clk  166.67 / 200 MHz for the MIG
 //   kc_soc      core, imem, dmem, decoder, MMIO, UART, textures
 //               (EXT_WORLD = 1: its world port goes through world_remap)
@@ -23,7 +23,8 @@
 // build), plus HAS_RAY_UNIT = 1 Stage 2; LANES = 1 without either is Stage 0
 // (KC_TARGET=top_s0). HAS_QRCP = 1 adds the per-lane QRCP unit (D22, Stage 2
 // top first). FB_COUNT = 3 gives the display three framebuffers (triple
-// buffering, D24; the Stage 2 builds) instead of two.
+// buffering, D24; the Stage 2 builds) instead of two. CORE_MHZ sets the core
+// clock (default 50; KC_TARGET=top_s2p100 builds the pipelined core at 100).
 //
 // led is the error LED: the core halted on an illegal instruction, a
 // misaligned access or a fetch outside instruction memory. The MIG owns the
@@ -39,7 +40,8 @@ module top #(
     parameter bit    HAS_RAY_UNIT  = 1'b0,
     parameter bit    HAS_QRCP      = 1'b0,
     parameter int    FB_COUNT      = 2,
-    parameter bit    PIPELINED     = 1'b0
+    parameter bit    PIPELINED     = 1'b0,
+    parameter int    CORE_MHZ      = 50     // core clock: 50 or 100 (VCO 1000 MHz / divider)
 ) (
     input  logic        clk,            // E3,  100 MHz
     input  logic        ck_rst,         // C2,  active low
@@ -74,6 +76,11 @@ module top #(
 
     localparam int VT_LANES = 8;   // world_mem / world_remap serve 8 VTRACE lanes
 
+    // The pipelined core's builds read the framebuffer with a registered bank
+    // mux (3-cycle port A latency, the decoder waits for it), so its BRAM
+    // read fits the 10 ns core clock; the multi-cycle builds keep 1 cycle.
+    localparam int FB_RD_LAT = PIPELINED ? 3 : 1;
+
     // ------------------------------------------------------------------
     // Clocks and resets
     // ------------------------------------------------------------------
@@ -82,7 +89,7 @@ module top #(
 
     BUFG u_bufg_in (.I(clk), .O(clk100));
 
-    clk_gen u_clk_gen (
+    clk_gen #(.CORE_DIV(1000 / CORE_MHZ)) u_clk_gen (
         .clk(clk100), .rst_n(ck_rst),
         .clk_core, .clk_pix, .locked(core_locked), .rst_core, .rst_pix
     );
@@ -122,7 +129,7 @@ module top #(
 
     kc_soc #(
         .LANES    (LANES),
-        .CLK_HZ   (50_000_000),
+        .CLK_HZ   (CORE_MHZ * 1_000_000),
         .BAUD     (1_000_000),
         .IMEM_HEX (IMEM_HEX),
         .DMEM_HEX (DMEM_HEX),
@@ -131,7 +138,8 @@ module top #(
         .HAS_DIV_STACK(HAS_DIV_STACK),
         .HAS_RAY_UNIT (HAS_RAY_UNIT),
         .HAS_QRCP     (HAS_QRCP),
-        .PIPELINED    (PIPELINED)
+        .PIPELINED    (PIPELINED),
+        .FB_RD_LAT    (FB_RD_LAT)
     ) u_soc (
         .clk(clk_core), .rst(rst_core),
         .uart_tx(uart_rxd_out), .uart_rx(uart_txd_in),
@@ -150,7 +158,7 @@ module top #(
     // ------------------------------------------------------------------
     // Display
     // ------------------------------------------------------------------
-    display #(.PAL_HEX(PAL_HEX), .FB_COUNT(FB_COUNT)) u_display (
+    display #(.PAL_HEX(PAL_HEX), .FB_COUNT(FB_COUNT), .FB_RD_LAT(FB_RD_LAT)) u_display (
         .clk_core, .rst_core, .clk_pix, .rst_pix,
         .fb_we, .fb_re, .fb_be, .fb_addr, .fb_wdata, .fb_rdata,
         .pal_we, .pal_addr, .pal_wdata,
@@ -238,7 +246,9 @@ module top #(
     logic         wr_valid, wr_ready, rd_valid, rd_ready;
     logic [127:0] wr_data, rd_data;
 
-    chunk_engine u_eng (
+    // RD_BUF: the pipelined builds take LOAD beats through a beat buffer so
+    // the rdata FIFO's pop does not wait on the core's world request decode.
+    chunk_engine #(.RD_BUF(PIPELINED)) u_eng (
         .clk(clk_core), .rst(rst_core),
         .reg_en(ddr_reg_en), .reg_we(ddr_reg_we), .reg_off(ddr_reg_off),
         .reg_wdata(ddr_reg_wdata), .reg_rdata(ddr_reg_rdata), .reg_stall(ddr_reg_stall),

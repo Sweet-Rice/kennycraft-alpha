@@ -18,12 +18,20 @@ DDR_TOP  := rtl/ddr/ddr_clk.sv fpga/ddr_test/ddr_test_top.sv fpga/ddr_test/ddr_t
 DDR_TBS  := t_chunk_roundtrip t_slot_valid t_ring
 DDR_LINT := chunk_engine ddr_bridge world_remap ddr_model ddr_clk ddr_test_top
 
-TB_TARGETS += $(addprefix tb-ddr-,$(DDR_TBS)) tb-ddr-t_ddr_test lint-ddr
+TB_TARGETS += $(addprefix tb-ddr-,$(DDR_TBS)) $(addsuffix -rdbuf,$(addprefix tb-ddr-,$(DDR_TBS))) \
+              tb-ddr-t_ddr_test lint-ddr
 
 $(addprefix tb-ddr-,$(DDR_TBS)): tb-ddr-%:
 	@mkdir -p $(OBJ)
 	$(VERILATOR) $(VL_TB) -Itb/ddr --top-module $* -Mdir $(OBJ)/ddr_$* $(DDR_RTL) $(DDR_SIM) tb/ddr/$*.sv
 	$(OBJ)/ddr_$*/V$*
+
+# The same tests with the engine's LOAD beat buffer (chunk_engine RD_BUF = 1,
+# the pipelined top's setting).
+$(addsuffix -rdbuf,$(addprefix tb-ddr-,$(DDR_TBS))): tb-ddr-%-rdbuf:
+	@mkdir -p $(OBJ)
+	$(VERILATOR) $(VL_TB) -Itb/ddr +define+KC_RD_BUF --top-module $* -Mdir $(OBJ)/ddr_$*_rdbuf $(DDR_RTL) $(DDR_SIM) tb/ddr/$*.sv
+	$(OBJ)/ddr_$*_rdbuf/V$*
 
 tb-ddr-t_ddr_test:
 	@mkdir -p $(OBJ)

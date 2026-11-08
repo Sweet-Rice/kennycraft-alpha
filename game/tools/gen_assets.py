@@ -38,8 +38,14 @@ BASE = [
 ]
 SKY_TOP, SKY_HORIZON = (72, 122, 204), (172, 206, 240)
 FOG = SKY_HORIZON
-SHADE = [1.00, 0.82, 0.68, 0.52]   # top, x sides, z sides, bottom
-FOG_MIX = [0.0, 0.35, 0.65, 0.90]
+# Face shades per channel (top, x sides, z sides, bottom). Darker faces lose red and green
+# faster than blue, so shadows read as cool sky light instead of flat grey; the top stays
+# true color. Both worlds share these: the Nether palette swap only rewrites sky and fogged
+# entries.
+SHADE = [(1.00, 1.00, 1.00), (0.81, 0.82, 0.86), (0.66, 0.68, 0.75), (0.49, 0.52, 0.61)]
+# Fog per level: near terrain stays crisp, and the last level is the fog color itself, so
+# the far edge of the world dissolves into the horizon instead of ending in a wall.
+FOG_MIX = [0.0, 0.15, 0.45, 1.0]
 
 def lerp(a, b, t): return tuple(a[i] + (b[i] - a[i]) * t for i in range(3))
 
@@ -53,7 +59,7 @@ def make_palette(sky_top, sky_horizon, fog_color):
         if ci == 15:
             c = lerp(sky_top, sky_horizon, (byte & 15) / 15)
         else:
-            c = tuple(v * SHADE[shade] for v in BASE[ci])
+            c = tuple(v * SHADE[shade][i] for i, v in enumerate(BASE[ci]))
             c = lerp(c, fog_color, FOG_MIX[fog])
         out.append(to444(c))
     return out

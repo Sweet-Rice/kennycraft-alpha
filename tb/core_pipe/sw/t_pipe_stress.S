@@ -19,7 +19,7 @@
    QRCP into an ALU op, a branch, store data, another QRCP and a JALR
    target, back-to-back QRCPs (independent and two apart), and QRCP plus a
    dependent op under a partial mask;
-   mul-use (MUL leaves MEM in one cycle and is forwarded only from WB): a
+   mul-use (MUL spends two cycles in MEM and is forwarded only from WB): a
    MUL right before a dependent ALU op (rs1 and rs2), branch (taken and not),
    JALR target, store data, store address, load address, QRCP and VSET;
    MUL -> MULH -> MULHSU -> MULHU chains; MULH/MULHSU/MULHU into ALU ops;
@@ -37,7 +37,42 @@
    one, two and eight groups), a store right after, a mask writer and a
    taken branch right after, a framebuffer store then an FB_SWAP store (the
    testbench checks the framebuffer at swap_req), and dmem window lanes
-   mixed with bus lanes (the window done first, and the bus done first). */
+   mixed with bus lanes (the window done first, and the bus done first).
+   MEM completion computed a cycle ahead (window bank conflicts, store
+   groups): a window store where a lane shares the word of its bank's lowest
+   lane past a conflicting lane between them, then a load of the same words;
+   a store of window lanes in three cycles mixed with dmem lanes in two
+   groups, then a load; an MMIO lane followed by dmem lanes (the last group
+   in dmem, done when the bus is idle), then a load.
+   Registered ray-unit strobes: VGET of the cell right after the VSET that
+   writes it (full mask and under 0x5A); eight VSETs back to back, VTRACE x0
+   right after the last, VGET right after VTRACE x0, VSET right after VGET,
+   VTRACE rd right after that VSET and VGET right after it.
+   Registered redirect (core_pipe flushes the cycle after a redirecting
+   instruction leaves EX, so the next one reaches EX and is killed there):
+   a store, an illegal word, a mask writer, VGET while a walk is in flight
+   (which would hold EX) and a predicted target's store after the last
+   pass of a loop, each in that EX slot, must have no effect; after a mask
+   writer or DIF (redirect to pc + 4) the killed DIF/DENDIF runs once.
+   The LSU's registered bus request and read data (rtl/core_pipe/
+   lsu_pipe.sv), slots 68 to 72: a store, then a load of the same word whose
+   value is used at distance 1 and 2 (dmem LW, framebuffer LH), a world
+   store then a load of the same byte used right after (the byte is
+   restored, so later walks see the same world), and MMIO stores and loads
+   in lane order (SLOT_VALID, a plain register in the testbench's
+   chunk-engine model), a loaded MMIO value used right after as store
+   data.
+   Fetch stage F2 (the registered imem read), slot 73: ID, F2 and IF wait together
+   with three different instructions through one load-use wait, two back
+   to back, and QRCP's eight MEM cycles followed by a load-use wait.
+   Two-cycle MUL: an ALU op right behind a MUL whose operand comes from the
+   instruction before the MUL (WB forward in MUL's first MEM cycle, then
+   held through its second), a MUL right behind that op (MEM forward), and
+   a dependent of it (slots 74, 73).
+   dmem window modes (each lane in its own stack's bank: one cycle; else
+   the bank accesses a cycle after the pick): a slow store whose last group
+   writes the word a fast load reads right after, and a fast store of the
+   word a slow load reads right after, each load used at once (74, 75). */
 #include "kc_test.h"
 #include "kc_lanes.h"
 #define VSET(f, rs)    .insn r 0x2B, 0, f, x0, rs, x0
@@ -45,8 +80,12 @@
 #define VGET(rd, f)    .insn r 0x2B, 2, f, rd, x0, x0
 #define SLOW           nop; nop; nop
 #define RES(k)         (32 * (k) - 2048)   /* 0x10001000 + 4 * lane + 32 * k */
+/* slots 64 and up, from gp: 0x10003000 + 4 * lane + 32 * (k - 64) */
+#define RES2(k)        (32 * ((k) - 64) - 2048)
 /* s11 |= res[k] ^ reg (t6 scratch) */
 #define CHECK(k, reg)  lw t6, RES(k)(s2); SLOW; xor t6, t6, reg; SLOW; or s11, s11, t6
+#define CHECK2(k, reg) lw t6, RES2(k)(gp); SLOW; xor t6, t6, reg; SLOW; or s11, s11, t6
+#define SLOT_VALID     0x38                 /* MMIO chunk-engine register */
 
     .section .text.start
     .globl _start
@@ -56,6 +95,8 @@ _start:
     slli  s1, s0, 2
     li    s2, 0x10001800
     add   s2, s2, s1            /* per-lane scratch: s2 = 0x10001800 + 4 * lane */
+    li    gp, 0x10003800
+    add   gp, gp, s1            /* slots 64 and up: gp = 0x10003800 + 4 * lane */
     li    s9, 0
     li    s11, 0
 
@@ -451,6 +492,232 @@ fast_jal_link:
     sb    t3, 0(s8)
     lbu   t4, 0(s8)
     sw    t4, RES(58)(s2)
+    /* window bank conflicts, every lane in bank 0: the even lanes on one
+       word, each odd lane on its own. Lanes 0, 2, 4, 6 go in the first
+       cycle (lane 2 shares the word of lane 0, the bank's lowest, though
+       lane 1 between them conflicts), then 1, 3, 5, 7 one per cycle */
+    andi  t0, s0, 1
+    neg   t0, t0
+    and   t1, s1, t0
+    li    a0, 0x10006100
+    add   s8, a0, t1
+    addi  t3, s0, 0xD1
+    sw    t3, 0(s8)
+    lw    t4, 0(s8)
+    addi  t4, t4, 1
+    sw    t4, RES(59)(s2)
+    /* window lanes 0, 2, 4, 6, 7 in bank 1 (three cycles: {0, 4}, {2, 7},
+       {6}) with dmem lanes 1, 5 on one word and 3 on another (two groups:
+       the store's bus part ends first) */
+    la    a0, stress_mix
+    add   a0, a0, s1
+    lw    s8, 0(a0)
+    addi  t3, s0, 0xE1
+    sw    t3, 0(s8)
+    lw    t4, 0(s8)
+    sw    t4, RES(60)(s2)
+    /* lane 0 stores to LEDS, lanes 1 to 7 to their own dmem word (lane
+       serial: an MMIO lane is pending), then every lane loads its word */
+    seqz  t0, s0
+    neg   t0, t0                /* -1 in lane 0 */
+    li    a0, MMIO_BASE + MMIO_LEDS
+    addi  a1, s4, 192
+    xor   t2, a1, a0
+    and   t2, t2, t0
+    xor   s8, a1, t2
+    addi  t3, s0, 0xF1
+    sw    t3, 0(s8)
+    lw    t4, 192(s4)
+    sw    t4, RES(61)(s2)
+    /* VGET of the cell right after the VSET that writes it, full mask and
+       under 0x5A (the inactive lanes keep their cell and their rd) */
+    slli  t0, s0, 11
+    slli  t1, s0, 6
+    add   t0, t0, t1
+    add   t0, t0, s0
+    addi  t0, t0, 1             /* cell: z = y = lane, x = lane + 1 */
+    addi  t2, t0, 0x111
+    li    a1, 0
+    li    t3, 0x5A
+    VSET(0, t0)
+    VGET(a0, 0)
+    MASKSET(t3)
+    VSET(0, t2)
+    VGET(a1, 0)
+    MASKALL
+    VGET(a2, 0)
+    add   a0, a0, a1
+    add   a0, a0, a2
+    sw    a0, RES(62)(s2)
+    /* eight VSETs back to back, VTRACE x0 right after the last, VGET 3
+       right after it (waits for the walk), VSET right after the VGET,
+       VTRACE rd right after that VSET, VGET 1 right after */
+    slli  t0, s0, 3
+    addi  t0, t0, 5
+    li    t1, 0x8000
+    add   t1, t1, s1
+    li    t2, 0x9000
+    li    t3, 0xA000
+    li    t4, 0x10000
+    andi  t5, s0, 3
+    li    a0, 20
+    VSET(0, t0)
+    VSET(1, t1)
+    VSET(2, t2)
+    VSET(3, t3)
+    VSET(4, t4)
+    VSET(5, t4)
+    VSET(6, t4)
+    VSET(7, t5)
+    VTRACE(x0, a0)
+    VGET(a1, 3)
+    VSET(0, t0)
+    VTRACE(a2, a0)
+    VGET(a3, 1)
+    add   a1, a1, a2
+    xor   a1, a1, a3
+    /* registered redirect: the instruction right after a redirect is
+       killed in EX, the one after it in ID */
+    addi  t0, s0, 0xD1
+    sw    t0, RES2(64)(gp)
+    beq   x0, x0, 30f           /* BTB miss: redirect */
+    sw    s0, RES2(64)(gp)       /* killed in EX: res[59] keeps 0xD1 + lane */
+    li    s11, 0xbad            /* killed in ID */
+30: j     31f
+    .word 0                     /* illegal, killed in EX */
+    .word 0                     /* illegal, killed in ID */
+31: li    t2, 0
+    li    t3, 0x0F
+    MASKSET(t3)
+    la    t0, 32f
+    jalr  ra, 0(t0)
+    MASKALL                     /* killed in EX: the mask stays 0x0F */
+    li    s11, 0xbad            /* killed in ID */
+32: MASKGET(t2)                 /* 0x0F in every lane (MASKGET is uniform) */
+    MASKALL
+    sw    t2, RES2(65)(gp)
+    /* a mask writer, then DIF: DIF is killed in EX, then runs once (one
+       push), so DENDIF restores the full mask */
+    andi  t5, s0, 1
+    MASKALL
+    DIF(t5, 33f)
+33: DENDIF
+    MASKGET(t4)
+    sw    t4, RES2(66)(gp)
+    /* loop head store as the predicted target of a back edge that falls
+       through: killed in EX on the last pass, res[62] keeps 1 */
+    li    t0, 3
+34: sw    t0, RES2(67)(gp)
+    addi  t0, t0, -1
+    bnez  t0, 34b
+    /* VGET while a walk is in flight, killed in EX after a jump */
+    li    t2, 12
+    VTRACE(x0, t2)
+    j     35f
+    VGET(a0, 3)                 /* killed in EX: must not hold the pipe */
+    li    s11, 0xbad            /* killed in ID */
+35: VGET(a1, 3)
+    sw    a1, RES(63)(s2)
+    /* the LSU's registered bus request and read data: store, then load of
+       the same word, used at distance 1 and 2 (dmem, framebuffer) */
+    addi  t0, s0, 0xE1
+    sw    t0, 224(s4)
+    lw    t1, 224(s4)
+    addi  t2, t1, 1             /* distance 1 */
+    lw    t3, 224(s4)
+    addi  t4, s0, 3
+    add   t5, t3, t4            /* distance 2 */
+    add   t2, t2, t5
+    sw    t2, RES2(68)(gp)
+    li    t0, -0x1235
+    add   t0, t0, s0
+    sh    t0, 96(s5)
+    lh    t1, 96(s5)
+    sub   t2, x0, t1            /* distance 1 */
+    lh    t3, 96(s5)
+    addi  t4, s0, 5
+    xor   t5, t3, t4            /* distance 2 */
+    add   t2, t2, t5
+    sw    t2, RES2(69)(gp)
+    /* world store, then a load of the same byte used right after; the
+       byte's old value is restored */
+    li    a0, 0x20000100
+    add   a0, a0, s0
+    lbu   a1, 0(a0)
+    addi  t0, s0, 3
+    sb    t0, 0(a0)
+    lbu   t1, 0(a0)
+    addi  t2, t1, 0x10
+    sb    a1, 0(a0)
+    sw    t2, RES2(70)(gp)
+    /* MMIO in lane order: every lane stores, every lane loads the highest
+       lane's value, uses it as store data right away, loads again */
+    li    a0, MMIO_BASE
+    addi  t0, s0, 0xF1
+    sw    t0, SLOT_VALID(a0)
+    lw    t2, SLOT_VALID(a0)
+    add   t1, t2, s0
+    sw    t1, SLOT_VALID(a0)
+    lw    t3, SLOT_VALID(a0)
+    add   t3, t3, s0
+    sw    t2, RES2(71)(gp)
+    sw    t3, RES2(72)(gp)
+    /* F2 and ID wait together: while ID waits, ID, F2 and IF hold three
+       different instructions, released in order; a load-use wait of one
+       cycle, two back to back, then QRCP's eight MEM cycles (the next
+       instructions wait in EX, ID, F2 and IF) and a load-use wait right
+       after them */
+    addi  t0, s0, 0x31
+    sw    t0, RES2(73)(gp)
+    lw    t1, RES2(73)(gp)
+    addi  t2, t1, 7             /* load-use: waits in ID */
+    xori  t3, t2, 0x55          /* waits in F2 */
+    add   t4, t3, t1            /* waits in IF */
+    lw    t5, RES2(73)(gp)
+    sub   t5, t5, t4            /* load-use */
+    lw    a0, RES2(73)(gp)
+    add   a0, a0, t5            /* load-use right after one */
+    QRCP(a1, t2)
+    slli  a2, a0, 3
+    xor   a2, a2, t3
+    lw    a3, RES2(73)(gp)
+    add   a3, a3, a2            /* load-use after the long wait */
+    add   a0, a0, a1
+    add   a0, a0, a3
+    add   a0, a0, t4
+    sw    a0, RES2(73)(gp)
+    /* two-cycle MUL: t0 reaches the add from WB while the MUL is in MEM */
+    li    a3, 0x00012345
+    li    a4, 0x07654321
+    addi  t0, s0, 0x35
+    mul   t1, a3, a4
+    add   t2, t0, t0
+    mul   t3, t2, t0
+    add   t4, t3, t1
+    sw    t2, RES2(74)(gp)
+    sw    t4, RES2(75)(gp)
+    /* window modes. a0: own stack word (bank 7 - lane, fast); a1: a0, but
+       lane 0's is lane 1's word + 4 (bank 6 with lane 1, another word: slow,
+       lane 1 in the second group) */
+    li    t0, 0x10007F00
+    slli  t1, s0, 10
+    sub   a0, t0, t1
+    seqz  t0, s0
+    neg   t0, t0
+    andi  t0, t0, 0x3FC
+    sub   a1, a0, t0
+    addi  t2, s0, 0x5A0
+    sw    t2, 0(a0)             /* fast */
+    addi  t3, s0, 0x5C1
+    sw    t3, 0(a1)             /* slow */
+    lw    t4, 0(a0)             /* fast, right after */
+    add   t4, t4, s0
+    addi  t5, s0, 0x6D0
+    sw    t5, 4(a0)             /* fast: lane 1 writes lane 0's a1 word */
+    lw    a2, 0(a1)             /* slow, right after */
+    add   a2, a2, s0
+    sw    t4, RES2(76)(gp)
+    sw    a2, RES2(77)(gp)
 
     /* ---------------- slow pass ---------------- */
     li    s9, 0
@@ -875,6 +1142,282 @@ fast_jal_link:
     lbu   t4, 0(s8)
     SLOW
     CHECK(58, t4)
+    andi  t0, s0, 1
+    SLOW
+    neg   t0, t0
+    SLOW
+    and   t1, s1, t0
+    li    a0, 0x10006100
+    SLOW
+    add   s8, a0, t1
+    addi  t3, s0, 0xD1
+    SLOW
+    sw    t3, 0(s8)
+    SLOW
+    lw    t4, 0(s8)
+    SLOW
+    addi  t4, t4, 1
+    SLOW
+    CHECK(59, t4)
+    la    a0, stress_mix
+    SLOW
+    add   a0, a0, s1
+    SLOW
+    lw    s8, 0(a0)
+    addi  t3, s0, 0xE1
+    SLOW
+    sw    t3, 0(s8)
+    SLOW
+    lw    t4, 0(s8)
+    SLOW
+    CHECK(60, t4)
+    seqz  t0, s0
+    SLOW
+    neg   t0, t0
+    li    a0, MMIO_BASE + MMIO_LEDS
+    addi  a1, s4, 192
+    SLOW
+    xor   t2, a1, a0
+    SLOW
+    and   t2, t2, t0
+    SLOW
+    xor   s8, a1, t2
+    addi  t3, s0, 0xF1
+    SLOW
+    sw    t3, 0(s8)
+    SLOW
+    lw    t4, 192(s4)
+    SLOW
+    CHECK(61, t4)
+    slli  t0, s0, 11
+    slli  t1, s0, 6
+    SLOW
+    add   t0, t0, t1
+    SLOW
+    add   t0, t0, s0
+    SLOW
+    addi  t0, t0, 1
+    SLOW
+    addi  t2, t0, 0x111
+    li    a1, 0
+    li    t3, 0x5A
+    SLOW
+    VSET(0, t0)
+    SLOW
+    VGET(a0, 0)
+    SLOW
+    MASKSET(t3)
+    VSET(0, t2)
+    SLOW
+    VGET(a1, 0)
+    SLOW
+    MASKALL
+    VGET(a2, 0)
+    SLOW
+    add   a0, a0, a1
+    SLOW
+    add   a0, a0, a2
+    SLOW
+    CHECK(62, a0)
+    slli  t0, s0, 3
+    li    t1, 0x8000
+    SLOW
+    addi  t0, t0, 5
+    add   t1, t1, s1
+    li    t2, 0x9000
+    li    t3, 0xA000
+    li    t4, 0x10000
+    andi  t5, s0, 3
+    li    a0, 20
+    SLOW
+    VSET(0, t0)
+    SLOW
+    VSET(1, t1)
+    SLOW
+    VSET(2, t2)
+    SLOW
+    VSET(3, t3)
+    SLOW
+    VSET(4, t4)
+    SLOW
+    VSET(5, t4)
+    SLOW
+    VSET(6, t4)
+    SLOW
+    VSET(7, t5)
+    SLOW
+    VTRACE(x0, a0)
+    SLOW
+    VGET(a1, 3)
+    SLOW
+    VSET(0, t0)
+    SLOW
+    VTRACE(a2, a0)
+    SLOW
+    VGET(a3, 1)
+    SLOW
+    add   a1, a1, a2
+    SLOW
+    xor   a1, a1, a3
+    addi  t0, s0, 0xD1
+    SLOW
+    CHECK2(64, t0)
+    li    t2, 0
+    li    t3, 0x0F
+    SLOW
+    MASKSET(t3)
+    MASKGET(t2)
+    MASKALL
+    SLOW
+    CHECK2(65, t2)
+    MASKGET(t4)
+    SLOW
+    CHECK2(66, t4)
+    li    t0, 1
+    SLOW
+    CHECK2(67, t0)
+    li    t2, 12
+    SLOW
+    VTRACE(x0, t2)
+    SLOW
+    VGET(a1, 3)
+    SLOW
+    CHECK(63, a1)
+    addi  t0, s0, 0xE1
+    SLOW
+    sw    t0, 224(s4)
+    SLOW
+    lw    t1, 224(s4)
+    SLOW
+    addi  t2, t1, 1
+    lw    t3, 224(s4)
+    addi  t4, s0, 3
+    SLOW
+    add   t5, t3, t4
+    SLOW
+    add   t2, t2, t5
+    SLOW
+    CHECK2(68, t2)
+    li    t0, -0x1235
+    SLOW
+    add   t0, t0, s0
+    SLOW
+    sh    t0, 96(s5)
+    SLOW
+    lh    t1, 96(s5)
+    SLOW
+    sub   t2, x0, t1
+    lh    t3, 96(s5)
+    addi  t4, s0, 5
+    SLOW
+    xor   t5, t3, t4
+    SLOW
+    add   t2, t2, t5
+    SLOW
+    CHECK2(69, t2)
+    li    a0, 0x20000100
+    SLOW
+    add   a0, a0, s0
+    addi  t0, s0, 3
+    SLOW
+    lbu   a1, 0(a0)
+    SLOW
+    sb    t0, 0(a0)
+    SLOW
+    lbu   t1, 0(a0)
+    SLOW
+    addi  t2, t1, 0x10
+    SLOW
+    sb    a1, 0(a0)
+    SLOW
+    CHECK2(70, t2)
+    li    a0, MMIO_BASE
+    addi  t0, s0, 0xF1
+    SLOW
+    sw    t0, SLOT_VALID(a0)
+    SLOW
+    lw    t2, SLOT_VALID(a0)
+    SLOW
+    add   t1, t2, s0
+    SLOW
+    sw    t1, SLOT_VALID(a0)
+    SLOW
+    lw    t3, SLOT_VALID(a0)
+    SLOW
+    add   t3, t3, s0
+    SLOW
+    CHECK2(71, t2)
+    CHECK2(72, t3)
+    addi  t1, s0, 0x31
+    SLOW
+    addi  t2, t1, 7
+    SLOW
+    xori  t3, t2, 0x55
+    SLOW
+    add   t4, t3, t1
+    SLOW
+    sub   t5, t1, t4
+    SLOW
+    add   a0, t1, t5
+    QRCP(a1, t2)
+    SLOW
+    slli  a2, a0, 3
+    SLOW
+    xor   a2, a2, t3
+    SLOW
+    add   a3, t1, a2
+    SLOW
+    add   a0, a0, a1
+    SLOW
+    add   a0, a0, a3
+    SLOW
+    add   a0, a0, t4
+    SLOW
+    CHECK2(73, a0)
+    li    a3, 0x00012345
+    li    a4, 0x07654321
+    addi  t0, s0, 0x35
+    SLOW
+    mul   t1, a3, a4
+    add   t2, t0, t0
+    SLOW
+    mul   t3, t2, t0
+    SLOW
+    add   t4, t3, t1
+    SLOW
+    CHECK2(74, t2)
+    CHECK2(75, t4)
+    li    t0, 0x10007F00
+    slli  t1, s0, 10
+    SLOW
+    sub   a0, t0, t1
+    seqz  t0, s0
+    SLOW
+    neg   t0, t0
+    SLOW
+    andi  t0, t0, 0x3FC
+    SLOW
+    sub   a1, a0, t0
+    addi  t2, s0, 0x5A0
+    SLOW
+    sw    t2, 0(a0)
+    addi  t3, s0, 0x5C1
+    SLOW
+    sw    t3, 0(a1)
+    SLOW
+    lw    t4, 0(a0)
+    SLOW
+    add   t4, t4, s0
+    addi  t5, s0, 0x6D0
+    SLOW
+    sw    t5, 4(a0)
+    SLOW
+    lw    a2, 0(a1)
+    SLOW
+    add   a2, a2, s0
+    SLOW
+    CHECK2(76, t4)
+    CHECK2(77, a2)
 
     li    t1, 1
     MASKSET(t1)
@@ -885,3 +1428,8 @@ fast_jal_link:
 
     .data
     .word 0
+    /* t_pipe_stress slot 60: per-lane store address */
+    .p2align 2
+stress_mix:
+    .word 0x10006420, 0x10001A80, 0x10006424, 0x10001A84
+    .word 0x10006420, 0x10001A80, 0x10006428, 0x10006424

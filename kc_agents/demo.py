@@ -3,7 +3,7 @@ the contractor, who walks to the site while the builder agent plans, quotes, bui
 
   python -m kc_agents.demo               rules for mobs, a scripted builder (no GPU, no key)
   NANO_BASE_URL=... python -m kc_agents.demo     villagers think with Nemotron Nano
-  NVIDIA_API_KEY=... python -m kc_agents.demo    the builder runs on Nemotron Super
+  NVIDIA_API_KEY=... python -m kc_agents.demo    the builder runs on Nemotron (hosted Ultra by default)
 """
 import os
 

@@ -31,8 +31,17 @@
 // The engine only drives eng_we / eng_re in a cycle where vtrace_busy and
 // core_world_req are both 0, so the top level gives port A of each copy to
 // VTRACE, then the core, then the engine. It bypasses world_remap.
+//
+// RD_BUF = 1 (the pipelined core's builds, 100 MHz) takes LOAD beats into a
+// two-entry beat buffer before writing them out, so the rdata FIFO's read
+// enable (rd_ready) comes from registers instead of grant, i.e. the core's
+// world request decode: a beat is popped into a free entry the cycle the
+// FIFO shows it, and nibbles are written from the oldest full entry. The
+// order and data of the world writes are unchanged; each LOAD writes its
+// first block one cycle later than with RD_BUF = 0.
 module chunk_engine #(
-  parameter int QDEPTH = 8
+  parameter int QDEPTH = 8,
+  parameter bit RD_BUF = 1'b0
 ) (
   input  logic         clk,
   input  logic         rst,
@@ -141,15 +150,46 @@ module chunk_engine #(
   assign cmd_valid = (st == S_ISSUE);
   assign cmd_store = cur_store;
   assign cmd_chunk = {cur_cz, cur_cx};
-
   // block index i = {beat, nib} = {y[4:0], z[3:0], x[3:0]}
   assign eng_addr  = {beat[7:3], cur_cz[1:0], beat[2:0], nib[4], cur_cx[1:0], nib[3:0]};
-  assign eng_wdata = rd_data[{nib, 2'b00} +: 4];
-  assign eng_we    = (st == S_LOAD) & rd_valid & grant;
-  assign rd_ready  = eng_we & (nib == 5'd31);
   assign eng_re    = (st == S_STORE) & grant & ~issued_last;
   assign wr_valid  = (st == S_STORE) & got[5];
   assign wr_data   = sbuf;
+
+  if (!RD_BUF) begin : g_rd_direct
+    assign eng_wdata = rd_data[{nib, 2'b00} +: 4];
+    assign eng_we    = (st == S_LOAD) & rd_valid & grant;
+    assign rd_ready  = eng_we & (nib == 5'd31);
+  end else begin : g_rd_buf
+    logic [127:0] bbuf [2];   // beat buffer entries
+    logic [1:0]   bv;         // entry holds a beat not yet written out
+    logic         bfill;      // entry the next beat goes to
+    logic         bcur;       // entry being written out
+    logic         bpop;
+
+    assign bpop      = (st == S_LOAD) & rd_valid & ~bv[bfill];
+    assign rd_ready  = bpop;
+    assign eng_wdata = bbuf[bcur][{nib, 2'b00} +: 4];
+    assign eng_we    = (st == S_LOAD) & bv[bcur] & grant;
+
+    always_ff @(posedge clk) begin
+      if (rst) begin
+        bv    <= '0;
+        bfill <= 1'b0;
+        bcur  <= 1'b0;
+      end else begin
+        if (bpop) begin
+          bv[bfill] <= 1'b1;
+          bfill     <= ~bfill;
+        end
+        if (eng_we && nib == 5'd31) begin
+          bv[bcur] <= 1'b0;
+          bcur     <= ~bcur;
+        end
+      end
+      if (bpop) bbuf[bfill] <= rd_data;
+    end
+  end
 
   always_ff @(posedge clk) begin
     if (rst) begin

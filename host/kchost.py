@@ -29,7 +29,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 import cr6
 from bank import InsufficientFunds, Ledger, Settler, exchange
 from nessie import Nessie, NessieError, env
-from orchestrator import STOCK, TYPES, Orchestrator
+from orchestrator import DEMO, DEMO_START, STOCK, TYPES, Orchestrator
 
 HERE = Path(__file__).resolve().parent
 for k in ("NVIDIA_API_KEY", "NEMOTRON_API_KEY", "NEMOTRON_BASE_URL", "NEMOTRON_MODEL", "NANO_BASE_URL", "NANO_MODEL", "NANO_API_KEY"):    # kc_agents/llm.py reads os.environ
@@ -44,6 +44,8 @@ class Host:
         if not self.ledger.stock("trader"):
             self.ledger.move_items([("trader", k, n) for k, n in STOCK.items()])
         self.settler = Settler(self.ledger)
+        if DEMO and self.ledger.balance("player") < DEMO_START:   # recording shouldn't wait on Nessie
+            self.ledger.post("grant", "treasury", "player", DEMO_START - self.ledger.balance("player"))
         drift = await self.settler.reconcile()
         if drift:
             self.say(f"chain and ledger differ: {drift}")
@@ -61,7 +63,9 @@ class Host:
             rec = shlex.quote(os.environ["KC_REC"]) if os.environ.get("KC_REC") else ""
             opts = " ".join(f"{k}={shlex.quote(os.environ[k])}" for k in ("KC_LINK_FPS", "KC_REC") if os.environ.get(k))
             self.proc = await asyncio.create_subprocess_exec(
-                "wsl", "-e", "bash", "-lc", f"cd '{wsl}' && mkdir -p out/link {rec} && {opts} exec ./build/kc_host link out/link",
+                # KC_RAW: every frame as raw RGB for the game window (scripts/kc.py --kchost)
+                "wsl", "-e", "bash", "-lc", f"cd '{wsl}' && mkdir -p out/link out/window {rec} && "
+                f"KC_RAW=out/window/frame.rgb {opts} exec ./build/kc_host link out/link",
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
             self.bridge = cr6.Bridge(self.proc.stdin.write, on_link=self.linked)
         else:
@@ -133,6 +137,7 @@ class Host:
             "hud": hud, "world": world, "live": self.proc is not None, "board": self.port is not None,
             "roles": {r: i for i, r in self.orch.roles.items()},
             "items": {"player": self.ledger.stock("player"), "trader": self.ledger.stock("trader")},
+            "player_at": self.orch.player_at,
             "speech": self.orch.speech, "brains": self.orch.mobs and self.orch.mobs.stats,
             "mode": mode, "queued": queued, "usd": self.usd, "prompt": self.orch.prompt,
             "wallets": {w: self.ledger.balance(w) for w in ("player", "escrow", "builder", "miner", "farmer", "treasury")},
@@ -189,6 +194,14 @@ async def key(body: dict):
     """A key from the page, as kc.py would send it: bit 7 set on key-down."""
     if host.proc or host.port:
         host.bridge.write(bytes([int(body["code"]) & 0x7F | (0x80 if body["down"] else 0)]))
+
+
+@app.post("/api/input")
+async def raw_input(body: dict):
+    """Raw input bytes for the game, as scripts/kc.py --kchost sends them: keys (bit 7 = down)
+    and mouse-look bytes. Only the game build and the board take input this way."""
+    if host.proc or host.port:
+        host.bridge.write(bytes.fromhex(body["hex"])[:256])
 
 
 @app.post("/api/interact")

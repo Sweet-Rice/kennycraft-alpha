@@ -12,14 +12,17 @@ import random
 import sys
 
 from . import bank as bankmod
+from . import blueprints
 from .world import ID, BLOCKS, BEDROCK, Y_MIN, Y_MAX, expand, compress
 
 SYSTEM = """You are a builder villager in a voxel world. A player hires you to build something.
+The site survey (zone size, ground, the player's balance) comes with the request.
 Work in steps with the tools, in this order:
-1. look_at_site to see the zone, the ground and the player's balance.
-2. submit_plan with box ops in zone-local coordinates (x, z across, y up; y = 0 is the first
-   layer above the ground). Ops: fill (solid box), hollow (box shell), walls (sides only),
-   clear (air), block (one cell). If it's rejected, fix the errors and submit again.
+1. use_blueprint with the premade design closest to the request; set materials to match
+   what the player asked for (e.g. walls "brick"). Only for something no blueprint covers,
+   submit_plan with box ops in zone-local coordinates (x, z across, y up; y = 0 is the first
+   layer above the ground; ops fill, hollow, walls, clear, block). If a plan is rejected,
+   fix it and try again.
 3. quote a fair price (the tool tells you the guild's rule price) with one short sentence for the player.
 4. If the player accepts: build, then inspect. If inspect finds mistakes, build again, then inspect.
 5. request_payment once inspect passes. If something goes wrong you can't fix, cancel.
@@ -35,6 +38,13 @@ def _tool(name, desc, props=None, required=()):
 _VEC = {"type": "array", "items": {"type": "integer"}, "minItems": 3, "maxItems": 3}
 TOOLS = [
     _tool("look_at_site", "Zone size, ground heights relative to the zone floor, and the player's balance."),
+    _tool("use_blueprint", "Plan a premade build, fitted to the zone: " +
+          "; ".join(f"{k}: {v}" for k, v in blueprints.CATALOG.items()) +
+          " Returns the same check as submit_plan.",
+          {"name": {"type": "string", "enum": sorted(blueprints.CATALOG)},
+           "materials": {"type": "object", "description": "optional block per part: floor, walls, roof, trim",
+                         "properties": {p: {"type": "string", "enum": sorted(BLOCKS[1:10])} for p in blueprints.PARTS}}},
+          ["name"]),
     _tool("submit_plan", "Check a build plan. Returns errors, or the block counts, command count and rule price.",
           {"name": {"type": "string"},
            "ops": {"type": "array", "items": {"type": "object", "properties": {
@@ -54,8 +64,9 @@ TOOLS = [
 
 
 class Contract:
-    def __init__(self, cid, chip, bank, ask_player, origin=(0, 0), zone=(8, 8, 8), seed=0, worker=None):
+    def __init__(self, cid, chip, bank, ask_player, origin=(0, 0), zone=(8, 8, 8), seed=0, worker=None, cap=200):
         self.id, self.chip, self.bank, self.ask = cid, chip, bank, ask_player
+        self.cap = cap                  # most the bank lets a quote be (KCN)
         self.worker = worker            # entity id of the contractor villager, walked to the site on build
         self.zone = zone
         ox, oz = origin
@@ -113,10 +124,16 @@ class Contract:
                 "rule_price_kcn": self.rule, "player_materials_used": self.supplied,
                 "materials_discount_kcn": discount, "player_balance_kcn": self.bank.balance("player")}
 
+    def use_blueprint(self, name="", materials=None):
+        ops, error = blueprints.ops(name, self.zone, materials)
+        if error:
+            return {"ok": False, "errors": [error]}
+        return self.submit_plan(name, ops)
+
     def quote(self, price=0, message=""):
         if self.state != "PLANNED":
             return {"error": "submit a plan that passes first"}
-        p = bankmod.clamp_price(price, self.rule, self.bank.balance("player"))
+        p = bankmod.clamp_price(price, self.rule, self.bank.balance("player"), self.cap)
         if p is None:
             return {"error": "the player can't afford this plan; make it smaller", "rule_price_kcn": self.rule}
         self.offer = p                  # the chip's quote prompt shows it while ask() waits
@@ -133,10 +150,15 @@ class Contract:
         if self.builds >= 3:
             return {"error": "out of build attempts; cancel"}
         self.builds += 1
-        if self.worker is not None:     # the contractor walks to the corner of the site (CR6 MOVE)
+        # The contractor hops onto each piece as it goes in (CR6 MOVE with the teleport bit);
+        # on a chip interface without teleport he walks to the corner of the site instead.
+        hop = getattr(self.chip, "teleport", None) if self.worker is not None else None
+        if self.worker is not None and not hop:
             self.chip.move(self.worker, self.origin[0] - 1, self.origin[2] - 1)
         ok = 0
         for c in self.cmds:
+            if hop:
+                hop(self.worker, c[1] + 0.5, c[3] + 0.5)
             ok += self.chip.place(*c[1:]) if c[0] == "place" else self.chip.fill(*c[1:])
         self.state = "BUILT"
         return {"commands": len(self.cmds), "accepted_by_chip": ok, "rejected": len(self.cmds) - ok}
@@ -185,14 +207,32 @@ class Contract:
             return {"error": f"bad arguments: {e}"}
 
 
-NEXT = {"SURVEY": "submit_plan", "PLANNED": "quote", "FUNDED": "build", "BUILT": "inspect",
+NEXT = {"SURVEY": "use_blueprint", "PLANNED": "quote", "FUNDED": "build", "BUILT": "inspect",
         "VERIFIED": "request_payment"}      # the tool a stalled contract is waiting on
 
 
-def run(request, contract, chat, max_steps=20, log=print, system=SYSTEM, tools=TOOLS, next_tool=NEXT):
+def finish(contract, log=print, tries=3):
+    """After the player paid: build, inspect (rebuilding what's wrong), get paid. These steps
+    are mechanical, so code runs them instead of a model round trip each (about 5 s saved)."""
+    for _ in range(tries):
+        for name in ("build", "inspect"):
+            log(f"  {name}() -> {json.dumps(getattr(contract, name)())[:160]}")
+        if contract.state == "VERIFIED":
+            log(f"  request_payment() -> {json.dumps(contract.request_payment())}")
+            return "Done! Your build is finished and checked."
+    log(f"  gave up after {tries} builds: {contract.cancel('the chip kept rejecting the build')}")
+    return "I couldn't finish the build, so you were refunded for the work not done."
+
+
+def run(request, contract, chat, max_steps=20, log=print, system=SYSTEM, tools=TOOLS, next_tool=NEXT,
+        autopilot=False):
     """The agent loop (the builder's by default; the banker passes its own prompt and tools).
+    autopilot: once the player accepts the quote, code builds, inspects and collects (finish).
     Returns the model's last message to the player."""
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": request}]
+    first = request
+    if hasattr(contract, "look_at_site"):   # one less round trip: the survey rides with the request
+        first += "\n\nSite survey: " + json.dumps(contract.look_at_site())
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": first}]
     nudges = 0
     for _ in range(max_steps):
         reply = chat(messages, tools)
@@ -211,6 +251,8 @@ def run(request, contract, chat, max_steps=20, log=print, system=SYSTEM, tools=T
             result = contract.call(c["name"], c["args"])
             log(f"  {c['name']}({json.dumps(c['args'])[:120]}) -> {json.dumps(result)[:160]}")
             messages.append({"role": "tool", "tool_call_id": c["id"], "content": json.dumps(result)})
+        if autopilot and contract.state == "FUNDED":
+            return finish(contract, log)
     if contract.state in ("FUNDED", "BUILT", "VERIFIED"):          # the model stopped mid-contract
         log(f"  agent stopped in {contract.state}: {contract.cancel('agent stopped')}")
     return reply["content"]

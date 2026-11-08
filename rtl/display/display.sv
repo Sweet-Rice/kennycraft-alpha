@@ -8,7 +8,8 @@
 //                                 region 0x4000_0000, fb_addr = word index
 //                                 0..19199 (pixel 4 fb_addr + k in byte k),
 //                                 fb_be[k] writes byte k on fb_we
-//   fb_rdata                      read word, valid the cycle after fb_re
+//   fb_rdata                      read word, valid FB_RD_LAT cycles after
+//                                 fb_re (1, or 3: rtl/soc/decoder.sv waits)
 //   pal_we/pal_addr/pal_wdata     palette store, region 0x6000_0000
 //   swap_req                      1-cycle pulse: store of 1 to FB_SWAP
 //   swap_pending                  FB_SWAP read value
@@ -72,10 +73,13 @@
 // hsync, vsync and the visible flag ride a matching 3-stage delay into s4.
 //
 // PAL_HEX, when not empty, is the palette's initial contents (palette.sv).
-// FB_COUNT (2 or 3) is the number of framebuffers.
+// FB_COUNT (2 or 3) is the number of framebuffers. FB_RD_LAT (1 or 3) is the
+// core port's read latency (framebuffer.sv RD_LAT); kc_soc's decoder must get
+// the same value.
 module display #(
-    parameter string PAL_HEX  = "",
-    parameter int    FB_COUNT = 2
+    parameter string PAL_HEX   = "",
+    parameter int    FB_COUNT  = 2,
+    parameter int    FB_RD_LAT = 1
 ) (
     input  logic        clk_core,
     input  logic        rst_core,
@@ -286,7 +290,7 @@ module display #(
         end
     end
 
-    framebuffer #(.FB_COUNT(FB_COUNT)) u_fb (
+    framebuffer #(.FB_COUNT(FB_COUNT), .RD_LAT(FB_RD_LAT)) u_fb (
         .clk_a  (clk_core),
         .en_a   (fb_we || fb_re),
         .we_a   (fb_we ? fb_be : 4'b0),

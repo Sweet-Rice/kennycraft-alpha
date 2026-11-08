@@ -5,8 +5,15 @@
 // BALLOT, LMASK + MASKGET under the odd-lane mask, DIF/DELSE, the presets
 // that the lanes outside the 0x5A mask keep across QRCP, MUL into an ALU
 // op, through a store and load address, MUL under the partial mask 0x5A,
-// whose inactive lanes keep their old rd, the predicted loops, and the
-// stores that leave MEM at their accept). At each FB_SWAP request every
+// whose inactive lanes keep their old rd, the predicted loops, the stores
+// that leave MEM at their accept, the window bank-conflict and mixed stores
+// of slots 59 to 61, VGET of the cell right after VSET (slot 62), the
+// instructions killed in EX by the registered redirect, slots 64 to 67, and
+// the LSU's registered bus request and read data, slots 68 to 72: load-use
+// at distance 1 and 2 after a store of the same word, a world store then
+// load, MMIO stores and loads in lane order), the two-cycle MUL behind a
+// WB-forwarded op, slots 74 and 75, and the window's fast / slow mode
+// orders, slots 76 and 77). At each FB_SWAP request every
 // lane's framebuffer word must hold the store before it, not the one after.
 // Built for both cores; tracediff-core-pipe-t_pipe_stress compares their
 // retire traces, the only pipelined trace coverage of VSET/VTRACE/VGET with
@@ -17,6 +24,8 @@ module t_pipe_stress_tb;
     `include "soc_harness.svh"
 
     localparam logic [31:0] SCRATCH = 32'h1000_1000;
+    // Slot 60: the highest lane that stores to each lane's word
+    localparam int MIX_LAST [8] = '{4, 5, 7, 3, 4, 5, 6, 7};
 
     int errors = 0;
 
@@ -27,8 +36,11 @@ module t_pipe_stress_tb;
         end
     endtask
 
+    // Slots 0 to 63 from 0x1000_1000, 64 and up from 0x1000_3000 (the
+    // program's s2 and gp bases), 4 bytes per lane, 32 per slot.
     function automatic logic [31:0] res(input int l, input int k);
-        return dmem_rd(SCRATCH + 32'(4 * l) + 32'(32 * k));
+        return (k < 64) ? dmem_rd(SCRATCH + 32'(4 * l) + 32'(32 * k))
+                        : dmem_rd(32'h1000_3000 + 32'(4 * l) + 32'(32 * (k - 64)));
     endfunction
 
     // The program's framebuffer store, FB_SWAP store, framebuffer store:
@@ -46,7 +58,7 @@ module t_pipe_stress_tb;
 
     initial begin
         logic [7:0]  full, odd, qm, p5a;
-        logic [31:0] a0, a1, a2, prod;
+        logic [31:0] a0, a1, a2, prod, base, hv;
         full = 8'((1 << ALANES) - 1);
         odd  = 8'hAA & full;
         qm   = 8'h5A & full;
@@ -98,6 +110,38 @@ module t_pipe_stress_tb;
             expect32($sformatf("lane %0d fb SW after FB_SWAP", l), res(l, 56), 32'(l + 32'h21));
             expect32($sformatf("lane %0d window/bus SW", l), res(l, 57), 32'(l + 32'hB1));
             expect32($sformatf("lane %0d window/bus SB", l), res(l, 58), 32'(l + 32'hC1));
+            expect32($sformatf("lane %0d window conflict SW, LW", l), res(l, 59),
+                     32'(((l & 1) != 0 ? l : ((ALANES - 1) & ~1)) + 32'hD2));
+            expect32($sformatf("lane %0d window/bus conflict SW", l), res(l, 60),
+                     32'(MIX_LAST[l] + 32'hE1));
+            expect32($sformatf("lane %0d MMIO lane + dmem SW", l), res(l, 61),
+                     (l == 0) ? 32'd0 : 32'(l + 32'hF1));
+            base = 32'(l) * 32'h841 + 32'd1;
+            expect32($sformatf("lane %0d VSET 0 then VGET 0", l), res(l, 62),
+                     p5a[l] ? 3 * base + 32'h222 : 2 * base);
+            expect32($sformatf("lane %0d SW killed in EX", l), res(l, 64), 32'(l + 32'hD1));
+            // MASKGET writes every lane (uniform), so all lanes see 0x0F
+            expect32($sformatf("lane %0d MASKALL killed in EX", l), res(l, 65), 32'h0F);
+            expect32($sformatf("lane %0d DIF killed in EX, run once", l), res(l, 66), 32'(full));
+            expect32($sformatf("lane %0d loop head SW killed in EX", l), res(l, 67), 32'd1);
+            expect32($sformatf("lane %0d dmem SW, LW, use at 1 and 2", l), res(l, 68),
+                     32'(3 * l + 32'h1C6));
+            hv = 32'hFFFF_EDCB + 32'(l);   // LH of the stored halfword
+            expect32($sformatf("lane %0d fb SH, LH, use at 1 and 2", l), res(l, 69),
+                     (32'd0 - hv) + (hv ^ 32'(l + 5)));
+            expect32($sformatf("lane %0d world SB, LBU, use", l), res(l, 70), 32'(l + 32'h13));
+            expect32($sformatf("lane %0d MMIO SW, LW in lane order", l), res(l, 71),
+                     32'(32'hF1 + ALANES - 1));
+            expect32($sformatf("lane %0d MMIO LW, SW, LW", l), res(l, 72),
+                     32'(32'hF1 + 2 * (ALANES - 1) + l));
+            base = 32'(l) + 32'h35;
+            expect32($sformatf("lane %0d op behind a 2-cycle MUL", l), res(l, 74), 2 * base);
+            expect32($sformatf("lane %0d MUL behind it, then use", l), res(l, 75),
+                     2 * base * base + 32'h0001_2345 * 32'h0765_4321);
+            expect32($sformatf("lane %0d window slow SW, fast LW", l), res(l, 76),
+                     (l == 0) ? 32'h5A0 : 32'h5C1 + 32'(2 * l));
+            expect32($sformatf("lane %0d window fast SW, slow LW", l), res(l, 77),
+                     (l == 0) ? ((ALANES > 1) ? 32'h6D1 : 32'h5C1) : 32'h5C1 + 32'(2 * l));
         end
         expect32("FB_SWAP requests (fast, slow)", 32'(swap_req_count), 32'd2);
         expect32("mask at the end", 32'(`KC_CORE.mask), 32'd1);

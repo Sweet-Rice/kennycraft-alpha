@@ -2,7 +2,8 @@
 // test module. Instantiates chunk_engine + ddr_bridge + ddr_model + world_remap
 // (LANES = 8) and a behavioral world_mem (D17: two copies, two ports each)
 // with the top-level port-A priority VTRACE > core > engine. Provides MMIO,
-// world and DDR backdoor tasks.
+// world and DDR backdoor tasks. +define+KC_RD_BUF builds the engine with
+// RD_BUF = 1 (the pipelined top's LOAD beat buffer).
 
 localparam int LANES         = 8;
 localparam int COPIES        = 2;  // copy n serves VTRACE lanes 4n..4n+3
@@ -77,7 +78,13 @@ logic [2:0]   app_cmd;
 logic [127:0] app_wdf_data, app_rd_data;
 logic [15:0]  app_wdf_mask;
 
-chunk_engine u_eng (
+`ifdef KC_RD_BUF
+localparam bit ENG_RD_BUF = 1'b1;
+`else
+localparam bit ENG_RD_BUF = 1'b0;
+`endif
+
+chunk_engine #(.RD_BUF(ENG_RD_BUF)) u_eng (
   .clk, .rst, .reg_en, .reg_we, .reg_off, .reg_wdata, .reg_rdata, .reg_stall,
   .slot_valid, .win_x, .win_z, .vtrace_busy, .core_world_req,
   .eng_we, .eng_re, .eng_addr, .eng_wdata, .eng_rdata(wa_rdata[0]),
