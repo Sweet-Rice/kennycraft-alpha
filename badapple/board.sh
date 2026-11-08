@@ -1,30 +1,21 @@
 #!/bin/sh
-# Load Bad Apple into DDR3 on the board and start the player, on an existing
-# top_s2p100 bitstream (no rebuild).
+# Patch the Bad Apple images into an existing top_s2p100 bitstream (no
+# rebuild) and flash them (badapple/flash.sh).
 #
-#   FPGA_STATE=<fpga-mcp state dir> badapple/board.sh <build_dir> <img_dir> <out_dir>
+#   FPGA_STATE=<fpga-mcp state dir> badapple/board.sh <build_dir> <img_dir> <out_dir> [<video.mkv> <seconds>]
 #
-# img_dir is badapple/build.py's output. Every image is patched first
-# (fpga/patch_bit.sh, about 15 s each), then the passes are programmed back
-# to back and the player last, so DDR3 goes unrefreshed only while the FPGA
-# is being configured. Each pass shows a green border when its chunks read
-# back intact; the player's first screen shows every chunk (green intact,
-# red damaged) and plays only when all are intact.
+# img_dir is badapple/build.py's output. out_dir gets bad_apple_pass_NN.bit
+# and bad_apple_player.bit (fpga/patch_bit.sh, about 15 s each), the same
+# layout as the "Bad Apple" release zip.
 set -eu
-[ $# -eq 3 ] || { echo "usage: FPGA_STATE=... $0 <build_dir> <img_dir> <out_dir>" >&2; exit 2; }
+[ $# -eq 3 ] || [ $# -eq 5 ] || { echo "usage: FPGA_STATE=... $0 <build_dir> <img_dir> <out_dir> [<video.mkv> <seconds>]" >&2; exit 2; }
 build=$1 img=$2 out=$3
+shift 3
 root=$(cd "$(dirname "$0")/.." && pwd)
-bin=${VIVADO_BIN:-/home/tai/AMD/2026.1/Vivado/bin}
-: "${FPGA_STATE:?set FPGA_STATE to the fpga-tools MCP state directory}"
 
 for d in "$img"/pass_* "$img/player"; do
-    sh "$root/fpga/patch_bit.sh" "$build" "$d" "$out/$(basename "$d")"
+    n=$(basename "$d")
+    sh "$root/fpga/patch_bit.sh" "$build" "$d" "$out/patch_$n"
+    cp "$out/patch_$n/patched.bit" "$out/bad_apple_$n.bit"
 done
-
-for d in "$img"/pass_* "$img/player"; do
-    echo "programming $(basename "$d")"
-    flock -w 600 "$FPGA_STATE/hardware.lock" \
-        "$bin/vivado" -mode batch -nojournal -nolog -notrace \
-        -source "$root/fpga/program.tcl" -tclargs "$out/$(basename "$d")/patched.bit"
-    sleep 2   # a pass finishes in well under a second at 100 MHz
-done
+exec sh "$root/badapple/flash.sh" "$out" "$@"

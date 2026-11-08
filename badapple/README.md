@@ -36,11 +36,12 @@ DDR3 chunk store holds it in between.
    then reloads every chunk and compares it. Screen: one bar per pass (this
    pass white), one box per chunk, and a green border (all intact) or a red one.
 4. **Player** (`player.c`). Loads the header and checksums every chunk
-   (green or red box per chunk), and refuses to play if any chunk is damaged.
-   Otherwise it streams the chunks through the 16 world slots as a ring,
-   reloading a slot as soon as its chunk is used up. It decodes each frame
-   into the back framebuffer with `FB_MODE` = 1 (160 × 120, scaled to the
-   VGA output), one frame every two vsyncs (30 fps), and loops forever.
+   (green or red box per chunk). It shows that screen for 2 s, and stays on
+   it if any chunk is damaged. Otherwise it streams the chunks through the 16
+   world slots as a ring, reloading a slot as soon as its chunk is used up.
+   It decodes each frame into the back framebuffer with `FB_MODE` = 1
+   (160 × 120, scaled to the VGA output), one frame every two vsyncs (30 fps),
+   and loops forever.
 
 The voxel game isn't running, so the world window, texture memory and data
 memory are all free for this.
@@ -66,7 +67,8 @@ memory are all free for this.
 | `player.c` | Chunk check and playback |
 | `build.py` | Video → codec → DDR3 image → 16 pass images + player image (`kc_imem.hex`, `kc_dmem.hex`, `textures.hex`) |
 | `sim.py` | Runs every pass and then the player in kcvl, and compares frames with the reference |
-| `board.sh` | Patches every image into the base bitstream, then programs the passes and the player back to back |
+| `board.sh` | Patches every image into the base bitstream (`bad_apple_*.bit`), then runs `flash.sh` |
+| `flash.sh`, `flash.tcl` | Programs the 16 passes back to back in one Vivado session, then the player, optionally recording the capture card |
 
 ## Build
 
@@ -80,22 +82,23 @@ repo.
 
 ## Board
 
+Prebuilt bitstreams: the **Bad Apple** release has `bad_apple.zip`, with the
+17 patched bitstreams (`SHA256SUMS`) and their memory images. Post
+`taking-board` on #1, then:
+
 ```sh
-FPGA_STATE=<fpga-mcp state dir> sh badapple/board.sh \
-    <.fpga-state/builds/build_20261108_115553_1f9ddd> /tmp/ba/img /tmp/ba/bits
+FPGA_STATE=<fpga-mcp state dir> sh badapple/flash.sh <unzipped bad_apple/> [capture.mkv 255]
 ```
 
-Prebuilt: the **Bad Apple** release has `bad_apple.zip`, which holds the 17
-patched bitstreams (`SHA256SUMS`) and their memory images. Program
-`bad_apple_pass_01.bit` through `bad_apple_pass_16.bit` in order, a couple of
-seconds apart, then `bad_apple_player.bit`.
+From source: `board.sh <build_dir> <img_dir> <out_dir> [capture.mkv 255]`
+patches the images into `build_20261108_115553_1f9ddd` and then flashes them
+the same way.
 
-Post `taking-board` on #1 first. This hasn't been run on the board yet. It
-assumes **DDR3 keeps its contents while the FPGA is reprogrammed**: nothing
-refreshes it during configuration, and the MIG recalibrates afterwards. The
-player's chunk-check screen answers that directly. All green means the data
-survived. Red boxes show which chunks didn't, by pass (each pass covers about
-8 chunks).
+This only works because **DDR3 keeps its contents while the FPGA is
+reprogrammed**: nothing refreshes it during configuration, and the MIG
+recalibrates afterwards. The player's chunk-check screen shows whether it
+did. All green means the data survived; a red box marks a damaged chunk
+(each pass covers about 8 chunks).
 
 ## Verilator
 
