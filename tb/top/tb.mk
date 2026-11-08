@@ -35,7 +35,7 @@
 #                    TOP_HEX=dir runs other images (e.g. ones patched in with
 #                    fpga/patch_bit.sh), TOP_OUT=dir puts the frames elsewhere.
 #                    Built without --timing: tb/top/t_top_frame.cpp drives the
-#                    clocks and tb/top/top_sim.sv replaces tb/ddr/unisim_sim.sv.
+#                    clocks, tb/ddr/unisim_sim.sv takes them with KC_EXT_CLOCKS.
 #   lint-top         verilator -Wall over the whole top at Stage 2 (with and
 #                    without QRCP), Stage 1 and Stage 0 (sim models for the
 #                    MMCM, BUFG, MIG and XPM, as in tb/ddr)
@@ -55,7 +55,7 @@ TOP_RTL    := rtl/kc_isa_pkg.sv $(wildcard rtl/core/*.sv) $(wildcard rtl/mem/*.s
               rtl/ddr/ddr_model.sv rtl/ddr/ddr_clk.sv tb/ddr/xpm_sim.sv tb/ddr/unisim_sim.sv \
               rtl/vtrace/vtrace.sv rtl/top.sv
 TOP_IMAGES := kc_imem.hex kc_dmem.hex textures.hex palette.hex
-TOP_SIM    := $(filter-out tb/ddr/unisim_sim.sv,$(TOP_RTL)) tb/top/top_sim.sv
+TOP_SIM    := +define+KC_EXT_CLOCKS $(TOP_RTL)
 
 # Core configuration for a game build: 8 lanes + divergence stack for kc_chip8*,
 # plus the ray unit and QRCP (Stage 2) for kc_chip8_vtrace.
@@ -128,3 +128,5 @@ lint-top:
 	$(VERILATOR) $(VL_LINT) --timing --top-module top -GLANES=1 -GHAS_DIV_STACK=0 $(TOP_RTL)
 	$(VERILATOR) $(VL_LINT) --timing --top-module top -GLANES=1 -GHAS_DIV_STACK=0 -GHAS_RAY_UNIT="1'b1" $(TOP_RTL)
 	$(VERILATOR) $(VL_LINT) --top-module world_mem rtl/mem/world_mem.sv
+	$(VERILATOR) $(VL_LINT) -Wno-BLKSEQ -Wno-UNUSEDSIGNAL --timescale 1ns/1ps --top-module t_top_frame \
+	  $(TOP_SIM) tb/top/t_top_frame.sv

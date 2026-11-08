@@ -1,7 +1,7 @@
 // Full-top Verilator test (P3): rtl/top.sv with the 100 MHz board clock, the
-// clk_gen Verilator model, ddr_model standing in for the MIG (tb/top/
-// top_sim.sv) and the memory images as parameters (tb/top/tb.mk builds
-// them from Kennedy's game into $(OBJ)/top_hex/<build>).
+// clk_gen Verilator model, ddr_model standing in for the MIG (tb/ddr/
+// unisim_sim.sv with KC_EXT_CLOCKS) and the memory images as parameters
+// (tb/top/tb.mk builds them from Kennedy's game into $(OBJ)/top_hex/<build>).
 //
 // It runs the program until FRAMES frame swaps have completed. After each
 // swap it captures the next whole frame from the VGA pins (640x480 RGB444),
@@ -48,7 +48,7 @@ module t_top_frame #(
 ) (
     input logic clk,
     input logic ck_rst,
-    input logic ddr_ui_clk,        // mig_ddr3's ui_clk (tb/top/top_sim.sv)
+    input logic ddr_ui_clk,        // mig_ddr3's ui_clk (tb/ddr/unisim_sim.sv)
     input logic ddr_mmcm_locked    // ddr_clk's MMCME2_BASE LOCKED
 );
     localparam int W = 640, H = 480;
