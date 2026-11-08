@@ -8,30 +8,6 @@
 uint32_t kc_soft_mask = 1;
 #endif
 
-#define TDELTA_INF 0x7FFFFFFF
-
-// a + b for a, b in [0, 0x7FFF_FFFF], saturating at 0x7FFF_FFFF. Branch-free.
-static inline q16 sat_add(q16 a, q16 b) {
-    uint32_t s = (uint32_t)a + (uint32_t)b;           // fits in 32 unsigned bits
-    return sel((int32_t)(s >> 31), TDELTA_INF, (q16)s);
-}
-
-void ray_setup(kc_ray *r, const q16 o[3], const q16 d[3]) {
-    uint32_t signs = 0;
-    for (int i = 0; i < 3; i++) {                     // unrolled by -O2; uniform trip count
-        int32_t neg = (int32_t)((uint32_t)d[i] >> 31);
-        q16 ad = sel(neg, -d[i], d[i]);
-        q16 td = sel(ad == 0, TDELTA_INF, qrcp(ad)); // tDelta = 1/|d|; a zero component never steps
-        q16 fr = qfrac(o[i]);
-        fr = sel(neg, fr, Q16_ONE - fr);              // distance to the first boundary
-        r->f[1 + i] = (uint32_t)qmul(fr, td);         // tMax (fr <= 1.0, so <= TDELTA_INF)
-        r->f[4 + i] = (uint32_t)td;
-        signs |= (uint32_t)neg << i;
-    }
-    r->f[0] = CELL_PACK(qfloor(o[0]), qfloor(o[1]), qfloor(o[2]));
-    r->f[7] = signs;
-}
-
 // All-ones if c (0 or 1), else 0. The empty asm keeps clang from turning the masked
 // selects below back into branches (same reason as sel()).
 static inline uint32_t lane_mask(int32_t c) {
@@ -110,18 +86,6 @@ void vtrace_ref(const kc_ray *r, int32_t max_steps, kc_hit *h) {
     h->t    = sel(ran, (int32_t)s.t, h->t);
 }
 
-#if KC_VTRACE
-// Ray unit, custom-1 (0x2B). funct7 carries the field number.
-#define VSET(field, v) __asm__ volatile(".insn r 0x2B, 0, " #field ", x0, %0, x0" :: "r"(v))
-void kc_trace(const kc_ray *r, int32_t max_steps, kc_hit *h) {
-    VSET(0, r->f[0]); VSET(1, r->f[1]); VSET(2, r->f[2]); VSET(3, r->f[3]);
-    VSET(4, r->f[4]); VSET(5, r->f[5]); VSET(6, r->f[6]); VSET(7, r->f[7]);
-    uint32_t res, cell, t;
-    __asm__ volatile(".insn r 0x2B, 1, 0, %0, %1, x0" : "=r"(res) : "r"(max_steps) : "memory");
-    __asm__ volatile(".insn r 0x2B, 2, 0, %0, x0, x0" : "=r"(cell));
-    __asm__ volatile(".insn r 0x2B, 2, 1, %0, x0, x0" : "=r"(t));
-    h->res = res & 0xFFFFu; h->cell = cell; h->t = (q16)t;
-}
-#else
+#if !KC_VTRACE                                       // the VTRACE build's kc_trace is inline in trace.h
 void kc_trace(const kc_ray *r, int32_t max_steps, kc_hit *h) { vtrace_ref(r, max_steps, h); }
 #endif
