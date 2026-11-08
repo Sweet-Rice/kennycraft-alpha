@@ -70,6 +70,10 @@ def build_shot(args, name, pose, work):
     # Per-file -O like game/Makefile's chip_opt; the later -O overrides the one in CHIP_FLAGS.
     game_files = game_variable(game, 'GAME_FILES')
     game_opt, kernel_opt = game_variable(game, 'GAME_OPT'), game_variable(game, 'KERNEL_OPT')
+    # Stage 0/1 (no ray unit): the shot harness doesn't fit next to entity.c at -O2. Size only,
+    # the frames are the same.
+    if '-DKC_VTRACE=1' not in args.cc:
+        game_files = game_files + ['entity.c']
     # Compile from game/ like game/Makefile, whose flags use -Isrc -Igen.
     objects = []
     for source in [s for s in sources if s not in loop] + loop:  # kc_main.o links last
