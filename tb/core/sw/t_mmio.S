@@ -81,6 +81,19 @@ _start:
     sb    t0, 0(t3)                 /* last pixel */
     lbu   t1, 0(t3)
     sw    t1, 60(s1)
+    li    t0, 0xBEEF
+    sh    t0, 18(s2)
+    lw    t1, 16(s2)
+    sw    t1, 96(s1)                /* 0xBEEF2211 */
+    lb    t1, 19(s2)
+    sw    t1, 100(s1)               /* 0xFFFFFFBE */
+    lh    t1, 18(s2)
+    sw    t1, 104(s1)               /* 0xFFFFBEEF */
+    li    t3, 0x40020011            /* addr[27:17] not decoded: byte 17 */
+    li    t0, 0x5A
+    sb    t0, 0(t3)
+    lw    t1, 16(s2)
+    sw    t1, 108(s1)               /* 0xBEEF5A11 */
 
     li    s3, 0x60000000            /* palette */
     li    t0, 0x7ABC

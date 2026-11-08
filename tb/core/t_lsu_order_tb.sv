@@ -6,7 +6,9 @@
 // framebuffer and no pending lane targets MMIO; otherwise one access per
 // lane, in lane order. It checks the access count, order, address and byte
 // enables, and the LSU cycles (MEM cycles, plus WB for loads, where the last
-// access's data lands): one per access, plus one for loads.
+// access's data lands): one per access, plus one for loads. The TB_SELECT
+// poll's loads are checked but not listed, so the list indices stay fixed.
+// It also counts UART_RX pops.
 module t_lsu_order_tb;
     parameter string IMEM_HEX = "";
     parameter string DMEM_HEX = "";
@@ -35,6 +37,9 @@ module t_lsu_order_tb;
     // Per monitored load/store, in program order: active lanes, accesses,
     // LSU cycles.
     int          mon_n [$], mon_acc [$], mon_cyc [$];
+    int          pops = 0;
+
+    always @(posedge clk) if (!rst && dut.rx_pop) pops++;
 
     // Physical word of a coalescable address: dmem aliases every 32 KB
     // (word addr[14:2]), the framebuffer decodes addr[16:2].
@@ -119,9 +124,11 @@ module t_lsu_order_tb;
                         $display("  FAIL pc %08h took %0d LSU cycles for %0d accesses", `KC_CORE.retire_pc, cyc, k);
                         errors++;
                     end
-                    mon_n.push_back(n);
-                    mon_acc.push_back(acc_lane.size());
-                    mon_cyc.push_back(cyc);
+                    if (!(is_ld && `KC_CORE.l_res[0] == 32'h1000_00F0)) begin
+                        mon_n.push_back(n);
+                        mon_acc.push_back(acc_lane.size());
+                        mon_cyc.push_back(cyc);
+                    end
                     checked++;
                 end
                 acc_lane.delete();
@@ -149,6 +156,8 @@ module t_lsu_order_tb;
             32: return 32'h8382_8180;
             33: return 32'h8786_8584;
             48, 49, 56, 57, 58, 59: return 32'h0;
+            120: return 32'h807F_01FF;
+            121: return 32'h00FE_7E81;
             default: return 32'hA000 + k;
         endcase
     endfunction
@@ -156,12 +165,17 @@ module t_lsu_order_tb;
     initial begin
         logic [7:0]  full, m;
         logic [31:0] w, h;
+        logic [7:0]  b8;
         int          j;
         full = 8'((1 << ALANES) - 1);
         m    = 8'hA5 & full;
 
-        for (int k = 0; k < 96; k++) dmem_wr(A + 4 * k, prefill(k));
+        for (int k = 0; k < 128; k++) dmem_wr(A + 4 * k, prefill(k));
+        dmem_wr(32'h1000_00F0, 32'd0);
         do_reset();
+        for (int i = 0; i < 8; i++) uart_send(8'h61 + 8'(i));
+        repeat (10) @(posedge clk);
+        dmem_wr(32'h1000_00F0, 32'd1);
         run_until_done(20000);
         repeat (50) @(posedge clk);
 
@@ -200,6 +214,33 @@ module t_lsu_order_tb;
             expect32($sformatf("SW under 0xA5 lane %0d", k), dmem_rd(A + 32'h100 + 4 * k),
                      m[k] ? 32'h300 + k : prefill(64 + k));
 
+        // Coalescing cases
+        for (int i = 0; i < ALANES; i++) begin
+            expect32($sformatf("lane %0d uniform LW", i), lane_x[i][19], 32'h100);
+            expect32($sformatf("lane %0d LW shared pairs", i), lane_x[i][20], prefill(104 + ((5 * i) & 3)));
+            b8 = 8'(prefill(120 + i / 4) >> (8 * (i % 4)));
+            expect32($sformatf("lane %0d LB mixed sign", i), lane_x[i][21], {{24{b8[7]}}, b8});
+            expect32($sformatf("lane %0d LBU mixed sign", i), lane_x[i][22], {24'b0, b8});
+            expect32($sformatf("lane %0d LW under mask 0", i), lane_x[i][23], 32'h7777);
+            expect32($sformatf("lane %0d UART_RX", i), lane_x[i][24], 32'h61 + i);
+            expect32($sformatf("lane %0d LW UART_STATUS / dmem", i), lane_x[i][25],
+                     (i == 1 || i == 2) ? 32'(ALANES < 8) : 32'h200 + ALANES - 1);
+            expect32($sformatf("fb byte %0d", i), {24'b0, fb_mem[32'h100 + i]}, 32'h90 + i);
+            expect32($sformatf("lane %0d fb uniform LW", i), lane_x[i][26],
+                     {fb_mem[32'h103], fb_mem[32'h102], fb_mem[32'h101], fb_mem[32'h100]});
+        end
+        for (int k = 0; k < 4; k++) begin
+            j = (k + 4 < ALANES) ? k + 4 : k;
+            expect32($sformatf("SW shared pairs word %0d", k), dmem_rd(A + 32'h1C0 + 4 * k),
+                     (j < ALANES) ? 32'h700 + j : prefill(112 + k));
+        end
+        w = prefill(116);
+        for (int i = 0; i < ALANES; i++) w[8 * (i / 2) +: 8] = 8'(32'h50 + i);
+        expect32("SB same bytes, highest lane wins", dmem_rd(A + 32'h1D0), w);
+        expect32("SW under mask 0", dmem_rd(A + 32'h1F0), prefill(124));
+        expect32("UART_RX pops", pops, ALANES);
+        expect32("RX bytes left", {31'b0, dut.u_uart.rx_avail}, 32'(ALANES < 8));
+
         // The SW misaligned in lane 3 only
         if (ALANES > 3) begin
             expect32("misaligned lane 3: error LED", {31'b0, err_led}, 32'd1);
@@ -236,6 +277,18 @@ module t_lsu_order_tb;
         expect_acc(9,  $countones(m),          "LW under 0xA5");
         expect_acc(10, $countones(m),          "SW under 0xA5");
         expect_acc(11, 1,                      "LW lane 0 only");
+        expect_acc(12, 1,                      "LW uniform");
+        expect_acc(13, (ALANES < 4) ? ALANES : 4, "LW lanes share words in pairs");
+        expect_acc(14, (ALANES < 4) ? ALANES : 4, "SW lanes share words in pairs");
+        expect_acc(15, 1,                      "SB lane pairs on one byte");
+        expect_acc(16, (ALANES + 3) / 4,       "LB mixed sign");
+        expect_acc(17, (ALANES + 3) / 4,       "LBU mixed sign");
+        expect_acc(18, 0,                      "LW under mask 0");
+        expect_acc(19, 0,                      "SW under mask 0");
+        expect_acc(20, ALANES,                 "LW UART_RX (lane-serial)");
+        expect_acc(21, (ALANES <= 3) ? ALANES : 4, "LW UART_STATUS lanes 1, 2, dmem rest");
+        expect_acc(22, (ALANES + 3) / 4,       "SB fb consecutive bytes");
+        expect_acc(23, 1,                      "LW fb uniform");
 
         if (errors != 0) $fatal(1, "FAIL: t_lsu_order, %0d mismatches", errors);
         $display("PASS: t_lsu_order (LANES = %0d, %0d can be active, %0d loads/stores monitored)",

@@ -9,7 +9,8 @@
 #                           RISC-V GCC, loaded as kc_imem/kc_dmem images
 #   tb-core-t_laneid        Stage 1 rung 3, LANEID / MASKALL / scalar lane
 #   tb-core-t_lsu_order, tb-core-t_mmio_lanes
-#                           Stage 1 rung 4, lane-serial LSU and MMIO
+#                           Stage 1 rung 4, LSU (coalescing, lane order) and
+#                           MMIO
 #   tb-core-t_mask, -t_ballot, -t_maskgetset, -t_mask_zero
 #                           Stage 1 rung 5, mask control and mask loops
 #   tb-core-t_branch_uniform, -t_jalr_uniform

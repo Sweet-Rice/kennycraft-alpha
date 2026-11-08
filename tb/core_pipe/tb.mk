@@ -71,6 +71,9 @@ CORE_PIPE_TD_t_mmio := --poll 0x50000000:FB_SWAP $(CORE_PIPE_CYCLES)
 # read under every lane
 CORE_PIPE_TD_t_mmio_lanes    := --poll 0x100000f0:TB_SELECT $(CORE_PIPE_CYCLES)
 CORE_PIPE_TD_t_mmio_lanes-l8 := $(CORE_PIPE_TD_t_mmio_lanes)
+# wait for the testbench's TB_SELECT flag (after it has sent eight UART bytes)
+CORE_PIPE_TD_t_lsu_order    := --poll 0x100000f0:TB_SELECT
+CORE_PIPE_TD_t_lsu_order-l8 := $(CORE_PIPE_TD_t_lsu_order)
 # CYCLES before and after every class
 CORE_PIPE_TD_t_cpi := $(CORE_PIPE_CYCLES)
 
