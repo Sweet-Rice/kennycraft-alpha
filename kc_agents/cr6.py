@@ -30,8 +30,8 @@ RESULTS = ["OK", "CRC", "BAD_OP", "OUT_OF_ZONE", "BAD_BLOCK", "PROTECTED", "RATE
            "NOT_LINKED", "BAD_ENTITY"]
 R = {name: i for i, name in enumerate(RESULTS)}
 EVENTS = {1: "EDIT", 2: "HIT", 3: "INTERACT", 4: "CONFIRM"}
-# ponytail: Q_BLOCKS / R_BLOCKS / Q_ENTITY / R_ENTITY payload layouts aren't spelled out in CR6;
-# these are the laptop's proposal, to match whoever writes the chip handler.
+# Q_BLOCKS / R_BLOCKS / Q_ENTITY / R_ENTITY payloads aren't spelled out in CR6. The chip
+# handlers in game/src/cr6.c (kenny/cr6) use exactly these layouts:
 #   Q_BLOCKS x u16, z u16, y u8, (sx-1)|(sy-1)<<2|(sz-1)<<4   (<= 4x4x4)
 #   R_BLOCKS ids, two per byte (low nibble first), x fastest, then z, then y
 #   R_ENTITY id, x u16, z u16 (1/16), y u8 (1/8), state
