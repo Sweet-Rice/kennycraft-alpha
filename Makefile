@@ -14,6 +14,8 @@
 VERILATOR     ?= verilator
 VL_BUILD_JOBS ?= 0
 VL_TB         ?= --binary --timing --build-jobs $(VL_BUILD_JOBS) --verilate-jobs 1 -Wno-fatal
+# Testbenches with their own C++ main (clocks driven from C++, no --timing)
+VL_EXE        ?= --cc --exe --build --build-jobs $(VL_BUILD_JOBS) --verilate-jobs 1 -Wno-fatal
 VL_LINT       ?= --lint-only -Wall
 OBJ           := obj_dir
 JOBS          ?= $(shell nproc)

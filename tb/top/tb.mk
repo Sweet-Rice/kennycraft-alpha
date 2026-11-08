@@ -26,6 +26,8 @@
 #                    t_top_frame.sv);
 #                    TOP_HEX=dir runs other images (e.g. ones patched in with
 #                    fpga/patch_bit.sh), TOP_OUT=dir puts the frames elsewhere.
+#                    Built without --timing: tb/top/t_top_frame.cpp drives the
+#                    clocks and tb/top/top_sim.sv replaces tb/ddr/unisim_sim.sv.
 #   lint-top         verilator -Wall over the whole top at Stage 1 and Stage 0
 #                    (sim models for the MMCM, BUFG, MIG and XPM, as in tb/ddr)
 
@@ -44,6 +46,7 @@ TOP_RTL    := rtl/kc_isa_pkg.sv $(wildcard rtl/core/*.sv) $(wildcard rtl/mem/*.s
               rtl/ddr/ddr_model.sv rtl/ddr/ddr_clk.sv tb/ddr/xpm_sim.sv tb/ddr/unisim_sim.sv \
               rtl/top.sv
 TOP_IMAGES := kc_imem.hex kc_dmem.hex textures.hex palette.hex
+TOP_SIM    := $(filter-out tb/ddr/unisim_sim.sv,$(TOP_RTL)) tb/top/top_sim.sv
 
 # Core configuration for a game build: 8 lanes + divergence stack for kc_chip8*.
 top_lanes = $(if $(filter kc_chip8%,$(1)),8,1)
@@ -84,11 +87,11 @@ $(foreach e,$(TOP_ELFS),$(eval $(call TOP_IMAGE_RULES,$(e))))
 # the build's core configuration (one model directory per build) and run it.
 define top_run
 	@mkdir -p $(3)
-	$(VERILATOR) $(VL_TB) -O3 --timescale 1ns/1ps --top-module t_top_frame -Mdir $(OBJ)/top_t_top_frame_$(1) \
-	  -GLANES=$(call top_lanes,$(1)) -GHAS_DIV_STACK=$(call top_div,$(1)) \
+	$(VERILATOR) $(VL_EXE) -O3 --timescale 1ns/1ps --top-module t_top_frame -Mdir $(OBJ)/top_t_top_frame_$(1) \
+	  -o Vt_top_frame -GLANES=$(call top_lanes,$(1)) -GHAS_DIV_STACK=$(call top_div,$(1)) \
 	  -GIMEM_HEX='"$(2)/kc_imem.hex"' -GDMEM_HEX='"$(2)/kc_dmem.hex"' \
 	  -GTEX_HEX='"$(2)/textures.hex"' -GPAL_HEX='"$(2)/palette.hex"' \
-	  $(TOP_RTL) tb/top/t_top_frame.sv
+	  $(TOP_SIM) tb/top/t_top_frame.sv $(CURDIR)/tb/top/t_top_frame.cpp
 	$(OBJ)/top_t_top_frame_$(1)/Vt_top_frame +outdir=$(3) +frames=$(4) +swaps=$(TOP_SWAPS) +timeout_s=$(TOP_TIMEOUT) $(TOP_ARGS)
 endef
 
