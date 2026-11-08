@@ -9,6 +9,7 @@ import struct
 
 SYNC = 0xA5
 HELLO, BYE, PLACE, BREAK, FILL = 0x01, 0x02, 0x10, 0x11, 0x12
+SPAWN, MOVE = 0x20, 0x21
 Q_PLAYER, Q_BLOCKS = 0x30, 0x31
 SET_BALANCE, SET_QUOTE, SET_CONTRACT = 0x40, 0x41, 0x42
 STATUS, HELLO_ACK, R_PLAYER, R_BLOCKS, EVENT = 0x81, 0x82, 0x83, 0x84, 0x8F
@@ -120,7 +121,7 @@ class FakeChip:
         self.player = player
         px, pz, py = player
         self.zone = (px - 8, pz - 8, max(1, py - 4), 16)   # x0, z0, y0, size: set on the chip, not by the laptop
-        self.world = {}
+        self.world, self.entities = {}, []
         self.ground = py - 1
         self.linked, self.frame_no, self.drained = False, 0, 0
         self.last = (None, 0)                               # (seq, result) for retransmits
@@ -168,6 +169,12 @@ class FakeChip:
             if op == BREAK:
                 x, z, y = struct.unpack("<HHB", p)
                 return self.edit(x, z, y, 0)
+            if op == SPAWN:
+                eid, x, z, y = struct.unpack("<BHHB", p)
+                if eid & 15 != len(self.entities):
+                    return 9                                 # BAD_ENTITY: ids come in order
+                self.entities.append((eid >> 4, x / 16, z / 16, y / 8))
+                return 0
             if op == Q_PLAYER:
                 px, pz, py = self.player
                 self.send(seq, R_PLAYER, struct.pack("<HHB", px * 16, pz * 16, py * 8))

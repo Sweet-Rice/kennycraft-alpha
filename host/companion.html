@@ -51,7 +51,13 @@
 </header>
 <main>
   <section>
-    <div class="card">
+    <div class="card" id="livebox" style="display:none">
+      <h2>KennyCraft (host build over CR6)</h2>
+      <img id="live" alt="live game frame" style="width:100%;border-radius:8px;image-rendering:pixelated;outline:none" tabindex="0">
+      <p class="small dim" id="livehint">Click the picture to play: WASD walk, arrows look, Space jump, J/K break/place,
+        1–9 blocks, <b>E</b> talk to a villager, <b>Y/N</b> answer a quote. Esc stops.</p>
+    </div>
+    <div class="card" id="sim">
       <h2>Chip (simulated)</h2>
       <div class="hud">
         <div class="kcn"><span id="kcn">0</span> KCN</div>
@@ -62,15 +68,13 @@
         <button class="primary" onclick="post('/api/confirm',{yes:true})">Y</button>
         <button onclick="post('/api/confirm',{yes:false})">N</button>
       </div>
-      <p class="small dim">Walk up to a villager and press interact:</p>
+      <p class="small dim">Walk up to a villager and press E:</p>
       <div class="row">
-        <button onclick="post('/api/interact',{entity:1})">Builder</button>
-        <button onclick="post('/api/interact',{entity:2})">Miner</button>
-        <button onclick="post('/api/interact',{entity:3})">Farmer</button>
-        <button onclick="post('/api/interact',{entity:4})">Banker</button>
+        <button onclick="post('/api/interact',{role:'builder'})">Builder</button>
+        <button onclick="post('/api/interact',{role:'banker'})">Banker</button>
       </div>
     </div>
-    <div class="card"><h2>World near the player</h2><canvas id="world" width="16" height="16"></canvas>
+    <div class="card" id="worldcard"><h2>World near the player</h2><canvas id="world" width="16" height="16"></canvas>
       <p class="small dim">Top-down view of the 16×16 contract zone. The white dot is the player.</p></div>
   </section>
 
@@ -122,12 +126,16 @@ function render(s) {
   state = s;
   $('mode').textContent = s.mode; $('mode').className = 'badge ' + s.mode;
   $('queued').textContent = s.queued ? `${s.queued} payment${s.queued>1?'s':''} waiting to settle` : 'all payments settled';
-  $('kcn').textContent = s.hud.kcn;
-  $('quote').innerHTML = s.hud.quote[0] ? `Quote #${s.hud.quote[0]}: <b style="color:#e6e8eb">${s.hud.quote[1]} KCN</b>, Y/N?` : 'no quote';
-  $('bars').innerHTML = ['builder','miner','farmer'].filter(k => s.hud.contracts[k]).map(k => {
-    const [st, p] = s.hud.contracts[k];
-    return `<div class="small">${k} ${st===3?'PAID':st===2?'checking':st===1?'working':''}</div>
-            <div class="bar ${st===3?'done':''}"><i style="width:${st?Math.round(p/63*100):0}%"></i></div>`; }).join('');
+  $('livebox').style.display = s.live ? '' : 'none';
+  $('sim').style.display = $('worldcard').style.display = s.live ? 'none' : '';
+  if (s.hud) {
+    $('kcn').textContent = s.hud.kcn;
+    $('quote').innerHTML = s.hud.quote[0] ? `Quote #${s.hud.quote[0]}: <b style="color:#e6e8eb">${s.hud.quote[1]} KCN</b>, Y/N?` : 'no quote';
+    $('bars').innerHTML = ['builder','miner','farmer'].filter(k => s.hud.contracts[k]).map(k => {
+      const [st, p] = s.hud.contracts[k];
+      return `<div class="small">${k} ${st===3?'PAID':st===2?'checking':st===1?'working':''}</div>
+              <div class="bar ${st===3?'done':''}"><i style="width:${st?Math.round(p/63*100):0}%"></i></div>`; }).join('');
+  }
   $('usd').textContent = usd(s.usd); $('usd2').textContent = usd(s.usd);
   $('talk').style.display = s.prompt ? '' : 'none';
   $('talk-title').textContent = s.prompt === 'banker' ? 'Banker' : `Hire the ${s.prompt}`;
@@ -146,8 +154,27 @@ function render(s) {
       <td>${e.sig ? `<a href="https://explorer.solana.com/tx/${e.sig}?cluster=devnet" target="_blank" rel="noopener">tx</a>` : ''}</td></tr>`).join('')
       || '<tr><td class="dim">No payments yet.</td></tr>';
   $('log').textContent = s.log.join('\n');
-  drawWorld(s.world);
+  if (s.world) drawWorld(s.world);
 }
+
+// Live game: refresh the frame, and while the picture has focus send keys like kc.py does.
+const KEYS = {w:0x77, a:0x61, s:0x73, d:0x64, ' ':0x20, ArrowLeft:0x10, ArrowRight:0x11, ArrowUp:0x12,
+              ArrowDown:0x13, j:0x6A, k:0x6B, e:0x65, y:0x79, n:0x6E};
+for (let i = 1; i <= 9; i++) KEYS[String(i)] = 0x30 + i;
+const held = new Set();
+function sendKey(e, down) {
+  const code = KEYS[e.key.length === 1 ? e.key.toLowerCase() : e.key];
+  if (code === undefined) return;
+  e.preventDefault();
+  if (down === held.has(code)) return;            // no auto-repeat, no stray key-ups
+  down ? held.add(code) : held.delete(code);
+  post('/api/key', {code, down});
+}
+const img = $('live');
+img.addEventListener('keydown', e => e.key === 'Escape' ? img.blur() : sendKey(e, true));
+img.addEventListener('keyup', e => sendKey(e, false));
+img.addEventListener('blur', () => { for (const code of held) post('/api/key', {code, down:false}); held.clear(); });
+setInterval(() => { if (state && state.live) img.src = '/live.png?t=' + Date.now(); }, 200);
 
 function drawWorld(w) {
   const cv = $('world'); cv.width = cv.height = w.size; const g = cv.getContext('2d');

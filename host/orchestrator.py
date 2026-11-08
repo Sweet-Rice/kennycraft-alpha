@@ -16,7 +16,10 @@ import cr6
 from bank import InsufficientFunds, clamp_price, rule_price
 
 TYPES = ["builder", "miner", "farmer"]                      # contract type byte = index
-ENTITIES = {1: "builder", 2: "miner", 3: "farmer", 4: "banker"}
+# Villagers the laptop spawns next to the player (CR6 SPAWN): role, entity kind
+# (game/src/entity.h: 0 trader, 1 contractor), offset from the player in blocks.
+# West of the player, so they never stand in the hut (built to the east).
+VILLAGERS = [("banker", 0, -3, 1), ("builder", 1, -3, -1)]
 OPEN = ("QUOTED", "FUNDED", "WORKING", "VERIFYING")
 HUD_STATE = {"FUNDED": 1, "WORKING": 1, "VERIFYING": 2, "RELEASED": 3}   # 2-bit state on the chip
 MATERIALS = {"grass": 1, "dirt": 2, "stone": 3, "cobble": 4, "log": 5, "wood": 5, "leaves": 6,
@@ -62,7 +65,7 @@ class Orchestrator:
     def __init__(self, ledger, bridge, pricer=None, quote_s=30, stall_s=20, on_change=lambda: None):
         self.ledger, self.bridge, self.pricer = ledger, bridge, pricer
         self.quote_s, self.stall_s, self.on_change = quote_s, stall_s, on_change
-        self.contracts, self.prompt = {}, None
+        self.contracts, self.prompt, self.roles = {}, None, {}   # roles: entity id -> villager
         # Continue numbering after a restart so KC#<id> memos stay unique on chain.
         self.next_id = (ledger.db.execute("SELECT MAX(contract_id) FROM entries").fetchone()[0] or 0) + 1
         self.tasks = set()
@@ -83,8 +86,17 @@ class Orchestrator:
                                                                  HUD_STATE.get(c.state, 0) << 6 | prog))
         self.on_change()
 
+    async def spawn_villagers(self):
+        _, p = await self.send(cr6.Q_PLAYER)
+        x, z, y = struct.unpack("<HHB", p)
+        for i, (role, kind, dx, dz) in enumerate(VILLAGERS):
+            # BAD_ENTITY here means the chip already has them (kc-host restarted, chip didn't).
+            await self.send(cr6.SPAWN, struct.pack("<BHHB", i | kind << 4, x + dx * 16, z + dz * 16, y))
+            self.roles[i] = role
+
     async def resync(self):
-        """After a chip reboot (new boot counter): it kept nothing, so send everything again."""
+        """After HELLO_ACK: a rebooted chip kept nothing, so send everything again."""
+        await self.spawn_villagers()
         await self.hud()
         for c in self.contracts.values():
             if c.state == "QUOTED":
@@ -95,8 +107,8 @@ class Orchestrator:
     async def events(self):
         while True:
             code, arg = await self.bridge.events.get()
-            if code == cr6.EV_INTERACT and arg in ENTITIES:
-                self.prompt = ENTITIES[arg]
+            if code == cr6.EV_INTERACT and arg in self.roles:
+                self.prompt = self.roles[arg]
                 self.on_change()
             elif code == cr6.EV_CONFIRM:
                 c = next((c for c in self.contracts.values() if c.id & 0xFF == arg & 0xFF), None)

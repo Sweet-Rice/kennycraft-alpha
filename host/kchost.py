@@ -1,12 +1,16 @@
 """kc-host: the laptop side of KennyCraft banking in one asyncio process.
 
-    python host/kchost.py        fake chip + devnet + Nessie, companion page on http://127.0.0.1:8000
+    python host/kchost.py                 fake chip + devnet + Nessie, page on http://127.0.0.1:8000
+    KC_CHIP=host python host/kchost.py    the real game (game/ host build, `kc_host link` in WSL)
+                                          over CR6; the page shows it live and sends your keys
 
-The fake chip speaks the same CR6 bytes as the board; the buttons in its panel
-stand in for the player's INTERACT and Y/N presses.
+KC_GAME_DIR picks the game/ folder for KC_CHIP=host (build it first: make -C game).
+The fake chip speaks the same CR6 bytes as the board; its buttons stand in for the
+player's E and Y/N presses.
 """
 import asyncio
 import json
+import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -33,13 +37,28 @@ class Host:
         if drift:
             self.say(f"chain and ledger differ: {drift}")
         self.nessie, self.usd = Nessie(), None
-        self.chip = None
-        self.bridge = cr6.Bridge(lambda b: self.chip.receive(b), on_link=self.linked)
-        self.chip = cr6.FakeChip(self.bridge.feed)
+        self.chip = self.proc = None
+        if os.environ.get("KC_CHIP") == "host":
+            self.game = Path(os.environ.get("KC_GAME_DIR", HERE.parent / "game")).resolve()
+            wsl = "/mnt/" + self.game.drive[0].lower() + self.game.as_posix()[2:]
+            self.proc = await asyncio.create_subprocess_exec(
+                "wsl", "-e", "bash", "-lc", f"cd '{wsl}' && mkdir -p out/link && exec ./build/kc_host link out/link",
+                stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
+            self.bridge = cr6.Bridge(self.proc.stdin.write, on_link=self.linked)
+        else:
+            self.bridge = cr6.Bridge(lambda b: self.chip.receive(b), on_link=self.linked)
+            self.chip = cr6.FakeChip(self.bridge.feed)
         self.orch = Orchestrator(self.ledger, self.bridge, agents.price)
         for coro in (self.settler.run(), self.orch.events(), self.poll_nessie()):
             self.orch.spawn(coro)
+        if self.proc:
+            self.orch.spawn(self.read_chip())
         await self.bridge.hello()
+
+    async def read_chip(self):
+        while data := await self.proc.stdout.read(512):
+            self.bridge.feed(data)
+        self.say("the game process exited")
 
     def say(self, text):
         self.log = (self.log + [time.strftime("%H:%M:%S ") + text])[-8:]
@@ -61,19 +80,24 @@ class Host:
         rows = self.ledger.db.execute(
             "SELECT id, kind, from_wallet, to_wallet, amount, contract_id, status, sig FROM entries"
             " WHERE kind != 'mint' ORDER BY id DESC LIMIT 14").fetchall()
-        x0, z0, y0, n = self.chip.zone
-        px, pz, py = self.chip.player
+        if self.chip:
+            x0, z0, y0, n = self.chip.zone
+            px, pz, py = self.chip.player
+            hud = {"kcn": self.chip.hud["kcn"], "quote": self.chip.hud["quote"],
+                   "contracts": {TYPES[t]: v for t, v in self.chip.hud["contracts"].items()}}
+            world = {"size": n, "player": [px - x0, pz - z0], "ground": self.chip.ground,
+                     "blocks": [[x - x0, z - z0, y, t] for (x, z, y), t in self.chip.world.items() if t]}
+        else:
+            hud, world = None, None                      # the live frame shows the chip's own HUD
         return {
-            "hud": {"kcn": self.chip.hud["kcn"], "quote": self.chip.hud["quote"],
-                    "contracts": {TYPES[t]: v for t, v in self.chip.hud["contracts"].items()}},
+            "hud": hud, "world": world, "live": self.proc is not None,
+            "roles": {r: i for i, r in self.orch.roles.items()},
             "mode": mode, "queued": queued, "usd": self.usd, "prompt": self.orch.prompt,
             "wallets": {w: self.ledger.balance(w) for w in ("player", "escrow", "builder", "miner", "farmer", "treasury")},
             "contracts": [{"id": c.id, "kind": c.kind, "text": c.text, "price": c.price, "rule": c.rule,
                            "state": c.state, "placed": len(c.placed), "total": len(c.blueprint), "note": c.note}
                           for c in list(self.orch.contracts.values())[-5:][::-1]],
             "ledger": [dict(r) for r in rows],
-            "world": {"size": n, "player": [px - x0, pz - z0], "ground": self.chip.ground,
-                      "blocks": [[x - x0, z - z0, y, t] for (x, z, y), t in self.chip.world.items() if t]},
             "log": self.log,
         }
 
@@ -112,14 +136,31 @@ async def events():
     return StreamingResponse(stream(), media_type="text/event-stream")
 
 
+@app.get("/live.png")
+async def live():
+    f = getattr(host, "game", HERE) / "out" / "link" / "live.png"
+    if not f.exists():
+        raise HTTPException(404)
+    return FileResponse(f, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/key")
+async def key(body: dict):
+    """A key from the page, as kc.py would send it: bit 7 set on key-down."""
+    if host.proc:
+        host.bridge.write(bytes([int(body["code"]) & 0x7F | (0x80 if body["down"] else 0)]))
+
+
 @app.post("/api/interact")
 async def interact(body: dict):
-    host.chip.interact(int(body["entity"]))
+    if host.chip and body["role"] in host.orch.roles.values():
+        host.chip.interact(next(i for i, r in host.orch.roles.items() if r == body["role"]))
 
 
 @app.post("/api/confirm")
 async def confirm(body: dict):
-    host.chip.confirm(bool(body["yes"]))
+    if host.chip:
+        host.chip.confirm(bool(body["yes"]))
 
 
 @app.post("/api/close")
