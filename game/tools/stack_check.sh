@@ -3,7 +3,7 @@
 # Each lane has exactly 1 KB of stack (crt0.S) and nothing detects an overflow: lane n spills
 # into lane n+1's stack, lane 7 into the statics. This walks the static call graph from
 #   main                               lane 0: game + kernel (sp starts at the lane 0 top)
-#   kc_render_frame, kc_raster_kernel  lanes 1-7: they join at mask_all() with sp at their top
+#   kc_render_frame  lanes 1-7: they join at mask_all() with sp at their top
 # Frame = a function's largest open stack adjustment (addi sp,sp,-N). Calls are auipc+jalr
 # (-mno-relax) or jal, resolved by address, not by objdump's symbol label (which can name the
 # wrong section). Tail calls (jr / j to another function) add no frame of their own.
@@ -83,7 +83,7 @@ END {
         if (t in at && (ekind[i] != "jump" || at[t] != efn[i])) etgt[i] = at[t]   # self call: recursion
         else if (ekind[i] != "jump") fail(efn[i] ": call not to a function start: " eins[i])
     }
-    nent = split("main kc_render_frame kc_raster_kernel", ent, " ")
+    nent = split("main kc_render_frame", ent, " ")
     for (i = 1; i <= nent; i++) {
         e = ent[i]
         if (!(e in fns)) continue
