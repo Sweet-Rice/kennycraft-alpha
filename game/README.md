@@ -22,7 +22,7 @@ Every chip target also runs `tools/stack_check.sh`: the worst-case stack depth o
 | `src/kc_hal.h` | The only platform switch. Chip: memory map + MMIO from Interfaces v1.0. Host: `host/hal_host.c` |
 | `src/fixed.[ch]` | Q16.16, `qrcp` (1/x: computed seed + Newton, branch-free, no table), `qsin`, `sel()` |
 | `src/trace.[ch]` | `ray_setup` + `kc_trace` with the exact VTRACE contract. `vtrace_ref` = C reference for one ray |
-| `src/render.[ch]` | Ray-tracing kernel. 8x8 tiles, 4x2 block per lane pass (D15). Pixel byte per spec |
+| `src/render.[ch]` | Ray-tracing kernel. 4x2 block per lane pass (D15), blocks in rows; frame state and the ray in registers, one LBU + one SB per pixel. Pixel byte per spec |
 | `src/entity.[ch]` | Villager, pig and zombie box models (flat colors) that walk to a target; drawn by the ray tracer |
 | `src/kc_libc.c` | memcpy/memset for the freestanding chip build |
 | `src/kc_lanes.h` | LANEID/LMASK/BALLOT/MASKGET/MASKSET/MASKALL: software for 1 lane, `.insn` for 8 |
@@ -92,6 +92,10 @@ It saves `m0_models` and `m1_trader`, `m1_contractor`,
 
 - Software DDA loop (`vtrace_ref`): 53 RV32I instructions per step on `kc_chip8.elf`, 49 on `kc_chip.elf` (was 109 / 102), counted in `llvm-objdump -d`.
 - 160×120 with a 16-step cap is about 207k steps per frame, roughly 11M instructions. At about 4 CPI on a 50 MHz multi-cycle core that's ~1 fps, which matches the Stage 0 plan.
+- Stage 2 frame, measured: `make tb-top-t_top_frame TOP_ELF=kc_chip8_vtrace TOP_SWAPS=6` (add `PIPELINED=1` for the
+  pipelined core) prints the CYCLES between FB_SWAPs. 712,886 cycles (70.1 fps at 50 MHz) on the multi-cycle core and
+  377,752 (132.4 fps) on the pipelined core, with the register-resident kernel (283 cycles per 8-pixel pass outside the
+  walk at 4 CPI, no spills), the core's fetch overlap and the 3-cycle VTRACE step.
 - The default cap is 64 (`-DKC_MAX_STEPS`). At that cap a frame is 302k steps.
 
 ## Memory budget (data memory, 32 KB)
@@ -123,11 +127,11 @@ Everything is ray traced: one ray per pixel through the voxel grid (`render.c`, 
 | Buffer | Size |
 |---|---|
 | World window, 1 copy, 4 bits per block | 64.0 KB |
-| Textures (1 byte per texel) + palette | 12.5 KB |
+| Textures (1 byte per texel) + palette (RGB444, 12 bits per entry) | 12.4 KB |
 | Chunk slot tables + tag key | 0.1 KB |
 | Entity boxes + eight records + counts | 2.7 KB |
-| **Total** | **79.3 KB of 192** |
-| + two 160×120 framebuffers, if they end up inside the budget | 116.8 KB |
+| **Total** | **79.2 KB of 192** |
+| + two 160×120 framebuffers, if they end up inside the budget | 116.7 KB |
 
 Chunk storage:
 - Every generated or edited chunk is written through the memory API (CHUNK_CMD) when it leaves the window. Every incoming chunk is loaded.
