@@ -99,17 +99,35 @@ register writes as the multi-cycle core. Only CPI changes:
 
 | Class | Cycles |
 | --- | --- |
-| ALU, LUI, AUIPC, FENCE, MASKGET, BALLOT, LANEID, not-taken branch | 1 |
-| MUL family | 2 |
-| Taken branch, JAL, JALR, LMASK, MASKSET, MASKALL, DIF, DELSE, DENDIF (flush 2) | 3 |
-| Load or store, N active lanes | N + 1 (+3 per lane for world LW/SW and texture LW) |
-| QRCP | 5 after the previous retirement (7 after a flush) |
-| Load-use | +1 bubble |
+| ALU, LUI, AUIPC, FENCE, MASKGET, BALLOT, LANEID, MUL family, not-taken branch | 1 |
+| Taken branch or JAL that the BTB predicts, right target | 1 |
+| Other taken branch or JAL, JALR, branch predicted taken but not taken, LMASK, MASKSET, MASKALL, DIF, DELSE, DENDIF (flush 2) | 3 |
+| Load, N bus accesses (groups of coalesced lanes) | N + 1 (+3 per lane for world LW and texture LW) |
+| Store, N bus accesses, last one to dmem or the framebuffer | N |
+| Store, N bus accesses, last one elsewhere | N + 1 (+3 per lane for world SW) |
+| Load or store lanes in the dmem window (0x6000 to 0x7FFF) | 1 per word a bank serves (all 8 lanes' stacks: 1), in parallel with the bus lanes |
+| QRCP | 3 after the previous retirement (5 after a flush) |
+| Load-use, mul-use | +1 bubble |
 | VTRACE | start until done, plus 1 |
 
 Branches, JALR and the uniform check (ERR.DIVERGE) resolve in EX. The mask
 and divergence stack are written in EX, and every mask writer flushes behind
 it. ERR halts report the faulting instruction's own PC.
+
+- **BTB** (`rtl/core_pipe/btb.sv`): 64 entries of distributed RAM, looked up
+  from the fetch PC, with 2-bit counters. A hit predicted taken fetches the
+  target next; ID checks the target and EX redirects only on a wrong guess.
+  Only conditional branches and JAL are predicted.
+- **dmem window** (`rtl/mem/dmem_win.sv`, `rtl/core_pipe/win_lsu.sv`): dmem
+  0x6000 to 0x7FFF, where crt0 puts the eight 1 KB lane stacks, is 8 banks
+  of distributed RAM (bank = address bits 12:10) on the pipelined core, so
+  an 8-lane spill or reload is one cycle with no load tail. Same addresses
+  and values as the dmem BRAM, which still holds the rest. It is initialized
+  from `kc_dmem.hex` at build time; `fpga/patch_bit.sh` refuses images that
+  change that range.
+- **MUL** writes its product straight into WB and is forwarded from WB only
+  (mul-use bubble); **QRCP** (`rtl/core_pipe/qrcp_pipe.sv`) does its two
+  Newton steps in two MEM cycles, bit-exact with `rtl/core/qrcp.sv`.
 
 ```sh
 make tb-core-pipe-<t>          # any tb/core test on the pipelined core
