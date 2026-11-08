@@ -20,8 +20,8 @@
 //          on the slot (the next load) sees the stored data, tags included.
 //   load:  ticket done -> SLOT_VALID on for the 32 tag reads only (reads of an invalid
 //          slot return air) and off again -> on a match write bedrock back -> SLOT_VALID on,
-//          S_READY, remesh. All of it is on lane 0 inside world_update, before the kernel
-//          runs, and world_get / the mesher only see S_READY slots: nothing that draws or
+//          S_READY. All of it is on lane 0 inside world_update, before the kernel
+//          runs, and world_get only sees S_READY slots: nothing that draws or
 //          collides can read a tag nibble.
 // The boot nonce hashes a boot counter kept in DDR3 with CYCLES once the startup loads have
 // landed, so it differs per reset even when boot timing repeats exactly, and chunks stored
@@ -48,14 +48,6 @@
 #include "kc_hal.h"
 #include "fixed.h"
 #include "arena.h"
-#if KC_RASTER
-#include "mesh.h"
-#define MESH_MARK_SLOT(s) mesh_mark_slot(s)
-#define MESH_MARK_BLOCK(x, z) mesh_mark_block(x, z)
-#else
-#define MESH_MARK_SLOT(s) ((void)0)
-#define MESH_MARK_BLOCK(x, z) ((void)0)
-#endif
 
 #define CAL_TIMEOUT_CYCLES (2u * CORE_HZ)      // wait up to 2 s for DDR3 calibration
 
@@ -180,11 +172,6 @@ static int32_t window_c0(int32_t p) {
 
 static void slot_ready(int32_t s) {
     slot_state[s] = S_READY;
-    int32_t sx = s & 3, sz = s >> 2;                          // remesh it and its neighbors
-    MESH_MARK_SLOT(s);
-    MESH_MARK_SLOT(sz * 4 + ((sx + 1) & 3)); MESH_MARK_SLOT(sz * 4 + ((sx + 3) & 3));
-    MESH_MARK_SLOT(((sz + 1) & 3) * 4 + sx); MESH_MARK_SLOT(((sz + 3) & 3) * 4 + sx);
-    (void)sx; (void)sz;
 }
 
 // ---------------------------------------------------------------- world_update -----------
@@ -220,9 +207,8 @@ void world_update(int px, int pz) {
             int32_t store = slot_state[s] == S_READY && (dirty_mask >> s & 1);
             if (slot_state[s] != S_EMPTY) {
                 slot_valid(old & 255, old >> 8, 0);           // 1. hardware reads are air now
-                MESH_MARK_SLOT(s);                            // drop its old mesh
             }
-            slot_id[s] = (uint16_t)want;                      // world_get / mesher: not loaded
+            slot_id[s] = (uint16_t)want;                      // world_get: not loaded
             slot_state[s] = S_NEED;
             dirty_mask &= (uint16_t)~(1u << s);
             if (store) {
@@ -329,7 +315,6 @@ void world_set(int x, int y, int z, uint8_t t) {
     if (s < 0 || (uint32_t)y >= WIN_Y) return;
     hal_win_set((x - corner_cx * CHUNK_W) & 63, y, (z - corner_cz * CHUNK_W) & 63, t);
     dirty_mask |= (uint16_t)(1u << s);
-    MESH_MARK_BLOCK(x, z);
 }
 
 int world_corner_x(void) { return corner_cx * CHUNK_W; }
@@ -337,15 +322,6 @@ int world_corner_z(void) { return corner_cz * CHUNK_W; }
 int world_ready(void) { return committed && corner_cx == target_cx && corner_cz == target_cz; }
 int world_storage_ok(void) { return storage_ok; }
 int world_loaded(int x, int z) { return loaded_slot(x, z) >= 0; }
-#if KC_RASTER
-uint32_t world_column_bits(int x, int z) {
-    if (loaded_slot(x, z) < 0) return 0xFFFFFFFFu;
-    int32_t wx = (x - corner_cx * CHUNK_W) & 63, wz = (z - corner_cz * CHUNK_W) & 63;
-    uint32_t c = 0;
-    for (int32_t y = 0; y < WIN_Y; y++) c |= (uint32_t)(hal_win_get(wx, y, wz) != B_AIR) << y;
-    return c;
-}
-#endif
 int world_slot_chunk(int s) { return slot_state[s] == S_READY ? slot_id[s] + 1 : 0; }
 uint32_t world_stats_generated(void) { return n_generated; }
 #if KC_GEN_BITMAP
