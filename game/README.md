@@ -24,7 +24,7 @@ Every chip target also runs `tools/stack_check.sh`: the worst-case stack depth o
 | `src/trace.[ch]` | `ray_setup` + `kc_trace` with the exact VTRACE contract. `vtrace_ref` = C reference for one ray |
 | `src/render.[ch]` | Ray-tracing kernel. 8x8 tiles, 4x2 block per lane pass (D15). Pixel byte per spec |
 | `src/mesh.[ch]` | Greedy mesher: per-chunk vertex + index buffers in a pool of 4 KB pages |
-| `src/raster.[ch]` | Tile rasterizer (Josh's design): binning into per-tile command lists, 16x16 tile of 32-bit words (8-bit color + 24-bit 1/z depth), one framebuffer write per pixel |
+| `src/raster.[ch]` | Tile rasterizer: binning into per-tile command lists, 16x16 tile of 32-bit words (8-bit color + 24-bit 1/z depth), one framebuffer write per pixel |
 | `src/kc_libc.c` | memcpy/memset for the freestanding chip build |
 | `src/kc_lanes.h` | LANEID/LMASK/BALLOT/MASKGET/MASKSET/MASKALL: software for 1 lane, `.insn` for 8 |
 | `src/terrain.[ch]` | Deterministic terrain + trees from absolute coordinates |
@@ -39,7 +39,7 @@ Every chip target also runs `tools/stack_check.sh`: the worst-case stack depth o
 
 ## For Tai
 
-- **Vertex colors (Josh's rule: no textures).** Both renderers and the hotbar color each block face from `kc_face_color` (one 4-bit color per block type and face, generated into `gen/kc_tables.h` from the block art). The game never reads texture memory. `textures.hex` is still generated, so the RTL's `$readmemh` keeps working; the texture BRAM could be dropped later through a CR.
+- **Vertex colors, no textures.** Both renderers and the hotbar color each block face from `kc_face_color` (one 4-bit color per block type and face, generated into `gen/kc_tables.h` from the block art). The game never reads texture memory. `textures.hex` is still generated, so the RTL's `$readmemh` keeps working; the texture BRAM could be dropped later through a CR.
 - `gen/textures.hex`: 12,288 lines, **one byte per line**, index `((type*3+face)<<8)|(v<<4)|u`, face 0 top / 1 side / 2 bottom. Values 0–14.
 - `gen/palette.hex`: 256 lines, **3 hex digits** RGB444 (11:8 R, 7:4 G, 3:0 B).
 - Palette convention (palette-only, no interface change): color index 15 is sky, and its 16 bytes are a top-to-bottom gradient rather than shade/fog variants.
