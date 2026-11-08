@@ -16,7 +16,8 @@
 //   MEM  the only stage that takes more than one cycle; EX, ID and IF wait
 //        for it. MUL 2 cycles, QRCP 6 (load, four steps, result), VTRACE
 //        until done plus one, loads and stores with an active lane: one
-//        cycle per lane-serial bus access plus one. Retirement happens here
+//        cycle per LSU bus access (one per group of coalesced lanes) plus
+//        one. Retirement happens here
 //   WB   every lane writes rd
 //
 // Hazards. Forwarding MEM -> EX and WB -> EX for every lane, gated by that
@@ -41,7 +42,7 @@
 // faulting instruction's PC, and it stays there while halted.
 //
 // state is an observation for the testbenches only: 4 (the multi-cycle
-// S_MEM code) while MEM walks the lane-serial LSU, 6 (S_HALT) after a halt,
+// S_MEM code) while MEM walks the LSU, 6 (S_HALT) after a halt,
 // 0 otherwise.
 module core_pipe
     import kc_isa_pkg::*;
@@ -249,7 +250,7 @@ module core_pipe
     logic [31:0]      ray_y [LANES];
     logic [31:0]      vt_y [LANES];
     logic [LANES-1:0] l_cmp, nonzero, ld_cap, mis;
-    logic [31:0]      ld_value;
+    logic [31:0]      ld_value [LANES];
     logic             e_vget, e_stash, e_vtrace, e_nowr;
     logic             m_is_load, m_is_store, m_mul, m_qr, m_vt;
     logic [2:0]       m_funct3, m_cnt;
@@ -288,7 +289,7 @@ module core_pipe
             .ray_y(ray_y[i]), .stash(e_stash),
             .rs1(l_rs1[i]), .alu_y(l_alu[i]), .cmp(l_cmp[i]),
             .mul_op(m_funct3[1:0]), .m_is_load, .mul_en, .m_mul, .qr_load, .qr_en, .qr_ph, .m_qr,
-            .vt_wr, .vt_y(vt_y[i]), .ld_cap(ld_cap[i]), .ld_value, .m_we(m_we[i]),
+            .vt_wr, .vt_y(vt_y[i]), .ld_cap(ld_cap[i]), .ld_value(ld_value[i]), .m_we(m_we[i]),
             .res(l_res[i]), .m_rs2(l_mrs2[i]), .wdata(l_wdata[i]),
             .w_we(w_we[i]), .w_rd
         );

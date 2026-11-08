@@ -16,14 +16,15 @@
 //   MUL   second EXECUTE cycle for MUL family (registered product) 1
 //   VT    VTRACE: wait for the ray unit's done pulse              walk + 1
 //   QR    QRCP: step every lane's QRCP unit, latch the result      5
-//   MEM   lane-serial LSU, one bus access per active lane, ascending
-//         order; stores retire on the last lane's access           N + slave wait
+//   MEM   LSU, one bus access per group of active lanes (lanes in the
+//         same dmem/framebuffer word coalesce, else one per lane),
+//         ascending order; stores retire on the last access        G + slave wait
 //   WB    every lane writes rd together (the last load lane's data
 //         arrives here), update PC                                  1
 //
 // Shared state here: PC, fetch, decode, FSM, the LANES-bit active mask (reset
 // 1) and the scalar-lane mux. rtl/core/lane.sv is one lane's datapath and
-// rtl/core/lsu.sv the lane-serial LSU.
+// rtl/core/lsu.sv the coalescing LSU.
 //
 // Lane control (custom-0). LANEID returns the lane index, LMASK clears the
 // bits of lanes whose rs1 = 0, MASKSET keeps rs1[LANES-1:0] of the scalar
@@ -201,7 +202,7 @@ module core
     logic [31:0]      l_wdata [LANES];
     logic [1:0]       l_addr_lo [LANES];
     logic [LANES-1:0] l_cmp, l_we, nonzero, ld_cap, mis;
-    logic [31:0]      ld_value;
+    logic [31:0]      ld_value [LANES];
     logic             wb_en;
     logic             ray_en;                 // latch ray_y into res (VGET, VTRACE)
     logic [31:0]      ray_y [LANES];
@@ -224,7 +225,7 @@ module core
             .is_lane(ex_is_lane), .lane_y, .ray_en, .ray_y(ray_y[i]),
             .qr_load((state == S_EX) && ex_is_qrcp), .qr_en(state == S_QR), .qr_ph, .qr_wr,
             .rs1(l_rs1[i]), .rs2(l_rs2[i]), .alu_y(l_alu[i]), .cmp(l_cmp[i]), .res(l_res[i]),
-            .ld_cap(ld_cap[i]), .ld_value,
+            .ld_cap(ld_cap[i]), .ld_value(ld_value[i]),
             .we(l_we[i]), .rd(ex_rd), .is_load(ex_is_load), .wdata(l_wdata[i])
         );
 
@@ -388,7 +389,7 @@ module core
     end
 
     // ------------------------------------------------------------------
-    // MEM: lane-serial LSU
+    // MEM: LSU (lane order, same-word lanes coalesced)
     // ------------------------------------------------------------------
     logic ex_mem, ex_illegal, lsu_done;
 

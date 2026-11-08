@@ -1,9 +1,12 @@
 // t_lsu_order: runs sw/t_lsu_order.S (Stage 1 rung 4) and checks memory and
 // every lane's registers against Tai_2 section 2 for the lanes that can be
-// active (ALANES). A bus monitor checks that every load/store makes exactly
-// one access per active lane, lowest lane first, at that lane's address, and
-// reports the LSU cycles (MEM cycles, plus WB for loads, where the last
-// lane's data lands) per number of active lanes.
+// active (ALANES). A bus monitor checks every load/store against a model of
+// the coalescing LSU: the lowest pending lane goes first, with every other
+// pending lane in the same physical word when that word is in dmem or the
+// framebuffer and no pending lane targets MMIO; otherwise one access per
+// lane, in lane order. It checks the access count, order, address and byte
+// enables, and the LSU cycles (MEM cycles, plus WB for loads, where the last
+// access's data lands): one per access, plus one for loads.
 module t_lsu_order_tb;
     parameter string IMEM_HEX = "";
     parameter string DMEM_HEX = "";
@@ -26,15 +29,26 @@ module t_lsu_order_tb;
     // ------------------------------------------------------------------
     int          acc_lane [$];
     logic [31:0] acc_addr [$];
+    logic [3:0]  acc_be [$];
     int          mem_cycles = 0;
-    int          ld_cycles [9];   // by active-lane count, -1 = not seen
-    int          st_cycles [9];
     int          checked = 0;
+    // Per monitored load/store, in program order: active lanes, accesses,
+    // LSU cycles.
+    int          mon_n [$], mon_acc [$], mon_cyc [$];
 
-    initial for (int n = 0; n <= 8; n++) begin
-        ld_cycles[n] = -1;
-        st_cycles[n] = -1;
-    end
+    // Physical word of a coalescable address: dmem aliases every 32 KB
+    // (word addr[14:2]), the framebuffer decodes addr[16:2].
+    function automatic logic [18:0] phys_word(input logic [31:0] a);
+        return {a[31:28], (a[31:28] == 4'h1) ? {2'b0, a[14:2]} : a[16:2]};
+    endfunction
+
+    function automatic logic [3:0] lane_be(input logic [2:0] f3, input logic [1:0] lo);
+        case (f3[1:0])
+            2'b00:   return 4'b0001 << lo;
+            2'b01:   return lo[1] ? 4'b1100 : 4'b0011;
+            default: return 4'b1111;
+        endcase
+    endfunction
 
     always @(posedge clk) begin
         if (!rst) begin
@@ -42,12 +56,18 @@ module t_lsu_order_tb;
             if (`KC_CORE.bus_req && `KC_CORE.bus_ready) begin
                 acc_lane.push_back(int'(`KC_CORE.u_lsu.cur));
                 acc_addr.push_back(`KC_CORE.bus_addr);
+                acc_be.push_back(`KC_CORE.bus_be);
             end
             if (`KC_CORE.retire_valid || `KC_CORE.err_set != 0) begin
-                logic [6:0] opc;
-                int         n, k, cyc;
-                logic       is_ld;
+                logic [6:0]       opc;
+                logic [2:0]       f3;
+                logic [LANES-1:0] pend, grp;
+                logic [3:0]       be;
+                logic             merge;
+                int               n, k, c, cyc;
+                logic             is_ld;
                 opc   = `KC_CORE.retire_inst[6:0];
+                f3    = `KC_CORE.retire_inst[14:12];
                 is_ld = (opc == 7'h03);
                 if (`KC_CORE.err_set != 0) begin
                     if (acc_lane.size() != 0) begin
@@ -55,38 +75,71 @@ module t_lsu_order_tb;
                         errors++;
                     end
                 end else if (is_ld || opc == 7'h23) begin
-                    n = $countones(`KC_CORE.retire_mask);
-                    k = 0;
-                    for (int l = 0; l < LANES; l++) begin
-                        if (`KC_CORE.retire_mask[l]) begin
-                            if (k >= acc_lane.size() || acc_lane[k] != l) begin
-                                $display("  FAIL pc %08h access %0d is not lane %0d", `KC_CORE.retire_pc, k, l);
-                                errors++;
-                            end else if (acc_addr[k] != `KC_CORE.l_res[l]) begin
-                                $display("  FAIL pc %08h lane %0d address %08h, lane computed %08h",
-                                         `KC_CORE.retire_pc, l, acc_addr[k], `KC_CORE.l_res[l]);
-                                errors++;
-                            end
-                            k++;
+                    n    = $countones(`KC_CORE.retire_mask);
+                    pend = `KC_CORE.retire_mask;
+                    k    = 0;
+                    while (pend != '0) begin
+                        c = 0;
+                        while (!pend[c]) c++;
+                        merge = 1'b1;
+                        for (int l = 0; l < LANES; l++)
+                            if (pend[l] && `KC_CORE.l_res[l][31:28] == 4'h5) merge = 1'b0;
+                        grp = LANES'(1) << c;
+                        if (merge && (`KC_CORE.l_res[c][31:28] == 4'h1 || `KC_CORE.l_res[c][31:28] == 4'h4))
+                            for (int l = 0; l < LANES; l++)
+                                if (pend[l] && phys_word(`KC_CORE.l_res[l]) == phys_word(`KC_CORE.l_res[c]))
+                                    grp[l] = 1'b1;
+                        be = '0;
+                        for (int l = 0; l < LANES; l++)
+                            if (grp[l]) be |= lane_be(f3, `KC_CORE.l_res[l][1:0]);
+                        if (k >= acc_lane.size() || acc_lane[k] != c) begin
+                            $display("  FAIL pc %08h access %0d is not lane %0d", `KC_CORE.retire_pc, k, c);
+                            errors++;
+                        end else if (acc_addr[k] != `KC_CORE.l_res[c]) begin
+                            $display("  FAIL pc %08h lane %0d address %08h, lane computed %08h",
+                                     `KC_CORE.retire_pc, c, acc_addr[k], `KC_CORE.l_res[c]);
+                            errors++;
+                        end else if (acc_be[k] != be) begin
+                            $display("  FAIL pc %08h access %0d (lanes %b) byte enables %b, expected %b",
+                                     `KC_CORE.retire_pc, k, grp, acc_be[k], be);
+                            errors++;
                         end
+                        pend &= ~grp;
+                        k++;
                     end
-                    if (acc_lane.size() != n) begin
-                        $display("  FAIL pc %08h made %0d bus accesses for %0d active lanes",
-                                 `KC_CORE.retire_pc, acc_lane.size(), n);
+                    if (acc_lane.size() != k) begin
+                        $display("  FAIL pc %08h made %0d bus accesses for %0d active lanes, expected %0d",
+                                 `KC_CORE.retire_pc, acc_lane.size(), n, k);
                         errors++;
                     end
                     // Stores retire in their last MEM cycle (not yet counted
                     // here), loads in WB: either way one more cycle.
                     cyc = mem_cycles + 1;
-                    if (is_ld) ld_cycles[n] = cyc; else st_cycles[n] = cyc;
+                    if (n != 0 && cyc != k + int'(is_ld)) begin
+                        $display("  FAIL pc %08h took %0d LSU cycles for %0d accesses", `KC_CORE.retire_pc, cyc, k);
+                        errors++;
+                    end
+                    mon_n.push_back(n);
+                    mon_acc.push_back(acc_lane.size());
+                    mon_cyc.push_back(cyc);
                     checked++;
                 end
                 acc_lane.delete();
                 acc_addr.delete();
+                acc_be.delete();
                 mem_cycles <= 0;
             end
         end
     end
+
+    task automatic expect_acc(input int idx, input int exp, input string what);
+        if (idx >= mon_acc.size()) begin
+            $display("  FAIL #%0d %s: not monitored", idx, what);
+            errors++;
+        end else begin
+            expect32($sformatf("#%0d %s: accesses", idx, what), mon_acc[idx], exp);
+        end
+    endtask
 
     // ------------------------------------------------------------------
     // Expected values
@@ -166,14 +219,23 @@ module t_lsu_order_tb;
             $display("  FAIL bus monitor saw only %0d loads/stores", checked);
             errors++;
         end
-        $display("  LSU cycles (dmem, MEM + WB for loads, MEM for stores):");
-        for (int n = 1; n <= 8; n++)
-            if (ld_cycles[n] >= 0 || st_cycles[n] >= 0)
-                $display("    %0d active lane(s): load %0d, store %0d", n, ld_cycles[n], st_cycles[n]);
-        for (int n = 1; n <= 8; n++) begin
-            if (ld_cycles[n] >= 0) expect32($sformatf("load cycles, %0d lanes", n), ld_cycles[n], n + 1);
-            if (st_cycles[n] >= 0) expect32($sformatf("store cycles, %0d lanes", n), st_cycles[n], n);
-        end
+        // Accesses per monitored load/store (the model above checks each
+        // one; these pin the expected coalescing of the program's cases).
+        $display("  LSU accesses and cycles (MEM + WB for loads, MEM for stores):");
+        foreach (mon_n[i])
+            $display("    #%0d: %0d active lane(s), %0d access(es), %0d cycle(s)", i, mon_n[i], mon_acc[i], mon_cyc[i]);
+        expect_acc(0,  ALANES,                 "SW consecutive words");
+        expect_acc(1,  1,                      "SW every lane one word");
+        expect_acc(2,  ALANES,                 "LW lane^1 words");
+        expect_acc(3,  (ALANES + 3) / 4,       "LB consecutive bytes");
+        expect_acc(4,  (ALANES + 3) / 4,       "LBU consecutive bytes");
+        expect_acc(5,  (ALANES < 3) ? 1 : 2,   "LH 2 * (lane & 3)");
+        expect_acc(6,  (ALANES < 3) ? 1 : 2,   "LHU 2 * (lane & 3)");
+        expect_acc(7,  (ALANES + 3) / 4,       "SB consecutive bytes");
+        expect_acc(8,  (ALANES + 1) / 2,       "SH consecutive halfwords");
+        expect_acc(9,  $countones(m),          "LW under 0xA5");
+        expect_acc(10, $countones(m),          "SW under 0xA5");
+        expect_acc(11, 1,                      "LW lane 0 only");
 
         if (errors != 0) $fatal(1, "FAIL: t_lsu_order, %0d mismatches", errors);
         $display("PASS: t_lsu_order (LANES = %0d, %0d can be active, %0d loads/stores monitored)",

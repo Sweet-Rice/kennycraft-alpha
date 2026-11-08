@@ -263,7 +263,7 @@ module t_top_frame #(
         end
         if (wlog_fd != 0) begin
             if (wq) $fwrite(wlog_fd, "%0d %08h %0d %05h %0d\n", wq_cyc, wq_pc, wq_lane, wq_addr[16:0],
-                            dut.u_soc.g_core.u_core.ld_value);
+                            dut.u_soc.g_core.u_core.ld_value[wq_lane]);
             wq = 0;
             if (swaps > wlog_swap) begin
                 $fclose(wlog_fd);
