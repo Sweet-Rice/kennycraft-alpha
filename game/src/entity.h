@@ -28,6 +28,10 @@ int32_t ent_block(int32_t bx, int32_t by);
 // it (the span can bridge two entities; ent_composite then finds no box there).
 #define ENT_ROWS 120            // 240 / 2: block rows at 320 x 240
 extern int16_t ent_span[ENT_ROWS][2];
+// Per block row, one bit per 4-pixel block column (80 at 320 wide): set when some entity's
+// rect overlaps that block, exactly ent_block. Tested only inside the span, so the gap the
+// span bridges between two entities costs one uniform load instead of an ent_composite call.
+extern uint32_t ent_bits[ENT_ROWS][3];
 
 // Lane 0. Absolute feet center. Facing: 0 +z, 1 +x, 2 -z, 3 -x.
 // Returns the entity index, or -1 for invalid kind/facing or a full table.

@@ -12,6 +12,7 @@ int32_t ent_nboxes;
 static int16_t ent_rects[ENT_MAX][4];   // x0, y0, x1, y1 inclusive: union of one entity's boxes
 int32_t ent_nrects;
 int16_t ent_span[ENT_ROWS][2];
+uint32_t ent_bits[ENT_ROWS][3];
 static uint8_t ent_rect_box[ENT_MAX][2];  // [first, end) of each rect's boxes in ent_boxes
 
 enum { C_BLACK = 0, C_GRASS_L = 1, C_GRASS_D = 2, C_DIRT_L = 3, C_DIRT_D = 4,
@@ -109,6 +110,13 @@ static void screen_rect(ent_box *b) {
         py[a][0] = qmul(rl,ua); py[a][1] = qmul(rh,ua);
         pz[a][0] = qmul(rl,fa); pz[a][1] = qmul(rh,fa);
     }
+    // Wholly behind the eye: every ray has a positive forward component and a hit needs t >= 0,
+    // so no ray can reach the box. Cull it (the margin covers qmul rounding) instead of
+    // letting the near-plane case below cover the whole screen with it.
+    int32_t behind = 0;
+    for (int32_t k = 0; k < 8; k++)
+        behind += pz[0][k & 1] + pz[1][(k >> 1) & 1] + pz[2][(k >> 2) & 1] < -16;
+    if (behind == 8) { b->sx0 = 1; b->sx1 = 0; b->sy0 = b->sy1 = 0; return; }
     int32_t x0 = 4096, y0 = 4096, x1 = -4096, y1 = -4096;
     for (int32_t k = 0; k < 8; k++) {
         int32_t i0 = k & 1, i1 = (k >> 1) & 1, i2 = (k >> 2) & 1;
@@ -173,13 +181,24 @@ void entity_prepare(void) {
     // Row spans: block row r (pixels 2r, 2r + 1) overlaps rect rows [u1, u3] when
     // 2r + 1 >= u1 and 2r <= u3, i.e. r in [u1 >> 1, u3 >> 1] (u1 >= 0): walk only those rows.
     int32_t rows = KC_RP->height >> 1;
-    for (int32_t r = 0; r < rows; r++) { ent_span[r][0] = 4096; ent_span[r][1] = -4096; }
+    // Block columns: block bx = 4c overlaps rect columns [u0, u2] for c in [u0 >> 2, u2 >> 2].
+    for (int32_t r = 0; r < rows; r++) {
+        ent_span[r][0] = 4096; ent_span[r][1] = -4096;
+        ent_bits[r][0] = ent_bits[r][1] = ent_bits[r][2] = 0;
+    }
     for (int32_t i = 0; i < ent_nrects; i++) {
         const int16_t *u = ent_rects[i];
         int32_t r0 = u[1] >> 1, r1 = imin(u[3] >> 1, rows - 1);
+        int32_t c0 = u[0] >> 2, c1 = u[2] >> 2;
+        uint32_t m[3];                               // this rect's block columns as word masks
+        for (int32_t w = 0; w < 3; w++) {
+            int32_t lo = imax(c0 - 32 * w, 0), hi = imin(c1 - 32 * w, 31);
+            m[w] = lo > hi ? 0u : (((2u << hi) - 1u) & ~((1u << lo) - 1u));
+        }
         for (int32_t r = r0; r <= r1; r++) {
             ent_span[r][0] = (int16_t)imin(ent_span[r][0], u[0]);
             ent_span[r][1] = (int16_t)imax(ent_span[r][1], u[2]);
+            ent_bits[r][0] |= m[0]; ent_bits[r][1] |= m[1]; ent_bits[r][2] |= m[2];
         }
     }
 }

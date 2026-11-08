@@ -16,7 +16,7 @@
 #define BUDGET_PALETTE       (256 * 12 / 8)                         // 256 x RGB444 (12-bit VGA)
 #define BUDGET_CHUNKS        (16 * 2 + 16 + 16 * 4 + 2 + 4)        // slot tables + tag key (KC_GEN_BITMAP: +8 KB in data memory)
 #define BUDGET_FB_160        (2 * 160 * 120)
-#define BUDGET_ENTITIES      (ENT_BOX_MAX * sizeof(ent_box) + ENT_MAX * 16 + ENT_MAX * 8 + 12 + ENT_ROWS * 4) // boxes, records, rects, counts, row spans
+#define BUDGET_ENTITIES      (ENT_BOX_MAX * sizeof(ent_box) + ENT_MAX * 16 + ENT_MAX * 8 + 12 + ENT_ROWS * 16) // boxes, records, rects, counts, row spans + block bits
 
 #ifndef KC_BUDGET_COUNT_FB
 #define KC_BUDGET_COUNT_FB 0

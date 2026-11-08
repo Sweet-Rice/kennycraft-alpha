@@ -173,7 +173,8 @@ static inline __attribute__((always_inline)) void frame(int32_t with_ents) {
             int32_t hit = (int32_t)(res & 1u);
             int32_t fog = (f0 < t) + (f1 < t) + (f2 < t);
             int32_t col = sel(hit, face_pix[res & 255u] | fog, sky);
-            if (with_ents && (bx + 3 >= ex0) & (bx <= ex1)) {
+            if (with_ents && (bx + 3 >= ex0) & (bx <= ex1) &&
+                ((ent_bits[by >> 1][bx >> 7] >> ((bx >> 2) & 31)) & 1u)) {
                 // Recomputed here rather than kept from the VSET: keeping the ray alive across
                 // the loop spills the rest of it on every block, entity or not.
                 // Only the tDeltas and step signs, in registers (no kc_ray through memory).
@@ -190,7 +191,8 @@ static inline __attribute__((always_inline)) void frame(int32_t with_ents) {
             int32_t hit = (int32_t)(res & 1u);
             int32_t fog = (f0 < t) + (f1 < t) + (f2 < t);
             int32_t col = sel(hit, face_pix[res & 255u] | fog, sky);
-            if (with_ents && (bx + 3 >= ex0) & (bx <= ex1)) {
+            if (with_ents && (bx + 3 >= ex0) & (bx <= ex1) &&
+                ((ent_bits[by >> 1][bx >> 7] >> ((bx >> 2) & 31)) & 1u)) {
                 // Recomputed here rather than kept from the VSET: keeping the ray alive across
                 // the loop spills the rest of it on every block, entity or not.
                 // Only the tDeltas and step signs, in registers (no kc_ray through memory).
@@ -207,6 +209,12 @@ static inline __attribute__((always_inline)) void frame(int32_t with_ents) {
 #endif
 }
 
+// Separate functions, so the plain loop gets its own register allocation: inlined into one
+// function, the entity loop's extra live values made clang spill 9 values per block in the
+// plain loop too (+28% frame time with no entities on screen).
+__attribute__((noinline)) static void frame_plain(void) { frame(0); }
+__attribute__((noinline)) static void frame_ents(void)  { frame(1); }
+
 void kc_render_frame(void) {
-    if (ent_nrects) frame(1); else frame(0);    // uniform: every lane reads the same count
+    if (ent_nrects) frame_ents(); else frame_plain();   // uniform: every lane reads the same count
 }
