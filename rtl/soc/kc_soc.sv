@@ -15,6 +15,8 @@
 //          game/gen/textures.hex)
 //   fb, palette, FB_SWAP, VSYNC, FRAME_COUNT, FB_MODE  ports to display (P1)
 //   0x2C..0x3C  ddr_reg_* port to the chunk engine (P2b)
+//   vt_*   HAS_RAY_UNIT = 1: the core's custom-1 port to the ray unit
+//          (rtl/vtrace/vtrace.sv in rtl/top.sv); 0 / ignored otherwise
 module kc_soc
     import kc_isa_pkg::*;
 #(
@@ -25,7 +27,8 @@ module kc_soc
     parameter string DMEM_HEX  = "kc_dmem.hex",
     parameter string TEX_HEX   = "",
     parameter bit    EXT_WORLD = 1'b0,
-    parameter bit    HAS_DIV_STACK = 1'b0   // custom-2 divergence stack in the core
+    parameter bit    HAS_DIV_STACK = 1'b0,  // custom-2 divergence stack in the core
+    parameter bit    HAS_RAY_UNIT  = 1'b0   // custom-1 ray unit (vt_* ports)
 ) (
     input  logic        clk,
     input  logic        rst,
@@ -67,7 +70,19 @@ module kc_soc
     output logic [16:0] world_addr,
     output logic [7:0]  world_wdata,
     input  logic        world_ready,
-    input  logic [7:0]  world_rdata
+    input  logic [7:0]  world_rdata,
+
+    // Ray unit (HAS_RAY_UNIT = 1)
+    output logic             vt_cfg_we,
+    output logic [2:0]       vt_cfg_field,
+    output logic [LANES-1:0] vt_lane_mask,
+    output logic [31:0]      vt_cfg_data [LANES],
+    output logic             vt_start,
+    output logic [7:0]       vt_max_steps,
+    input  logic             vt_done,
+    input  logic [15:0]      vt_result   [LANES],
+    input  logic [16:0]      vt_hit_cell [LANES],
+    input  logic [31:0]      vt_t_hit    [LANES]
 );
 
     localparam int IMEM_WORDS = IMEM_BYTES / 4;
@@ -84,11 +99,13 @@ module kc_soc
     logic [ERR_WIDTH-1:0] err_set;
     logic [31:0]          err_pc, pc;
 
-    core #(.LANES(LANES), .HAS_DIV_STACK(HAS_DIV_STACK)) u_core (
+    core #(.LANES(LANES), .HAS_DIV_STACK(HAS_DIV_STACK), .HAS_RAY_UNIT(HAS_RAY_UNIT)) u_core (
         .clk, .rst,
         .imem_addr, .imem_rdata,
         .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,
-        .err_set, .err_pc, .halted(err_led), .pc
+        .err_set, .err_pc, .halted(err_led), .pc,
+        .vt_cfg_we, .vt_cfg_field, .vt_lane_mask, .vt_cfg_data, .vt_start, .vt_max_steps,
+        .vt_done, .vt_result, .vt_hit_cell, .vt_t_hit
     );
 
     // ------------------------------------------------------------------

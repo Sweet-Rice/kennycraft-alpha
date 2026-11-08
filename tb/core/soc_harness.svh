@@ -12,12 +12,15 @@
 // LANES = 8 with the mask stuck at lane 0 must trace like LANES = 1).
 // lane_x[l][n] is lane l's register n. KC_BASE_CORE (define) builds against
 // the Stage 0 core (one register file, no per-lane retire wires) for
-// tracediff against the pre-lanes RTL.
+// tracediff against the pre-lanes RTL. HAS_RAY_UNIT = 1 builds the core with
+// custom-1 and connects rtl/vtrace/vtrace.sv (WORLD_LATENCY = 2) to it, with
+// an all-air world: every ray walks until it leaves the world or hits its cap.
 
 parameter int LANES      = 1;
 parameter bit LANE0_ONLY = 1'b0;
 localparam int ALANES    = LANE0_ONLY ? 1 : LANES;   // lanes that can be active
 parameter bit HAS_DIV_STACK = 1'b0;   // custom-2 in the core, see below
+parameter bit HAS_RAY_UNIT  = 1'b0;   // custom-1 and the ray unit
 
 `ifdef KC_BASE_CORE
 `define KC_RF(l) dut.u_core.u_rf
@@ -53,10 +56,45 @@ logic        ddr_reg_stall;
 
 always #(CLK_NS / 2) clk = ~clk;
 
+// Ray unit port
+logic             vt_cfg_we, vt_start, vt_done;
+logic [2:0]       vt_cfg_field;
+logic [LANES-1:0] vt_lane_mask;
+logic [31:0]      vt_cfg_data [LANES];
+logic [7:0]       vt_max_steps;
+logic [15:0]      vt_result   [LANES];
+logic [16:0]      vt_hit_cell [LANES];
+logic [31:0]      vt_t_hit    [LANES];
+
+if (HAS_RAY_UNIT) begin : g_vtrace
+    logic        vt_busy;
+    logic [16:0] vt_world_addr [LANES];
+    logic [3:0]  vt_world_data [LANES];
+
+    always_comb for (int l = 0; l < LANES; l++) vt_world_data[l] = 4'd0;
+
+    vtrace #(.LANES(LANES), .WORLD_LATENCY(2)) u_vtrace (
+        .clk, .rst,
+        .cfg_we(vt_cfg_we), .cfg_field(vt_cfg_field), .lane_mask(vt_lane_mask),
+        .cfg_data(vt_cfg_data), .start(vt_start), .max_steps(vt_max_steps),
+        .busy(vt_busy), .done(vt_done),
+        .result(vt_result), .hit_cell(vt_hit_cell), .t_hit(vt_t_hit),
+        .world_addr(vt_world_addr), .world_data(vt_world_data)
+    );
+end else begin : g_no_vtrace
+    assign vt_done = 1'b0;
+    always_comb for (int l = 0; l < LANES; l++) begin
+        vt_result[l]   = '0;
+        vt_hit_cell[l] = '0;
+        vt_t_hit[l]    = '0;
+    end
+end
+
 /* verilator lint_off PINCONNECTEMPTY */
 kc_soc #(
     .LANES(LANES),
     .HAS_DIV_STACK(HAS_DIV_STACK),
+    .HAS_RAY_UNIT(HAS_RAY_UNIT),
     .IMEM_HEX(IMEM_HEX),
     .DMEM_HEX(DMEM_HEX)
 ) dut (
@@ -68,7 +106,9 @@ kc_soc #(
     .swap_req, .swap_pending, .vblank, .frame_count, .fb_mode,
     .ddr_reg_en, .ddr_reg_we, .ddr_reg_off, .ddr_reg_wdata, .ddr_reg_rdata, .ddr_reg_stall,
     .world_req(), .world_we(), .world_addr(), .world_wdata(),
-    .world_ready(1'b0), .world_rdata(8'h00)
+    .world_ready(1'b0), .world_rdata(8'h00),
+    .vt_cfg_we, .vt_cfg_field, .vt_lane_mask, .vt_cfg_data, .vt_start, .vt_max_steps,
+    .vt_done, .vt_result, .vt_hit_cell, .vt_t_hit
 );
 /* verilator lint_on PINCONNECTEMPTY */
 

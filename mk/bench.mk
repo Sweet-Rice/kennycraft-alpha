@@ -54,13 +54,19 @@ VERILATOR ?= verilator
 RUN_ARGS ?=
 STAGE ?= 0
 DDR ?= 1
-# CHIP_TOP=top builds rtl/top.sv, bench_chip (the default) the same RTL
-# without the board clocking; both take LANES and HAS_DIV_STACK. The harness
-# reads the lane count from the built core.
+# CHIP_TOP=top builds rtl/top.sv, bench_chip (the default before Stage 2) the
+# same RTL without the board clocking and without the ray unit; both take
+# LANES and HAS_DIV_STACK, top also HAS_RAY_UNIT (Stage 2 runs on top). The
+# harness reads the lane count from the built core.
 LANES ?= $(if $(filter 1 2,$(STAGE)),8,1)
 HAS_DIV_STACK ?= $(if $(filter 1 2,$(STAGE)),1,0)
-CHIP_TOP ?= bench_chip
-CHIP_PARAMS = -GLANES=$(LANES) -GHAS_DIV_STACK="1'b$(HAS_DIV_STACK)"
+HAS_RAY_UNIT ?= $(if $(filter 2,$(STAGE)),1,0)
+CHIP_TOP ?= $(if $(filter 2,$(STAGE)),top,bench_chip)
+CHIP_PARAMS = -GLANES=$(LANES) -GHAS_DIV_STACK="1'b$(HAS_DIV_STACK)" \
+	$(if $(filter top,$(CHIP_TOP)),-GHAS_RAY_UNIT="1'b$(HAS_RAY_UNIT)")
+ifeq ($(STAGE)$(CHIP_TOP),2bench_chip)
+$(error STAGE=2 needs CHIP_TOP=top: bench_chip has no ray unit, so custom-1 would halt ERR.ILLEGAL)
+endif
 VL_MDIR ?= out/vl
 PAL_HEX ?=
 TEX_HEX ?=
@@ -125,14 +131,18 @@ TESTS += $(TESTS_2)
 endif
 TEST_ARGS = --stage $(STAGE) --cc "$(CC)" --objcopy "$(OBJCOPY)" --nm "$(CROSS)nm" --cflags "$(CFLAGS)"
 
-# Stage 2 joins once P7 puts the ray unit in the core.
+# Stage 2 (ray unit, rtl/top.sv) runs every test plus t_vtrace, and the golden
+# shot with Kennedy's VTRACE kernel (game/src/trace.c, KC_VTRACE = 1) against
+# the plain C (software DDA) reference.
 .PHONY: check-bench check-stage
 check-bench:
 	$(MAKE) check-fixture
 	$(MAKE) check-stage STAGE=0
 	$(MAKE) check-stage STAGE=1
+	$(MAKE) check-stage STAGE=2
 	$(MAKE) golden-check
 	$(MAKE) golden-check STAGE=1 CHIP_TOP=top GOLDEN_VL=out/golden/vl1
+	$(MAKE) golden-check STAGE=2 GOLDEN_VL=out/golden/vl2 GAME_CHIP_CC="$(GAME_CHIP_CC) -DKC_VTRACE=1"
 check-stage: vl-build
 	$(PYTHON) scripts/run_tests.py $(TEST_ARGS) $(TESTS)
 

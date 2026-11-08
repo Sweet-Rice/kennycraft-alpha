@@ -27,8 +27,9 @@
 //                 (default 0, i.e. from reset) and FB_SWAP N+1: core cycle,
 //                 PC, lane, world index, loaded value
 //
-// LANES / HAS_DIV_STACK pick the core (tb/top/tb.mk: 1 / 0 for the one-lane
-// game builds, 8 / 1 for the 8-lane ones).
+// LANES / HAS_DIV_STACK / HAS_RAY_UNIT pick the core (tb/top/tb.mk: 1 / 0 / 0
+// for the one-lane game builds, 8 / 1 / 0 for the 8-lane ones, 8 / 1 / 1 for
+// kc_chip8_vtrace).
 
 module t_top_frame #(
     parameter int    LANES         = 1,
@@ -36,7 +37,8 @@ module t_top_frame #(
     parameter string IMEM_HEX = "kc_imem.hex",
     parameter string DMEM_HEX = "kc_dmem.hex",
     parameter string TEX_HEX  = "textures.hex",
-    parameter string PAL_HEX  = "palette.hex"
+    parameter string PAL_HEX  = "palette.hex",
+    parameter bit    HAS_RAY_UNIT  = 1'b0
 );
     localparam int W = 640, H = 480;
     localparam longint TIMEOUT_NS = 64'd20_000_000_000;  // 20 s of board time
@@ -55,7 +57,8 @@ module t_top_frame #(
     wire  [1:0]  ddr3_dqs_n, ddr3_dqs_p;
 
     top #(.LANES(LANES), .HAS_DIV_STACK(HAS_DIV_STACK),
-          .IMEM_HEX(IMEM_HEX), .DMEM_HEX(DMEM_HEX), .TEX_HEX(TEX_HEX), .PAL_HEX(PAL_HEX)) dut (
+          .IMEM_HEX(IMEM_HEX), .DMEM_HEX(DMEM_HEX), .TEX_HEX(TEX_HEX), .PAL_HEX(PAL_HEX),
+          .HAS_RAY_UNIT(HAS_RAY_UNIT)) dut (
         .clk, .ck_rst, .uart_rxd_out, .uart_txd_in(1'b1), .led,
         .vga_r, .vga_g, .vga_b, .vga_hs, .vga_vs,
         .ddr3_addr, .ddr3_ba, .ddr3_cas_n, .ddr3_ck_n, .ddr3_ck_p, .ddr3_cke,
