@@ -22,7 +22,8 @@
 // divergence stack is Stage 1 (the default, and the KC_TARGET=top board
 // build), plus HAS_RAY_UNIT = 1 Stage 2; LANES = 1 without either is Stage 0
 // (KC_TARGET=top_s0). HAS_QRCP = 1 adds the per-lane QRCP unit (D22, Stage 2
-// top first).
+// top first). FB_COUNT = 3 gives the display three framebuffers (triple
+// buffering, D24; the Stage 2 builds) instead of two.
 //
 // led is the error LED: the core halted on an illegal instruction, a
 // misaligned access or a fetch outside instruction memory. The MIG owns the
@@ -36,7 +37,8 @@ module top #(
     parameter string TEX_HEX  = "textures.hex",
     parameter string PAL_HEX  = "palette.hex",
     parameter bit    HAS_RAY_UNIT  = 1'b0,
-    parameter bit    HAS_QRCP      = 1'b0
+    parameter bit    HAS_QRCP      = 1'b0,
+    parameter int    FB_COUNT      = 2
 ) (
     input  logic        clk,            // E3,  100 MHz
     input  logic        ck_rst,         // C2,  active low
@@ -144,7 +146,7 @@ module top #(
     // ------------------------------------------------------------------
     // Display
     // ------------------------------------------------------------------
-    display #(.PAL_HEX(PAL_HEX)) u_display (
+    display #(.PAL_HEX(PAL_HEX), .FB_COUNT(FB_COUNT)) u_display (
         .clk_core, .rst_core, .clk_pix, .rst_pix,
         .fb_we, .fb_re, .fb_addr, .fb_wdata, .fb_rdata,
         .pal_we, .pal_addr, .pal_wdata,

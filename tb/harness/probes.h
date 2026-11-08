@@ -20,7 +20,11 @@
 #define KC_FB_MODE(d) ((d).rootp->KC_TOP_DOT(u_display__DOT__fb_mode))
 
 // rtl/display/framebuffer.sv: buffer b, bank k (g_buf[b].g_bank[k].mem), 19 x 4096 B.
-// The core writes buffer !front_sel_core, so that is the one an accepted swap presents.
+// The core writes buffer draw_sel_core, so that is the one an accepted swap presents.
+// KC_FB_COUNT (default 2) is the top's FB_COUNT (mk/bench.mk passes it).
+#ifndef KC_FB_COUNT
+#define KC_FB_COUNT 2
+#endif
 #define KC_FB_MEM(d, b, k) \
     ((d).rootp->KC_TOP_DOT(u_display__DOT__u_fb__DOT__g_buf__BRA__##b##__KET____DOT__g_bank__BRA__##k##__KET____DOT__mem))
 #define KC_FB_BUFFER(d, b) { \
@@ -29,16 +33,21 @@
     &KC_FB_MEM(d, b, 8)[0],  &KC_FB_MEM(d, b, 9)[0],  &KC_FB_MEM(d, b, 10)[0], &KC_FB_MEM(d, b, 11)[0], \
     &KC_FB_MEM(d, b, 12)[0], &KC_FB_MEM(d, b, 13)[0], &KC_FB_MEM(d, b, 14)[0], &KC_FB_MEM(d, b, 15)[0], \
     &KC_FB_MEM(d, b, 16)[0], &KC_FB_MEM(d, b, 17)[0], &KC_FB_MEM(d, b, 18)[0]}
-#define KC_FB_FRONT_SEL(d) ((d).rootp->KC_TOP_DOT(u_display__DOT__front_sel_core))
+#define KC_FB_DRAW_SEL(d) ((d).rootp->KC_TOP_DOT(u_display__DOT__draw_sel_core))
 #define KC_PALETTE_MEM(d) ((d).rootp->KC_TOP_DOT(u_display__DOT__u_pal__DOT__mem))
 
 static_assert(sizeof(KC_FB_MEM(*static_cast<Vkc*>(nullptr), 0, 0)) == 4096, "framebuffer bank layout changed");
 static_assert(sizeof(KC_PALETTE_MEM(*static_cast<Vkc*>(nullptr))) == 256 * sizeof(uint16_t), "palette layout changed");
 
-// Back buffer and palette as the RTL holds them now.
+// Draw buffer and palette as the RTL holds them now.
 inline FrameView kc_frame_view(Vkc& d) {
+#if KC_FB_COUNT == 3
+    static const std::array<std::array<const uint8_t*, 19>, 3> banks{
+        {KC_FB_BUFFER(d, 0), KC_FB_BUFFER(d, 1), KC_FB_BUFFER(d, 2)}};
+#else
     static const std::array<std::array<const uint8_t*, 19>, 2> banks{{KC_FB_BUFFER(d, 0), KC_FB_BUFFER(d, 1)}};
-    return FrameView{banks[KC_FB_FRONT_SEL(d) ? 0 : 1].data(), 4096, &KC_PALETTE_MEM(d)[0]};
+#endif
+    return FrameView{banks.at(KC_FB_DRAW_SEL(d)).data(), 4096, &KC_PALETTE_MEM(d)[0]};
 }
 
 #define KC_ERR(d) ((d).rootp->KC_TOP_DOT(u_soc__DOT__u_mmio__DOT__err))

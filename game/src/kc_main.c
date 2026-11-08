@@ -8,6 +8,7 @@
 #include "arena.h"
 #include "entity.h"
 #include "kc_lanes.h"
+#include "kc_budget.h"     // its static asserts check the 192 KB budget on every build
 
 #ifndef KC_MAX_STEPS
 #define KC_MAX_STEPS 64        // Stage 0 plan says 16 for 1-3 fps; raise as the hardware gets faster
