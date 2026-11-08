@@ -193,7 +193,7 @@ class Orchestrator:
             c.state = "VERIFYING"
             await self.hud(c)
             for x, z, y, t in random.sample(c.placed, min(8, len(c.placed))):
-                _, p = await self.send(cr6.Q_BLOCKS, struct.pack("<HHBBB", x, z, y, 0, 0))
+                _, p = await self.send(cr6.Q_BLOCKS, struct.pack("<HHBB", x, z, y, 0))   # one cell
                 if not p or p[0] & 15 != t:
                     return await self.refund(c, f"spot check failed at {x},{z},{y}")
         except asyncio.TimeoutError:

@@ -180,11 +180,12 @@ class FakeChip:
                 self.send(seq, R_PLAYER, struct.pack("<HHB", px * 16, pz * 16, py * 8))
                 return 0
             if op == Q_BLOCKS:
-                x, z, y, sxz, sy = struct.unpack("<HHBBB", p)
-                cells = [self.block(x + i, z + k, y + j) for j in range((sy & 15) + 1)
-                         for k in range((sxz >> 4) + 1) for i in range((sxz & 15) + 1)]
-                if len(cells) > 64:
+                # x, z, y, (sx-1) | (sy-1) << 2 | (sz-1) << 4; nibbles x fastest, then z, then y
+                x, z, y, s = struct.unpack("<HHBB", p)
+                if s & 0xC0:
                     return 2
+                cells = [self.block(x + i, z + k, y + j) for j in range((s >> 2 & 3) + 1)
+                         for k in range((s >> 4) + 1) for i in range((s & 3) + 1)]
                 cells += [0] * (len(cells) & 1)
                 self.send(seq, R_BLOCKS, bytes(a | b << 4 for a, b in zip(cells[::2], cells[1::2])))
                 return 0
