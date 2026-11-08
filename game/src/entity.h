@@ -12,6 +12,7 @@ enum { ENT_TRADER, ENT_CONTRACTOR, ENT_CHICKEN, ENT_ZOMBIE, ENT_KINDS };
 typedef struct {
     q16 lo[3], hi[3];           // eye-relative: window-relative bounds minus the camera origin
     int16_t sx0, sy0, sx1, sy1; // Inclusive; sx0 > sx1 means off screen.
+    q16 zlim;                   // no ray hits the box at t <= zlim (nearest depth minus a margin)
     uint8_t color;
     uint8_t pad[3];
 } ent_box;

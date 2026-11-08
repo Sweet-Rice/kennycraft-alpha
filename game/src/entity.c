@@ -1,5 +1,6 @@
 #include "entity.h"
 #include "kc_hal.h"
+#include "kc_lanes.h"
 #include "render.h"
 #include "chunks.h"
 #include "blocks.h"
@@ -14,6 +15,7 @@ int32_t ent_nrects;
 int16_t ent_span[ENT_ROWS][2];
 uint32_t ent_bits[ENT_ROWS][3];
 static uint8_t ent_rect_box[ENT_MAX][2];  // [first, end) of each rect's boxes in ent_boxes
+static q16 ent_rect_zlim[ENT_MAX];        // min zlim of the rect's on-screen boxes
 
 enum { C_BLACK = 0, C_GRASS_L = 1, C_GRASS_D = 2, C_DIRT_L = 3, C_DIRT_D = 4,
        C_STONE_D = 6, C_PLANKS = 8, C_SAND = 9, C_BRICK = 11, C_WOOD_L = 13, C_WHITE = 14 };
@@ -114,8 +116,16 @@ static void screen_rect(ent_box *b) {
     // so no ray can reach the box. Cull it (the margin covers qmul rounding) instead of
     // letting the near-plane case below cover the whole screen with it.
     int32_t behind = 0;
-    for (int32_t k = 0; k < 8; k++)
-        behind += pz[0][k & 1] + pz[1][(k >> 1) & 1] + pz[2][(k >> 2) & 1] < -16;
+    q16 zmin = 0x7FFFFFFF;
+    for (int32_t k = 0; k < 8; k++) {
+        q16 z = pz[0][k & 1] + pz[1][(k >> 1) & 1] + pz[2][(k >> 2) & 1];
+        behind += z < -16;
+        zmin = imin(zmin, z);
+    }
+    // Every ray's forward component is 1 (right and up are perpendicular to forward), so a hit
+    // on the box has t >= its nearest corner depth. The margin (1/16 of the depth plus a
+    // quarter block) covers qmul rounding in z and in the ray directions.
+    b->zlim = zmin - (zmin >> 4) - Q16(0.25);
     if (behind == 8) { b->sx0 = 1; b->sx1 = 0; b->sy0 = b->sy1 = 0; return; }
     int32_t x0 = 4096, y0 = 4096, x1 = -4096, y1 = -4096;
     for (int32_t k = 0; k < 8; k++) {
@@ -152,6 +162,7 @@ void entity_prepare(void) {
         int16_t *u = ent_rects[ent_nrects];
         u[0] = u[1] = 4096; u[2] = u[3] = -1;
         int32_t first = ent_nboxes;
+        q16 zl = 0x7FFFFFFF;
         for (int32_t j = 0; j < models[kind].n; j++) {
             const ent_part *p = &models[kind].parts[j];
             int32_t x0 = p->x0, z0 = p->z0, x1 = p->x1, z1 = p->z1;
@@ -172,9 +183,11 @@ void entity_prepare(void) {
             b->color = p->color == ROBE ? models[kind].robe : p->color;
             screen_rect(b);
             if (b->sx0 > b->sx1) continue;
+            zl = imin(zl, b->zlim);
             u[0] = imin(u[0],b->sx0); u[1] = imin(u[1],b->sy0);
             u[2] = imax(u[2],b->sx1); u[3] = imax(u[3],b->sy1);
         }
+        ent_rect_zlim[ent_nrects] = zl;
         ent_rect_box[ent_nrects][0] = (uint8_t)first; ent_rect_box[ent_nrects][1] = (uint8_t)ent_nboxes;
         ent_nrects += u[0] <= u[2];
     }
@@ -252,6 +265,11 @@ uint8_t ent_composite(int32_t bx, int32_t by, q16 tdx, q16 tdy, q16 tdz, uint32_
     for (int32_t e = 0; e < ent_nrects; e++) {         // whole entity first, then its boxes
         const int16_t *u = ent_rects[e];
         if ((bx+3 < u[0]) | (bx > u[2]) | (by+1 < u[1]) | (by > u[3])) continue;
+        // Hidden: a box wins only at near < t, and near > zlim. If no lane's current nearest
+        // hit is beyond the entity, the world (or a closer entity) already covers it here.
+        // BALLOT makes the skip uniform across the lanes. Measured: a per-box check as well
+        // costs ~3% with entities in the open and saves nothing more when they are hidden.
+        if (!ballot(t > ent_rect_zlim[e])) continue;
         for (int32_t i = ent_rect_box[e][0]; i < ent_rect_box[e][1]; i++) {
             const ent_box *b = &ent_boxes[i];
             if ((bx+3 < b->sx0) | (bx > b->sx1) | (by+1 < b->sy0) | (by > b->sy1)) continue;
