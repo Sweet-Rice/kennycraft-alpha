@@ -7,9 +7,11 @@
 // op, through a store and load address, MUL under the partial mask 0x5A,
 // whose inactive lanes keep their old rd, the predicted loops, the stores
 // that leave MEM at their accept, the window bank-conflict and mixed stores
-// of slots 59 to 61, VGET of the cell right after VSET (slot 62), and the
-// instructions killed in EX by the registered redirect, slots 64 to 67). At
-// each FB_SWAP request every
+// of slots 59 to 61, VGET of the cell right after VSET (slot 62), the
+// instructions killed in EX by the registered redirect, slots 64 to 67, and
+// the LSU's registered bus request and read data, slots 68 to 72: load-use
+// at distance 1 and 2 after a store of the same word, a world store then
+// load, MMIO stores and loads in lane order). At each FB_SWAP request every
 // lane's framebuffer word must hold the store before it, not the one after.
 // Built for both cores; tracediff-core-pipe-t_pipe_stress compares their
 // retire traces, the only pipelined trace coverage of VSET/VTRACE/VGET with
@@ -54,7 +56,7 @@ module t_pipe_stress_tb;
 
     initial begin
         logic [7:0]  full, odd, qm, p5a;
-        logic [31:0] a0, a1, a2, prod, base;
+        logic [31:0] a0, a1, a2, prod, base, hv;
         full = 8'((1 << ALANES) - 1);
         odd  = 8'hAA & full;
         qm   = 8'h5A & full;
@@ -120,6 +122,16 @@ module t_pipe_stress_tb;
             expect32($sformatf("lane %0d MASKALL killed in EX", l), res(l, 65), 32'h0F);
             expect32($sformatf("lane %0d DIF killed in EX, run once", l), res(l, 66), 32'(full));
             expect32($sformatf("lane %0d loop head SW killed in EX", l), res(l, 67), 32'd1);
+            expect32($sformatf("lane %0d dmem SW, LW, use at 1 and 2", l), res(l, 68),
+                     32'(3 * l + 32'h1C6));
+            hv = 32'hFFFF_EDCB + 32'(l);   // LH of the stored halfword
+            expect32($sformatf("lane %0d fb SH, LH, use at 1 and 2", l), res(l, 69),
+                     (32'd0 - hv) + (hv ^ 32'(l + 5)));
+            expect32($sformatf("lane %0d world SB, LBU, use", l), res(l, 70), 32'(l + 32'h13));
+            expect32($sformatf("lane %0d MMIO SW, LW in lane order", l), res(l, 71),
+                     32'(32'hF1 + ALANES - 1));
+            expect32($sformatf("lane %0d MMIO LW, SW, LW", l), res(l, 72),
+                     32'(32'hF1 + 2 * (ALANES - 1) + l));
         end
         expect32("FB_SWAP requests (fast, slow)", 32'(swap_req_count), 32'd2);
         expect32("mask at the end", 32'(`KC_CORE.mask), 32'd1);

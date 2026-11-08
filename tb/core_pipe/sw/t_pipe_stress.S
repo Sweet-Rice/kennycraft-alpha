@@ -53,7 +53,15 @@
    a store, an illegal word, a mask writer, VGET while a walk is in flight
    (which would hold EX) and a predicted target's store after the last
    pass of a loop, each in that EX slot, must have no effect; after a mask
-   writer or DIF (redirect to pc + 4) the killed DIF/DENDIF runs once. */
+   writer or DIF (redirect to pc + 4) the killed DIF/DENDIF runs once.
+   The LSU's registered bus request and read data (rtl/core_pipe/
+   lsu_pipe.sv), slots 68 to 72: a store, then a load of the same word whose
+   value is used at distance 1 and 2 (dmem LW, framebuffer LH), a world
+   store then a load of the same byte used right after (the byte is
+   restored, so later walks see the same world), and MMIO stores and loads
+   in lane order (SLOT_VALID, a plain register in the testbench's
+   chunk-engine model), a loaded MMIO value used right after as store
+   data. */
 #include "kc_test.h"
 #include "kc_lanes.h"
 #define VSET(f, rs)    .insn r 0x2B, 0, f, x0, rs, x0
@@ -66,6 +74,7 @@
 /* s11 |= res[k] ^ reg (t6 scratch) */
 #define CHECK(k, reg)  lw t6, RES(k)(s2); SLOW; xor t6, t6, reg; SLOW; or s11, s11, t6
 #define CHECK2(k, reg) lw t6, RES2(k)(gp); SLOW; xor t6, t6, reg; SLOW; or s11, s11, t6
+#define SLOT_VALID     0x38                 /* MMIO chunk-engine register */
 
     .section .text.start
     .globl _start
@@ -598,6 +607,50 @@ fast_jal_link:
     li    s11, 0xbad            /* killed in ID */
 35: VGET(a1, 3)
     sw    a1, RES(63)(s2)
+    /* the LSU's registered bus request and read data: store, then load of
+       the same word, used at distance 1 and 2 (dmem, framebuffer) */
+    addi  t0, s0, 0xE1
+    sw    t0, 224(s4)
+    lw    t1, 224(s4)
+    addi  t2, t1, 1             /* distance 1 */
+    lw    t3, 224(s4)
+    addi  t4, s0, 3
+    add   t5, t3, t4            /* distance 2 */
+    add   t2, t2, t5
+    sw    t2, RES2(68)(gp)
+    li    t0, -0x1235
+    add   t0, t0, s0
+    sh    t0, 96(s5)
+    lh    t1, 96(s5)
+    sub   t2, x0, t1            /* distance 1 */
+    lh    t3, 96(s5)
+    addi  t4, s0, 5
+    xor   t5, t3, t4            /* distance 2 */
+    add   t2, t2, t5
+    sw    t2, RES2(69)(gp)
+    /* world store, then a load of the same byte used right after; the
+       byte's old value is restored */
+    li    a0, 0x20000100
+    add   a0, a0, s0
+    lbu   a1, 0(a0)
+    addi  t0, s0, 3
+    sb    t0, 0(a0)
+    lbu   t1, 0(a0)
+    addi  t2, t1, 0x10
+    sb    a1, 0(a0)
+    sw    t2, RES2(70)(gp)
+    /* MMIO in lane order: every lane stores, every lane loads the highest
+       lane's value, uses it as store data right away, loads again */
+    li    a0, MMIO_BASE
+    addi  t0, s0, 0xF1
+    sw    t0, SLOT_VALID(a0)
+    lw    t2, SLOT_VALID(a0)
+    add   t1, t2, s0
+    sw    t1, SLOT_VALID(a0)
+    lw    t3, SLOT_VALID(a0)
+    add   t3, t3, s0
+    sw    t2, RES2(71)(gp)
+    sw    t3, RES2(72)(gp)
 
     /* ---------------- slow pass ---------------- */
     li    s9, 0
@@ -1163,6 +1216,71 @@ fast_jal_link:
     VGET(a1, 3)
     SLOW
     CHECK(63, a1)
+    addi  t0, s0, 0xE1
+    SLOW
+    sw    t0, 224(s4)
+    SLOW
+    lw    t1, 224(s4)
+    SLOW
+    addi  t2, t1, 1
+    lw    t3, 224(s4)
+    addi  t4, s0, 3
+    SLOW
+    add   t5, t3, t4
+    SLOW
+    add   t2, t2, t5
+    SLOW
+    CHECK2(68, t2)
+    li    t0, -0x1235
+    SLOW
+    add   t0, t0, s0
+    SLOW
+    sh    t0, 96(s5)
+    SLOW
+    lh    t1, 96(s5)
+    SLOW
+    sub   t2, x0, t1
+    lh    t3, 96(s5)
+    addi  t4, s0, 5
+    SLOW
+    xor   t5, t3, t4
+    SLOW
+    add   t2, t2, t5
+    SLOW
+    CHECK2(69, t2)
+    li    a0, 0x20000100
+    SLOW
+    add   a0, a0, s0
+    addi  t0, s0, 3
+    SLOW
+    lbu   a1, 0(a0)
+    SLOW
+    sb    t0, 0(a0)
+    SLOW
+    lbu   t1, 0(a0)
+    SLOW
+    addi  t2, t1, 0x10
+    SLOW
+    sb    a1, 0(a0)
+    SLOW
+    CHECK2(70, t2)
+    li    a0, MMIO_BASE
+    addi  t0, s0, 0xF1
+    SLOW
+    sw    t0, SLOT_VALID(a0)
+    SLOW
+    lw    t2, SLOT_VALID(a0)
+    SLOW
+    add   t1, t2, s0
+    SLOW
+    sw    t1, SLOT_VALID(a0)
+    SLOW
+    lw    t3, SLOT_VALID(a0)
+    SLOW
+    add   t3, t3, s0
+    SLOW
+    CHECK2(71, t2)
+    CHECK2(72, t3)
 
     li    t1, 1
     MASKSET(t1)
