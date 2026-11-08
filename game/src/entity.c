@@ -13,29 +13,28 @@ static int16_t ent_rects[ENT_MAX][4];   // x0, y0, x1, y1 inclusive: union of on
 int32_t ent_nrects;
 
 enum { C_BLACK = 0, C_GRASS_L = 1, C_GRASS_D = 2, C_DIRT_L = 3,
-       C_STONE_D = 6, C_SAND = 9, C_BRICK = 11, C_WOOD_L = 13 };
+       C_STONE_D = 6, C_PLANKS = 8, C_SAND = 9, C_BRICK = 11, C_WOOD_L = 13, C_WHITE = 14 };
 #define ROBE 15
 // Local coordinates in sixteenths of a block; +z is the front.
 typedef struct { int8_t x0, y0, z0, x1, y1, z1; uint8_t color; } ent_part;
-static const ent_part villager_parts[7] = {
-    {-4, 0,-3, 4,24,3,ROBE},
-    {-4,24,-4, 4,34,4,C_DIRT_L},
-    {-1,25, 4, 1,29,6,C_DIRT_L},
-    {-3,29, 4,-1,30,5,C_GRASS_D},
-    { 1,29, 4, 3,30,5,C_GRASS_D},
-    {-6,15, 3, 6,19,7,ROBE},
-    {-2,15, 7, 2,19,8,C_DIRT_L},
+// The face is painted on the skull: nose and eyes are thin boxes whose fronts lie in the
+// head's front plane. ent_box_hit keeps the first box on a tie, so they come before the
+// head, and the nose before the eyes so it splits the eye bar into two eyes.
+static const ent_part villager_parts[5] = {
+    {-4, 0,-3, 4,24,3,ROBE},          // robe: torso and legs
+    {-1,25, 3, 1,29,4,C_DIRT_D},      // nose
+    {-3,28, 3, 3,29,4,C_BLACK},       // eyes
+    {-4,24,-4, 4,33,4,C_DIRT_L},      // head
+    {-7,16,-3, 7,20,7,ROBE},          // folded arms, back through the torso to join at the sides
 };
-static const ent_part pig_parts[9] = {
-    {-5, 6,-8, 5,14, 8,C_SAND},
-    {-4, 7, 8, 4,15,14,C_SAND},
-    {-2, 8,14, 2,11,15,C_BRICK},
-    {-4,12,14,-2,13,15,C_BLACK},
-    { 2,12,14, 4,13,15,C_BLACK},
-    {-5, 0, 5,-2, 6, 8,C_SAND},
-    { 2, 0, 5, 5, 6, 8,C_SAND},
-    {-5, 0,-8,-2, 6,-5,C_SAND},
-    { 2, 0,-8, 5, 6,-5,C_SAND},
+static const ent_part chicken_parts[7] = {
+    {-3, 4,-4, 3,10, 4,C_WHITE},     // body
+    {-2,10, 1, 2,15, 5,C_WHITE},     // head
+    {-1,15, 2, 1,17, 4,C_BRICK},     // comb
+    {-1,12, 5, 1,13, 7,C_PLANKS},    // beak
+    {-1,10, 4, 1,12, 6,C_BRICK},     // wattle
+    {-2, 0,-1,-1, 4, 0,C_WOOD_L},    // legs
+    { 1, 0,-1, 2, 4, 0,C_WOOD_L},
 };
 static const ent_part zombie_parts[7] = {
     {-4, 0,-2, 4,12, 2,C_BLACK},
@@ -48,7 +47,7 @@ static const ent_part zombie_parts[7] = {
 };
 static const struct { const ent_part *parts; uint8_t n, robe; } models[ENT_KINDS] = {
     {villager_parts,7,C_BRICK}, {villager_parts,7,C_WOOD_L},
-    {pig_parts,9,0}, {zombie_parts,7,0}
+    {chicken_parts,7,0}, {zombie_parts,7,0}
 };
 
 int32_t entity_add(int32_t kind, q16 x, q16 y, q16 z, int32_t facing) {

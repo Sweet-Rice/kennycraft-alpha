@@ -23,6 +23,7 @@ Work in steps with the tools, in this order:
 3. quote a fair price (the tool tells you the guild's rule price) with one short sentence for the player.
 4. If the player accepts: build, then inspect. If inspect finds mistakes, build again, then inspect.
 5. request_payment once inspect passes. If something goes wrong you can't fix, cancel.
+Only tool calls do anything: the player sees your price only through quote.
 Keep builds within the player's budget. Finish with one short sentence to the player."""
 
 
@@ -60,7 +61,7 @@ class Contract:
         ox, oz = origin
         grounds = sorted(chip.ground(ox + x, oz + z) for x in range(zone[0]) for z in range(zone[2]))
         self.origin = (ox, grounds[len(grounds) // 2] + 1, oz)     # floor = median ground + 1
-        self.state = "SURVEY"
+        self.state, self.supplied = "SURVEY", {}
         self.target, self.cmds, self.price, self.builds = {}, [], 0, 0
         self.rnd = random.Random(seed)
 
@@ -93,15 +94,24 @@ class Contract:
             target[(ax, ay, az)] = b
         if not errors and not target:
             errors.append("the plan changes nothing")
+        solid = lambda c: target.get(c, self.chip.get(*c)) != 0          # after the build
+        if not errors and not any(b and solid((x, y - 1, z)) and (x, y - 1, z) not in target
+                                  for (x, y, z), b in target.items()):
+            errors.append("the build floats: nothing in it rests on the ground. Start the bottom layer at y = 0.")
         if errors:
             return {"ok": False, "errors": errors[:8]}
         self.target, self.cmds, self.state = target, compress(target), "PLANNED"
         counts = {}
         for b in target.values():
             counts[BLOCKS[b]] = counts.get(BLOCKS[b], 0) + 1
-        self.rule = bankmod.rule_price(len(target) - breaks, breaks)
+        # Blocks the player already owns (bought from the trader) are used first: half off each.
+        have = getattr(self.bank, "materials", lambda: {})()
+        self.supplied = {k: min(n, have.get(k, 0)) for k, n in counts.items() if k != "air" and have.get(k)}
+        discount = sum(self.supplied.values()) // 2
+        self.rule = max(5, bankmod.rule_price(len(target) - breaks, breaks) - discount)
         return {"ok": True, "name": name, "cells": counts, "commands": len(self.cmds),
-                "rule_price_kcn": self.rule, "player_balance_kcn": self.bank.balance("player")}
+                "rule_price_kcn": self.rule, "player_materials_used": self.supplied,
+                "materials_discount_kcn": discount, "player_balance_kcn": self.bank.balance("player")}
 
     def quote(self, price=0, message=""):
         if self.state != "PLANNED":
@@ -109,6 +119,7 @@ class Contract:
         p = bankmod.clamp_price(price, self.rule, self.bank.balance("player"))
         if p is None:
             return {"error": "the player can't afford this plan; make it smaller", "rule_price_kcn": self.rule}
+        self.offer = p                  # the chip's quote prompt shows it while ask() waits
         if not self.ask(f"{message} Price: {p} KCN. Accept?"):
             self.state = "DECLINED"
             return {"accepted": False, "price_kcn": p}
@@ -146,6 +157,8 @@ class Contract:
         if self.state != "VERIFIED":
             return {"error": "inspect must pass first"}
         self.bank.release(self.id, self.price)
+        if self.supplied:               # ponytail: a refunded job keeps the player's blocks
+            self.bank.use_materials(self.supplied)
         self.state = "PAID"
         return {"paid_kcn": self.price, "fee_kcn": round(self.price * bankmod.FEE)}
 
@@ -172,17 +185,28 @@ class Contract:
             return {"error": f"bad arguments: {e}"}
 
 
-def run(request, contract, chat, max_steps=20, log=print):
-    """The agent loop. Returns the model's last message to the player."""
-    messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": request}]
+NEXT = {"SURVEY": "submit_plan", "PLANNED": "quote", "FUNDED": "build", "BUILT": "inspect",
+        "VERIFIED": "request_payment"}      # the tool a stalled contract is waiting on
+
+
+def run(request, contract, chat, max_steps=20, log=print, system=SYSTEM, tools=TOOLS, next_tool=NEXT):
+    """The agent loop (the builder's by default; the banker passes its own prompt and tools).
+    Returns the model's last message to the player."""
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": request}]
+    nudges = 0
     for _ in range(max_steps):
-        reply = chat(messages, TOOLS)
+        reply = chat(messages, tools)
         messages.append({"role": "assistant", "content": reply["content"], "tool_calls": [
             {"id": c["id"], "type": "function",
              "function": {"name": c["name"], "arguments": json.dumps(c["args"])}} for c in reply["tool_calls"]]
             or None})
         if not reply["tool_calls"]:
-            break
+            nxt = next_tool.get(contract.state)
+            if not nxt or nudges >= 2:
+                break
+            nudges += 1         # it said what it would do instead of doing it
+            messages.append({"role": "user", "content": f"Don't tell me, use the tools: call {nxt} now."})
+            continue
         for c in reply["tool_calls"]:
             result = contract.call(c["name"], c["args"])
             log(f"  {c['name']}({json.dumps(c['args'])[:120]}) -> {json.dumps(result)[:160]}")

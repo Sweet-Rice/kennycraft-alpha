@@ -1,6 +1,6 @@
 """Mob brains at two sizes.
 
-- Pigs and zombies: rules only (wander, flee, chase). A model adds lag and nothing visible.
+- Chickens and zombies: rules only (wander, flee, chase). A model adds lag and nothing visible.
 - Villagers (trader, contractor): a small Nemotron Nano agent. One JSON decision per call,
   two villagers per call, with a short memory. Any timeout, error or bad answer falls back
   to the rules, so the game never waits on the model.
@@ -48,7 +48,7 @@ def rule_decision(mob, pos, player, rnd):
     dist = math.hypot(dx, dz)
     if mob.kind == KINDS["zombie"] and dist < 12:
         return {"act": "chase", "dx": dx, "dz": dz}
-    if mob.kind == KINDS["pig"] and dist < 3:
+    if mob.kind == KINDS["chicken"] and dist < 3:
         k = 4 / max(dist, 0.1)
         return {"act": "flee", "dx": -dx * k, "dz": -dz * k}
     if mob.kind in VILLAGERS and dist < 5 and not mob.greeted:
@@ -97,6 +97,7 @@ class MobManager:
         self.mobs = {}
         self.busy = set()               # ids on a job (the builder drives them); brains skip these
         self.stats = {"model": 0, "rules": 0, "fallback": 0, "moves": 0}
+        self.context = ""               # what's going on in the game, for the villagers to react to
 
     def spawn(self, kind, x, z):
         eid = next((i for i in range(8) if i not in self.mobs), None)
@@ -131,7 +132,7 @@ class MobManager:
                          f"home ({m.home[0] - player[0]:+.0f},{m.home[1] - player[1]:+.0f}), "
                          f"recently: {', '.join(m.memory) or 'nothing'}")
         reply = self.chat([{"role": "system", "content": MOB_SYSTEM},
-                           {"role": "user", "content": "\n".join(lines)}])
+                           {"role": "user", "content": "\n".join(([self.context] if self.context else []) + lines)}])
         ds = [d for d in reply.get("decisions", []) if isinstance(d, dict)]
         ids = [m.id for m in group]
         if {d.get("id") for d in ds} <= set(ids):

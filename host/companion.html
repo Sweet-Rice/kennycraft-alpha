@@ -15,6 +15,7 @@
   .ONLINE { background:#1e3d2f; color:var(--ok); } .DEGRADED { background:#3d351e; color:var(--warn); }
   .OFFLINE { background:#3d221e; color:var(--bad); }
   main { display:grid; grid-template-columns:300px 1fr 380px; gap:16px; padding:16px 20px; }
+  main > section { min-width:0; }
   @media (max-width:1100px) { main { grid-template-columns:1fr; } }
   .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:16px; }
   .card h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); margin:0 0 10px; }
@@ -31,13 +32,16 @@
   input { background:#0b0d10; color:var(--text); border:1px solid var(--line); border-radius:7px; padding:7px 10px; font:inherit; }
   input[type=text] { flex:1; min-width:0; }
   canvas { width:100%; aspect-ratio:1; image-rendering:pixelated; background:#0b0d10; border-radius:8px; }
+  #balance-history { margin:14px 0 0; }
+  #balance-history h3 { font-size:12px; margin:0 0 6px; }
+  #balance-chart { display:block; height:180px; aspect-ratio:auto; image-rendering:auto; }
   .dim { color:var(--dim); } .small { font-size:12px; }
   table { width:100%; border-collapse:collapse; font-size:12.5px; }
   td { padding:5px 4px; border-bottom:1px solid var(--line); vertical-align:top; }
   a { color:var(--accent); }
   .st { font-size:11px; padding:1px 7px; border-radius:99px; background:#2a2f38; }
-  .st.RELEASED, .st.settled { color:var(--ok); } .st.REFUNDED, .st.EXPIRED { color:var(--bad); }
-  .st.queued, .st.WORKING, .st.VERIFYING, .st.QUOTED, .st.FUNDED { color:var(--warn); }
+  .st.PAID, .st.settled { color:var(--ok); } .st.REFUNDED, .st.DECLINED, .st.CANCELLED { color:var(--bad); }
+  .st.queued, .st.SURVEY, .st.PLANNED, .st.QUOTED, .st.FUNDED, .st.BUILT, .st.VERIFIED { color:var(--warn); }
   #toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--bad); color:#fff;
            padding:9px 16px; border-radius:8px; display:none; }
   .log { font:12px ui-monospace, monospace; color:var(--dim); white-space:pre-wrap; }
@@ -72,6 +76,7 @@
       <div class="row">
         <button onclick="post('/api/interact',{role:'builder'})">Builder</button>
         <button onclick="post('/api/interact',{role:'banker'})">Banker</button>
+        <button onclick="post('/api/interact',{role:'trader'})">Trader</button>
       </div>
     </div>
     <div class="card" id="worldcard"><h2>World near the player</h2><canvas id="world" width="16" height="16"></canvas>
@@ -98,7 +103,14 @@
     </div>
     <div class="card"><h2>Contracts</h2><table id="contracts"></table></div>
     <div class="card"><h2>Wallets</h2><div id="wallets" class="row small"></div>
-      <p class="small">Nessie checking: <b id="usd">…</b></p></div>
+      <figure id="balance-history">
+        <h3>Player balance observed this session</h3>
+        <canvas id="balance-chart" role="img" aria-label="Session player KCN balance history" aria-describedby="balance-caption"></canvas>
+        <figcaption id="balance-caption" class="small dim">Waiting for the first player balance.</figcaption>
+      </figure>
+      <p class="small">Nessie checking: <b id="usd">…</b></p>
+      <p class="small">Your materials: <span id="items">none</span></p></div>
+    <div class="card"><h2>Villagers</h2><div id="speech" class="small"></div><div id="brains" class="dim small"></div></div>
     <div class="card"><h2>Host log</h2><div id="log" class="log"></div></div>
   </section>
 
@@ -112,6 +124,57 @@ const COLORS = {1:'#5a9e3a',2:'#8b5a2b',3:'#8a8a8a',4:'#6e6e6e',5:'#6b4a2a',6:'#
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let state = null;
+const balanceHistory = [];
+
+function observeBalance(balance) {
+  if (!Number.isSafeInteger(balance) || balance < 0 ||
+      balanceHistory.at(-1)?.balance === balance) return;
+  balanceHistory.push({t:Date.now(), balance});
+  if (balanceHistory.length > 120) balanceHistory.shift();
+  $('balance-caption').textContent = `${balanceHistory.length} observation${balanceHistory.length === 1 ? '' : 's'} · current ${balance} KCN · game ledger (includes queued payments)`;
+  drawBalance();
+}
+
+function drawBalance() {
+  const cv = $('balance-chart'), {width, height} = cv.getBoundingClientRect();
+  if (!width || !height) return;
+  const ratio = window.devicePixelRatio || 1;
+  cv.width = Math.round(width * ratio); cv.height = Math.round(height * ratio);
+  const g = cv.getContext('2d'), style = getComputedStyle(cv);
+  g.setTransform(ratio, 0, 0, ratio, 0, 0);
+  if (!balanceHistory.length) return;
+  g.font = '11px system-ui, sans-serif';
+  const first = balanceHistory[0], last = balanceHistory.at(-1);
+  const maximum = Math.max(1, ...balanceHistory.map(p => p.balance));
+  const left = Math.min(width / 2, Math.ceil(g.measureText(maximum.toLocaleString()).width) + 12);
+  const right = width - 12, top = 14, bottom = height - 28;
+  const x = p => balanceHistory.length === 1 ? (left + right) / 2
+    : left + (p.t - first.t) / Math.max(1, last.t - first.t) * (right - left);
+  const y = balance => bottom - balance / maximum * (bottom - top);
+  for (const tick of [0, maximum]) {
+    g.strokeStyle = style.getPropertyValue('--line');
+    g.beginPath(); g.moveTo(left, y(tick)); g.lineTo(right, y(tick)); g.stroke();
+    g.fillStyle = style.getPropertyValue('--dim'); g.textAlign = 'right';
+    g.fillText(tick.toLocaleString(), left - 6, y(tick) + 4);
+  }
+  g.strokeStyle = g.fillStyle = style.getPropertyValue('--ok'); g.lineWidth = 2;
+  if (balanceHistory.length > 1) {
+    g.beginPath(); g.moveTo(x(first), y(first.balance));
+    for (let i = 1; i < balanceHistory.length; i++) {
+      g.lineTo(x(balanceHistory[i]), y(balanceHistory[i - 1].balance));
+      g.lineTo(x(balanceHistory[i]), y(balanceHistory[i].balance));
+    }
+    g.stroke();
+  }
+  g.beginPath(); g.arc(x(last), y(last.balance), 3, 0, Math.PI * 2); g.fill();
+  g.fillStyle = style.getPropertyValue('--dim');
+  g.textAlign = balanceHistory.length === 1 ? 'center' : 'left';
+  g.fillText(new Date(first.t).toLocaleTimeString(), balanceHistory.length === 1 ? x(first) : left, height - 8);
+  if (balanceHistory.length > 1) {
+    g.textAlign = 'right';
+    g.fillText(new Date(last.t).toLocaleTimeString(), right, height - 8);
+  }
+}
 
 async function post(url, body) {
   const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body||{})});
@@ -124,10 +187,15 @@ const usd = c => c == null ? 'bank closed' : '$' + (c/100).toFixed(2);
 
 function render(s) {
   state = s;
+  observeBalance(s.wallets.player);
   $('mode').textContent = s.mode; $('mode').className = 'badge ' + s.mode;
   $('queued').textContent = s.queued ? `${s.queued} payment${s.queued>1?'s':''} waiting to settle` : 'all payments settled';
-  $('livebox').style.display = s.live ? '' : 'none';
-  $('sim').style.display = $('worldcard').style.display = s.live ? 'none' : '';
+  $('livebox').style.display = s.live || s.board ? '' : 'none';
+  $('sim').style.display = $('worldcard').style.display = s.live || s.board ? 'none' : '';
+  if (s.board) {                   // the board draws on its own monitor; this box only takes keys
+    $('livebox').querySelector('h2').textContent = 'KennyCraft (Arty board over UART)';
+    img.alt = 'Click here, then play on the board’s monitor'; img.style.minHeight = '120px';
+  }
   if (s.hud) {
     $('kcn').textContent = s.hud.kcn;
     $('quote').innerHTML = s.hud.quote[0] ? `Quote #${s.hud.quote[0]}: <b style="color:#e6e8eb">${s.hud.quote[1]} KCN</b>, Y/N?` : 'no quote';
@@ -138,15 +206,18 @@ function render(s) {
   }
   $('usd').textContent = usd(s.usd); $('usd2').textContent = usd(s.usd);
   $('talk').style.display = s.prompt ? '' : 'none';
-  $('talk-title').textContent = s.prompt === 'banker' ? 'Banker' : `Hire the ${s.prompt}`;
-  $('chat').style.display = s.prompt && s.prompt !== 'banker' ? '' : 'none';
+  $('talk-title').textContent = s.prompt === 'banker' ? 'Banker' : s.prompt === 'trader' ? 'Trader' : `Hire the ${s.prompt}`;
+  $('chat').style.display = s.prompt ? '' : 'none';           // the banker is a Nemotron agent too
+  $('text').placeholder = s.prompt === 'banker' ? 'turn $5 into coins and show me where my money went'
+                        : s.prompt === 'trader' ? 'I need 30 bricks for a roof, can you do a deal?'
+                                                : 'build me a small plank hut with a brick roof';
   $('bank').style.display = s.prompt === 'banker' ? '' : 'none';
   $('wallets').innerHTML = Object.entries(s.wallets).map(([w,v]) => `<span><span class="dim">${w}</span> <b>${v}</b></span>`).join(' · ');
   $('contracts').innerHTML = s.contracts.map(c => `<tr><td>#${c.id} ${c.kind}<div class="dim small">${esc(c.text)}</div>
       ${c.note ? `<div class="small" style="color:#e5604f">${esc(c.note)}</div>` : ''}</td>
       <td>${c.price} KCN<div class="dim small">rule ${c.rule}</div></td>
-      <td><span class="st ${c.state}">${c.state}</span><div class="dim small">${c.placed}/${c.total} blocks</div></td>
-      <td>${['QUOTED','FUNDED','WORKING','VERIFYING'].includes(c.state) ? `<button onclick="post('/api/cancel',{id:${c.id}})">Cancel</button>` : ''}</td></tr>`).join('')
+      <td><span class="st ${c.state}">${c.state}</span><div class="dim small">${c.placed}/${c.total} blocks</div>${c.note ? `<div class="dim small">${esc(c.note)}</div>` : ''}</td>
+      <td>${['SURVEY','PLANNED','QUOTED','FUNDED','BUILT','VERIFIED'].includes(c.state) ? `<button onclick="post('/api/cancel',{id:${c.id}})">Cancel</button>` : ''}</td></tr>`).join('')
       || '<tr><td class="dim">No contracts yet. Talk to a villager.</td></tr>';
   $('ledger').innerHTML = s.ledger.map(e => `<tr><td>e${e.id} ${e.kind}${e.contract_id ? ` <span class="dim">KC#${e.contract_id}</span>` : ''}
       <div class="dim small">${e.from_wallet} → ${e.to_wallet}</div></td><td><b>${e.amount}</b></td>
@@ -154,6 +225,9 @@ function render(s) {
       <td>${e.sig ? `<a href="https://explorer.solana.com/tx/${e.sig}?cluster=devnet" target="_blank" rel="noopener">tx</a>` : ''}</td></tr>`).join('')
       || '<tr><td class="dim">No payments yet.</td></tr>';
   $('log').textContent = s.log.join('\n');
+  $('items').textContent = Object.entries((s.items || {}).player || {}).map(([k, n]) => `${n} ${k}`).join(', ') || 'none';
+  $('speech').innerHTML = Object.entries(s.speech || {}).map(([r, t]) => `<div><b>${r}</b>: "${esc(t)}"</div>`).join('') || '<span class="dim">…</span>';
+  $('brains').textContent = s.brains ? `decisions: ${s.brains.model} by Nemotron Nano, ${s.brains.rules} by rules (${s.brains.fallback} fallbacks), ${s.brains.moves} moves` : '';
   if (s.world) drawWorld(s.world);
 }
 
@@ -188,6 +262,8 @@ function drawWorld(w) {
   }
   g.fillStyle = '#fff'; g.fillRect(w.player[0], w.player[1], 1, 1);
 }
+
+new ResizeObserver(drawBalance).observe($('balance-chart'));
 
 new EventSource('/events').onmessage = e => render(JSON.parse(e.data));
 </script>

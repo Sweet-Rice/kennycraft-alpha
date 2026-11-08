@@ -1,45 +1,108 @@
 # KennyCraft
 
-An 8-lane SIMD GPU grown from a multi-cycle RV32I core, running a voxel Minecraft on one Arty A7-100T. HackUTD 2026.
+An 8-lane SIMD TPU (Tai Processing Unit) grown from a multi-cycle RV32I core, running a voxel game on one Arty A7-100T. HackUTD 2026.
 
-The design doc is the [GitHub wiki](https://github.com/Sweet-Rice/kennycraft-alpha/wiki). Tai_2 wins wherever pages disagree.
+This README describes the current state of the files in this repository. The
+[GitHub wiki](https://github.com/Sweet-Rice/kennycraft-alpha/wiki) holds the
+design history; decision numbers such as D22 refer to it.
 
 ## Layout
 
 | Path | What |
 | --- | --- |
-| `rtl/` | SystemVerilog (`core/`, `soc/`, `mem/`, `display/`, `ddr/`, `top.sv`) |
-| `tb/` | Verilator testbenches; each `tb/<area>/tb.mk` registers its targets with `make check` |
-| `fpga/` | `arty.xdc`, `build.tcl` (non-project Vivado flow), per-target `sources.tcl` |
+| `rtl/core/` | Multi-cycle core (`core.sv`) and its leaf modules: lane datapath, ALU, register file, decoder, LSU, MUL, QRCP, divergence stack |
+| `rtl/core_pipe/` | 5-stage pipelined core (`core_pipe.sv`, `lane_pipe.sv`) built from `rtl/core`'s leaf modules |
+| `rtl/soc/` | `kc_soc.sv` (core, imem, dmem, textures), address decoder, MMIO, UART, byte bridge for the byte-wide regions |
+| `rtl/mem/` | `memory_arr.sv`, `world_mem.sv` |
+| `rtl/display/` | Framebuffers, palette, VGA timing, clock generator |
+| `rtl/ddr/` | DDR3 chunk store: chunk engine, DDR bridge, world remap, `ddr_clk.sv`, `ddr_model.sv` (simulation MIG), MIG project files in `mig/` |
+| `rtl/vtrace/` | VTRACE ray unit |
+| `rtl/top.sv` | Board top for the Arty A7-100T |
+| `rtl/kc_isa_pkg.sv`, `rtl/isa_decode_check.sv` | ISA package and the decode module `tb/isa` checks it through |
+| `tb/` | Testbenches; each `tb/<area>/tb.mk` registers its targets with `make check`. `tb/harness/` is the kcvl harness for the bench |
+| `sw/` | Bench software: `crt0.S`, `kc.ld`, `gpu.h`, the arena allocator, `demo/pattern.c` (default `PROG`), self-checking tests in `tests/`, `ref/vtrace_vectors.c` |
+| `scripts/` | Bench, trace, golden-shot, encoding and board scripts; `setup_kcn.sh` creates the KCN token on Solana devnet for `host/` |
+| `mk/bench.mk` | Bench targets (below), included by `tb/bench/tb.mk` |
+| `fpga/` | Non-project Vivado flow (`build.tcl`), per-target `sources.tcl`, constraints (`arty.xdc`, `top.xdc`, reference XDCs in `ref/`), `kc_mmi.tcl`, `hex2mem.py`, `patch_bit.sh`, `program.tcl` |
 | `build/` | `build.tcl` entry and `summarize.py` for the fpga-tools MCP build contract |
+| `host/` | Laptop-side banking host (Python): `kchost.py` serves `companion.html` and links to the chip over CR6 (`cr6.py`, with a fake chip), `bank.py` (SQLite ledger settled on Solana devnet), `nessie.py`, `agents.py`, `orchestrator.py`, tests `test_bank.py` and `test_contract.py`, `requirements.txt` |
+| `game/` | The game, built for the laptop and the chip; see `game/README.md` |
+| `kc_agents/` | Nemotron agents that act in the game world; see `kc_agents/README.md` |
+| `tight_setup_hold_pins.txt` | Vivado table of the 68 `u_bridge` FIFO and calibration-sync pins with tight setup and hold (clocks `clk50_unbuf`, `clk_pll_i`) |
+
+## Bank companion
+
+With the existing bank configuration in place, run `python host/kchost.py` and
+open http://127.0.0.1:8000. The Wallets card includes a native-canvas player KCN
+chart fed by the page's existing `/events` stream; no separate dashboard,
+Node.js, npm install, or extra wallet configuration is needed.
+
+The chart starts with one observation, adds a point only when the player's
+balance changes, and retains the latest 120 observations until the page reloads.
+World, HUD, speech, and settlement-only updates do not consume chart history.
+These are game-ledger balances, including queued payments, not reconstructed
+on-chain history. Existing ledger settlement badges and devnet transaction
+links remain available. The chart is read-only; companion game/bank controls
+are unchanged.
 
 ## Checks
 
 ```sh
-make check                                     # every registered Verilator testbench and lint target, JOBS (default nproc) at a time
+make check                                     # every target registered by a tb/*/tb.mk, JOBS (default nproc) at a time
+make clean                                     # removes obj_dir/ and out/
+```
+
+Not in `make check`: `make tracediff-base-core` (every tb/core test except the
+divergence-stack ones against the Stage 0 core of git ref `CORE_BASE_REF`),
+`make qrcp-exhaustive` and `make qrcp-bench-inc`. `make tb-core-t_cpi` (part of
+`make check`) also prints the measured CPI per instruction class.
+
+## FPGA
+
+```sh
+make top-hex                                   # memory images in obj_dir/top_hex/<build>, needed by the rtl/top.sv targets
 vivado -mode batch -source fpga/build.tcl      # KC_TARGET=<name> picks fpga/<name>/sources.tcl
 ```
+
+| `KC_TARGET` | Design | Images |
+| --- | --- | --- |
+| `top` (default, `fpga/sources.tcl`) | `rtl/top.sv`, Stage 1: `LANES=8`, divergence stack | `kc_chip8` |
+| `top_s0` | Stage 0: `LANES=1`, no divergence stack | `kc_chip` |
+| `top_s2` | Stage 2: Stage 1 plus `HAS_RAY_UNIT=1`, `HAS_QRCP=1`, `FB_COUNT=3` | `kc_chip8_vtrace` |
+| `top_s2p` | `top_s2` with `PIPELINED=1` | `kc_chip8_vtrace` |
+| `ddr_test` | Standalone DDR3 chunk store test (`fpga/ddr_test/`) | none |
+| `display_test` | Standalone display pattern (`fpga/display_test/`) | none |
+
+Outputs go to `FPGA_BUILD_OUT` (default `build/out/<target>`): `top.bit`,
+timing and utilization reports, `routed.dcp`, `top.mmi`, and for the
+`rtl/top.sv` targets `kc.mmi` (imem, dmem and texture BRAMs; the RAMB18
+palette is left out). `fpga/patch_bit.sh <build_dir> <hex_dir> <out_dir> [program]`
+patches new `kc_imem.hex`, `kc_dmem.hex` and `textures.hex` into a built
+`top.bit` with updatemem and, with `program`, programs it through
+`fpga/program.tcl` under the hardware lock in `FPGA_STATE` (required). A
+changed `palette.hex` needs a rebuild.
 
 ## Bench
 
 Requires the pinned RISC-V GCC (`RISCV_PREFIX`, default the AMD 2026.1
 `riscv64-unknown-elf-`; Zmmul, D5), Verilator 5.020 and Python with Pillow.
 SDL3 with `pkg-config` is optional: without it the harness builds headless and
-needs `--headless`. `make golden-check` also needs clang and `zig cc`;
-`make keys` needs pyserial and pygame. All bench outputs go under the ignored
-`out/` directory, and `make clean` removes it.
+needs `--headless`. `make golden-check` also needs clang (`GAME_CHIP_CC`) and
+`zig cc` (`HOST_CC`); `make keys` needs pyserial and pygame. All bench outputs
+go under the ignored `out/` directory.
 
 | Target | Behavior |
 | --- | --- |
-| `make check-bench` | Fixture checks, every self-checking test at Stage 0 (LANES = 1), Stage 1 (LANES = 8, divergence stack) and Stage 2 (plus the VTRACE ray unit and triple buffering, on `rtl/top.sv`), and the golden shots (part of `make check`) |
+| `make check-bench` | Fixture checks, every self-checking test at Stage 0 (LANES = 1), Stage 1 (LANES = 8, divergence stack) and Stage 2 (plus the VTRACE ray unit, QRCP and triple buffering, on `rtl/top.sv`), and the golden shots at Stages 0, 1 and 2 (part of `make check`) |
 | `make sw [PROG="sources.c"]` | Build ELF, disassembly, map and two 8192-word memory images |
 | `make arena-host` | Compile the allocator for the host with `HOST_CC` |
 | `make vl [RUN_ARGS="..."]` | Run the Verilated RTL; SDL3 window, UART and keyboard when built with SDL3 |
 | `make check-fixture` | Check RGB pixels, replay, UART, run control and VCD windows without a CPU |
 | `make test-stage0 test-ddr` | Run self-checking assembly through the chip model |
 | `make test-t_uart` | Run one named software test |
+| `make test-images` | Build the current configuration's test images without running them |
 | `make test-stage1-build` | Assemble the eight-lane tests without requiring Stage 1 RTL |
-| `make tracediff REF=<ref> [KEYS=file] [FRAMES=5]` | Build a reference worktree and compare retire traces using identical images |
+| `make tracediff REF=<ref> [KEYS=file] [FRAMES=5] [IMAGES=dir] [POLLS=1] [REF_MAKE="..."]` | Build a reference (a git ref as a worktree in `out/ref`, or a checkout directory built in place) and compare retire traces using identical images |
 | `make golden-check` | Render Kennedy's plain C shots and compare them pixel for pixel with kcvl frames |
 | `make board BIT=file.bit MMI=file.mmi [TEX_HEX=] [PAL_HEX=]` | Run `make check`, patch memories with updatemem and program through `fpga/program.tcl` |
 | `make keys [PORT=/dev/ttyUSB1]` | Forward focused-window key events at 1 Mbaud |
@@ -57,11 +120,13 @@ the fixture always has it.
 `STAGE=0 DDR=1` is the default; `STAGE=1` builds 8 lanes with the divergence
 stack. `STAGE=2` adds the ray unit (`HAS_RAY_UNIT=1`), the per-lane QRCP unit
 (`HAS_QRCP=1`), three framebuffers (`FB_COUNT=3`, triple buffering, D24; the
-test `t_fbswap3` replaces the double-buffering `t_fbswap`) and `t_vtrace`, and builds
-`CHIP_TOP=top`, the same configuration as the Stage 2 bitstream (`top_s2`).
-The default `CHIP_TOP=bench_chip` below Stage 2 wires the shipped
-RTL like `rtl/top.sv` without the ray unit, takes `LANES` and `HAS_DIV_STACK`, and
-has stub clocks (reset releases at once, `ui_clk` is the core clock).
+test `t_fbswap3` replaces the double-buffering `t_fbswap`) and the tests
+`t_vtrace` and `t_qrcp`, and builds `CHIP_TOP=top`, the same configuration as
+the Stage 2 bitstream (`top_s2`); `STAGE=2` with `CHIP_TOP=bench_chip` is an
+error. The default `CHIP_TOP=bench_chip` below Stage 2
+(`tb/harness/bench_chip.sv`) wires the shipped RTL like `rtl/top.sv` without
+the ray unit, takes `LANES` and `HAS_DIV_STACK`, always has two framebuffers,
+and has stub clocks (reset releases at once, `ui_clk` is the core clock).
 `CHIP_TOP=top` builds the board top with the same stubs. `PAL_HEX=` and `TEX_HEX=`
 load build-time assets, and frames are read from the RTL framebuffer (the
 CPU's draw buffer) and palette.
@@ -80,13 +145,18 @@ instructions or values; frame replay does not make peripheral timing identical.
 Golden shots come from the plain C renderer, never from kcvl itself; only
 `g0_spawn` is wired so far, and `golden-check` fails when it compares nothing.
 
-`make board` uses `fpga/program.tcl`, `fpga/hex2mem.py` and the `kc.mmi` from `fpga/build.tcl`, and
-Vivado from `VIVADO_BIN` (default `/home/tai/AMD/2026.1/Vivado/bin`). It holds the
+`make board` runs `scripts/board.sh program`: it patches `out/kc_imem.bin`
+and `out/kc_dmem.bin` (from `make sw`), plus `TEX_HEX`/`PAL_HEX` through
+`fpga/hex2mem.py`, into `BIT` using the `kc.mmi` from `fpga/build.tcl`, and
+programs `out/kc_patched.bit` with `fpga/program.tcl`, using Vivado from
+`VIVADO_BIN` (default `/home/tai/AMD/2026.1/Vivado/bin`). It holds the
 workspace `.fpga-state/hardware.lock` (the fpga-mcp lock; override with
-`HARDWARE_LOCK=`) while programming, and `make keys` holds it while the UART is
-open. Both post `taking-board` and `releasing-board` on issue #1 as `BOARD_AGENT`
-(default `kc-bench`). `kc.mmi` has no palette BRAM, so a `PAL_HEX` change
-needs a Vivado rebuild.
+`HARDWARE_LOCK=`) while programming, and `make keys` (`scripts/kc.py`, which
+re-runs itself through `scripts/board.sh keys`) holds it while the UART is
+open. Both refuse while another agent holds the board, and post
+`taking-board` and `releasing-board` on issue #1 as `BOARD_AGENT` (default
+`kc-bench`). `kc.mmi` has no palette BRAM, so a `PAL_HEX` change needs a
+Vivado rebuild.
 
 ## Pipelined core (P8)
 
@@ -99,7 +169,7 @@ register writes as the multi-cycle core. Only CPI changes:
 
 | Class | Cycles |
 | --- | --- |
-| ALU, LUI, AUIPC, FENCE, MASKGET, BALLOT, LANEID, not-taken branch | 1 |
+| ALU, LUI, AUIPC, FENCE, MASKGET, BALLOT, LANEID, VSET, VGET, not-taken branch | 1 |
 | MUL family | 2 |
 | Taken branch or JAL that the BTB predicts, right target | 1 |
 | Other taken branch or JAL, JALR, branch predicted taken but not taken, LMASK, MASKSET, MASKALL, DIF, DELSE, DENDIF (flush 4) | 5 |
@@ -109,13 +179,15 @@ register writes as the multi-cycle core. Only CPI changes:
 | Load or store lanes in the dmem window (0x6000 to 0x7FFF) | 1 when every lane is in its own stack's bank, else one more than the words the busiest bank serves; in parallel with the bus lanes |
 | QRCP | 8 after the previous retirement (12 after a flush) |
 | Load-use, mul-use | +1 bubble |
-| VTRACE | start until done, plus 1 |
+| VTRACE rd (rd != x0) | start until done, plus 1 |
+| VTRACE x0 | 1; the walk runs on |
 
 Branches and the branch uniform check (ERR.DIVERGE) resolve in EX; a JALR's
 target uniformity is checked in MEM from registers. The redirect is
 registered (flush 4). The mask and divergence stack are written in EX, and
 every mask writer flushes behind it. ERR halts report the faulting
-instruction's own PC.
+instruction's own PC. While a VTRACE x0 walk is in flight, the next custom-1
+instruction waits in EX, and world accesses and MMIO stores wait in MEM.
 
 - **BTB** (`rtl/core_pipe/btb.sv`): 64 entries of distributed RAM, looked up
   from the fetch PC, with 2-bit counters. A hit predicted taken fetches the
@@ -161,7 +233,9 @@ make tb-top-t_top_frame PIPELINED=1 TOP_ELF=kc_chip8_vtrace TOP_SWAPS=4
 make tracediff STAGE=2 PIPELINED=1 REF=<dir|ref> POLLS=1 KEYS=<file> IMAGES=<dir>
 ```
 
-`make check` runs every tb/core test at `PIPELINED=1` and its tracediff.
+`make check` runs every tb/core test at `PIPELINED=1` and its tracediff, the
+hazard stress test `tb/core_pipe/sw/t_pipe_stress.S` on both cores, and the
+`lint-core-pipe` matrix.
 Where a test polls MMIO or reads `CYCLES`, `tb/core_pipe/tracediff_pipe.py`
 collapses each listed poll loop and masks each listed `CYCLES` value, and
 prints both with their iteration counts and values for each core. `POLLS=1` does the
