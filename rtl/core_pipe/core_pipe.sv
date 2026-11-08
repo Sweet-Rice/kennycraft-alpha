@@ -2,10 +2,13 @@
 // Pipelining plan and GPU Core, Pipelining notes): the same ISA, ports,
 // parameters and retired-instruction trace as the multi-cycle rtl/core/core.sv,
 // in five stages. rtl/core_pipe/lane_pipe.sv is one lane's datapath; the
-// leaf modules (alu, reg_module, mul, qrcp, divstack, lsu, inst_decoder,
-// immgen) are rtl/core's, unchanged.
+// leaf modules (alu, reg_module, divstack, lsu, inst_decoder, immgen) are
+// rtl/core's, unchanged; QRCP is rtl/core_pipe/qrcp_pipe.sv and the one-cycle
+// multiplier rtl/core_pipe/mul_pipe.sv.
 //
-//   IF   imem_addr = pc_f, a register (a redirect writes it: flush 2)
+//   IF   imem_addr = pc_f, a register (a redirect writes it: flush 2), and
+//        the branch target buffer lookup of pc_f (rtl/core_pipe/btb.sv)
+//        that picks the next pc_f
 //   ID   the BRAM output (or d_hold, latched in the first cycle ID waits,
 //        since the BRAM keeps reading pc_f), decode, every lane's register
 //        read with the WB bypass. Illegal words and fetches outside imem
@@ -14,19 +17,32 @@
 //        lane, uniform checks, divergence stack, mask, lane control, ray
 //        unit configuration and start, misaligned check
 //   MEM  the only stage that takes more than one cycle; EX, ID and IF wait
-//        for it. MUL 2 cycles, QRCP 5 (load, three steps, result), VTRACE rd
+//        for it. QRCP 3 cycles (two steps, result), VTRACE rd
 //        (rd != x0) until done plus one, loads and stores with an active
 //        lane: one cycle per LSU bus access (one per group of coalesced
-//        lanes) plus one. Retirement happens here
+//        lanes) plus one, except a store whose last group goes to dmem or
+//        the framebuffer (no extra cycle); MUL and everything else 1.
+//        Retirement happens here
 //   WB   every lane writes rd
 //
 // Hazards. Forwarding MEM -> EX and WB -> EX for every lane, gated by that
-// lane's write enable, so an inactive lane sees its older value. A load in
-// EX whose rd ID reads holds ID for one cycle (load-use). Branches, JAL and
-// JALR resolve in EX (predict not taken) and flush ID and IF; so do LMASK,
+// lane's write enable, so an inactive lane sees its older value. A load or
+// MUL in EX whose rd ID reads holds ID for one cycle (load-use, mul-use):
+// neither result is forwarded from MEM, so the reader takes it from WB.
+// Branches, JAL and JALR resolve in EX and flush ID and IF; so do LMASK,
 // MASKSET, MASKALL, DIF, DELSE and DENDIF, so the mask and divergence stack
 // that EX reads are always those of every older instruction (Tai page, GPU
 // Core, Pipelining notes: read in ID, written in EX).
+//
+// Branch prediction. IF looks pc_f up in the BTB; on a hit with a counter
+// of 2 or 3 (predicted taken) the next pc_f is the entry's target, else
+// pc_f + 4. The prediction and target ride with the instruction; ID checks
+// the target against d_pc + d_imm into the e_pok flag. A conditional branch
+// or JAL in EX redirects (flush 2) only when the prediction was wrong: taken
+// without e_pok, or predicted taken and not taken. JALR, DIF/DELSE/DENDIF
+// and the mask writers are never predicted. The BTB is written the cycle
+// after EX (u_req), unless the branch halted (m_halt, a register). Only the
+// fetch path depends on it: pc, retire order and values do not.
 //
 // Asynchronous VTRACE (VTRACE x0) starts the walk in EX like VTRACE rd and
 // leaves MEM in one cycle. vt_pend is high from vt_start until vt_done; while
@@ -90,7 +106,13 @@ module core_pipe
     input  logic                 vt_done,
     input  logic [15:0]          vt_result   [LANES],
     input  logic [16:0]          vt_hit_cell [LANES],
-    input  logic [31:0]          vt_t_hit    [LANES]
+    input  logic [31:0]          vt_t_hit    [LANES],
+
+    // dmem window banks (rtl/mem/dmem_win.sv, rtl/core_pipe/win_lsu.sv)
+    output logic [3:0]           win_we    [DWIN_BANKS],
+    output logic [7:0]           win_addr  [DWIN_BANKS],
+    output logic [31:0]          win_wdata [DWIN_BANKS],
+    input  logic [31:0]          win_rdata [DWIN_BANKS]
 );
 
     if (LANES < 1 || LANES > 8) begin : g_lanes_check
@@ -103,7 +125,7 @@ module core_pipe
     // Pipeline control
     // ------------------------------------------------------------------
     logic adv;        // MEM takes EX's instruction: EX, ID and IF move on
-    logic lu;         // load-use: ID waits, EX gets a bubble
+    logic lu;         // load-use / mul-use: ID waits, EX gets a bubble
     logic flush;      // EX redirects or halts: drop ID and the fetch in flight
     logic stop;       // halted: nothing more is fetched
     logic m_valid, m_done, m_ready;
@@ -127,13 +149,21 @@ module core_pipe
     assign d_inst    = d_hold_v ? d_hold : imem_rdata;
     assign d_ready   = !d_valid || (adv && !lu);
 
-    // pc_f: a redirect writes it, otherwise it steps with ID until a halt
-    // stops fetching. A halt does not touch its select: after a halt pc_f
-    // is never decoded again.
+    // Branch target buffer: the prediction for pc_f (rtl/core_pipe/btb.sv)
+    logic        f_hit, f_pred, d_hit, d_pred, e_hit, e_pred, e_pok;
+    logic [1:0]  f_ctr, d_ctr, e_ctr;
+    logic [31:0] f_tgt, d_tgt;
+    logic        u_req, u_hit, u_taken;
+    logic [1:0]  u_ctr;
+    logic [31:0] u_tgt;
+
+    // pc_f: a redirect writes it, otherwise it steps with ID (to the
+    // predicted target or pc_f + 4) until a halt stops fetching. A halt does
+    // not touch its select: after a halt pc_f is never decoded again.
     always_ff @(posedge clk) begin
         if (rst)                     pc_f <= RESET_VEC;
         else if (e_go && e_redirect) pc_f <= e_next;
-        else if (d_ready && !stop)   pc_f <= pc_f + 32'd4;
+        else if (d_ready && !stop)   pc_f <= f_pred ? f_tgt : pc_f + 32'd4;
     end
 
     always_ff @(posedge clk) begin
@@ -147,6 +177,10 @@ module core_pipe
             if (e_halt) stop <= 1'b1;
         end else if (d_ready) begin
             d_pc     <= pc_f;
+            d_hit    <= f_hit;
+            d_pred   <= f_pred;
+            d_ctr    <= f_ctr;
+            d_tgt    <= f_tgt;
             d_valid  <= !stop;
             d_hold_v <= 1'b0;
         end else if (!d_hold_v) begin
@@ -181,7 +215,7 @@ module core_pipe
     assign d_rs1 = instr_rs1(d_inst);
     assign d_rs2 = instr_rs2(d_inst);
     assign d_opc = instr_opcode(d_inst);
-    // Operands an instruction reads, for the load-use stall only
+    // Operands an instruction reads, for the load-use / mul-use stall only
     assign d_uses1 = (d_opc != OPC_LUI) && (d_opc != OPC_AUIPC) && (d_opc != OPC_JAL);
     assign d_uses2 = (d_opc == OPC_BRANCH) || (d_opc == OPC_STORE) || (d_opc == OPC_OP);
 
@@ -227,10 +261,18 @@ module core_pipe
             e_rs1        <= d_rs1;
             e_rs2        <= d_rs2;
             e_imm        <= d_imm;
+            // Only conditional branches and JAL are predicted; e_pok: the
+            // predicted target is the real one (so EX needs no compare)
+            e_pred       <= d_pred && (d_is_branch || d_is_jal);
+            e_pok        <= d_pred && (d_is_branch || d_is_jal) && (d_pc + d_imm == d_tgt);
+            e_hit        <= d_hit;
+            e_ctr        <= d_ctr;
         end
     end
 
-    assign lu = d_valid && e_valid && e_is_load && e_r_we &&
+    // The product is computed in MEM's cycle and written to w_res, too late
+    // for the MEM -> EX forward, so a MUL's reader waits like a load's.
+    assign lu = d_valid && e_valid && (e_is_load || e_is_mul) && e_r_we &&
                 ((d_uses1 && (d_rs1 == e_rd)) || (d_uses2 && (d_rs2 == e_rd)));
 
     // ------------------------------------------------------------------
@@ -261,11 +303,16 @@ module core_pipe
     logic [31:0]      vt_y [LANES];
     logic [LANES-1:0] l_cmp, nonzero, ld_cap, mis;
     logic [31:0]      ld_value [LANES];
+    // Load data for the lanes: the bus LSU's (ld_cap / ld_value, the cycle
+    // after an access) or the dmem window's (win_srv / win_val, the cycle the
+    // lane is served). A lane is either a bus lane or a window lane.
+    logic [LANES-1:0] l_cap, win_srv, win_lane;
+    logic [31:0]      l_ldv [LANES];
+    logic [31:0]      win_val [LANES];
     logic             e_vget, e_stash, e_vtrace, e_nowr;
     logic             m_is_load, m_is_store, m_mul, m_qr, m_vt;
     logic [2:0]       m_funct3, m_cnt;
-    logic             mul_en, qr_load, qr_en, vt_wr;
-    logic [2:0]       qr_ph;
+    logic             qr_s0, qr_s1, vt_wr;
 
     // Forwarding selects, registered: fm* = m_wr && (m_rd == e_rs*) and
     // fw* = (w_rd == e_rs*) one cycle early. m_rd, m_wr's terms and e_rs*
@@ -298,14 +345,16 @@ module core_pipe
             .res_imm(e_res_imm), .is_lane(e_is_lane), .lane_y, .ray_en(e_vget),
             .ray_y(ray_y[i]), .stash(e_stash),
             .rs1(l_rs1[i]), .alu_y(l_alu[i]), .cmp(l_cmp[i]),
-            .mul_op(m_funct3[1:0]), .m_is_load, .mul_en, .m_mul, .qr_load, .qr_en, .qr_ph, .m_qr,
-            .vt_wr, .vt_y(vt_y[i]), .ld_cap(ld_cap[i]), .ld_value(ld_value[i]), .m_we(m_we[i]),
+            .mul_op(m_funct3[1:0]), .m_is_load, .m_mul, .qr_s0, .qr_s1, .m_qr,
+            .vt_wr, .vt_y(vt_y[i]), .ld_cap(l_cap[i]), .ld_value(l_ldv[i]), .m_we(m_we[i]),
             .res(l_res[i]), .m_rs2(l_mrs2[i]), .wdata(l_wdata[i]),
             .w_we(w_we[i]), .w_rd
         );
 
         assign nonzero[i] = (l_rs1[i] != 32'd0);
         assign mis[i]     = is_misaligned(e_funct3, l_alu[i][1:0]);
+        assign l_cap[i]   = ld_cap[i] || (win_srv[i] && m_is_load);
+        assign l_ldv[i]   = win_srv[i] ? win_val[i] : ld_value[i];
     end
 
     // ------------------------------------------------------------------
@@ -415,7 +464,12 @@ module core_pipe
         e_err[ERR_DIVSTACK] = !e_fault && e_divstack;
     end
 
-    assign e_redirect = take || mask_we;
+    // A branch or JAL redirects when its prediction was wrong (taken but not
+    // predicted to its target, or predicted taken and not taken). For JALR
+    // and custom-2 e_pred = e_pok = 0, so this is take || mask_we for them.
+    // e_pok and e_pred are registers, so take reaches flush through one LUT
+    // of (take, e_pok, e_pred, mask_we) where it used to be take || mask_we.
+    assign e_redirect = mask_we || (take ? !e_pok : e_pred);
 
     // Mask writers are lane control (halts only on e_fault) and custom-2
     // (e_div_halt), so the write skips the lane ALU / uniform-check cone.
@@ -495,7 +549,8 @@ module core_pipe
     // ------------------------------------------------------------------
     logic [ERR_WIDTH-1:0] m_err;
     logic [31:0]          m_pc, m_inst, m_next;
-    logic                 m_walk, m_tail, m_vt_tail, m_mem, lsu_done;
+    logic                 m_walk, m_sret, m_vt_tail, m_mem, lsu_done, lsu_idle, win_fin;
+    logic                 lsu_last, st_fast;
     logic                 retire_valid;
 
     always_ff @(posedge clk) begin
@@ -529,27 +584,59 @@ module core_pipe
             m_qr         <= HAS_QRCP && e_is_qrcp;
             m_vt         <= e_vtrace && e_r_we;   // VTRACE x0 does not wait
             m_cnt        <= '0;
-            m_tail       <= 1'b0;
+            m_sret       <= 1'b0;
             m_vt_tail    <= 1'b0;
         end else begin
             if (m_cnt != 3'd7) m_cnt <= m_cnt + 3'd1;
-            if (lsu_done)      m_tail <= 1'b1;
+            if (retire_valid)  m_sret <= 1'b1;
             if (vt_wr)         m_vt_tail <= 1'b1;
         end
     end
 
-    // MUL: the product of MEM's registered operands, ready the cycle after.
-    // QRCP: load, three steps, then the result in the fifth cycle.
-    assign mul_en  = m_valid && m_mul && (m_cnt == 3'd0);
-    assign qr_load = m_valid && m_qr && (m_cnt == 3'd0);
-    assign qr_en   = m_valid && m_qr && (m_cnt != 3'd0) && (m_cnt <= 3'd3);
-    assign qr_ph   = m_cnt - 3'd1;
+    // BTB update, the cycle after a conditional branch or JAL leaves EX:
+    // m_halt (a register) is then its e_halt, so a halting one writes
+    // nothing and the write enable stays out of the halt cone. m_pc is its PC.
+    always_ff @(posedge clk) begin
+        if (rst) u_req <= 1'b0;
+        else     u_req <= e_go && (e_is_branch || e_is_jal);
+        if (e_go) begin
+            u_tgt   <= b_target;
+            u_hit   <= e_hit;
+            u_ctr   <= e_ctr;
+            u_taken <= take;
+        end
+    end
+
+    btb u_btb (
+        .clk, .rst,
+        .f_pc(pc_f), .f_hit, .f_taken(f_pred), .f_ctr, .f_target(f_tgt),
+        .u_we(u_req && !m_halt), .u_pc(m_pc), .u_target(u_tgt), .u_hit, .u_ctr,
+        .u_taken
+    );
+
+    // QRCP: two steps (qrcp_pipe), then the result in the third cycle.
+    assign qr_s0  = m_valid && m_qr && (m_cnt == 3'd0);
+    assign qr_s1  = m_valid && m_qr && (m_cnt == 3'd1);
+
+    // A load or store is done when the bus LSU has no lane left (the cycle
+    // after its last access: a load's data arrives then) and the dmem window
+    // serves its last lanes (or has none). Both come from registers, so
+    // bus_ready never reaches m_done.
+    //
+    // A store whose last group goes to dmem or the framebuffer is done in
+    // the cycle that group goes out (st_fast): rtl/soc/decoder.sv answers
+    // ready = req for both (BRAM / strobe ports), so bus_req alone means the
+    // accept, and bus_req, last and bus_addr come from registers. bus_req
+    // carries !vt_block, so a held access never ends MEM. Loads keep the
+    // extra cycle (their data arrives then); world, texture, MMIO, palette
+    // and unmapped stores keep waiting for lsu_idle.
+    assign st_fast = m_is_store && bus_req && lsu_last &&
+                     ((bus_addr[31:28] == REG_DMEM) || (bus_addr[31:28] == REG_FB));
 
     always_comb begin
         if (m_halt)          m_done = 1'b1;
-        else if (m_mem)      m_done = m_tail;
-        else if (m_mul)      m_done = (m_cnt == 3'd1);
-        else if (m_qr)       m_done = (m_cnt == 3'd4);
+        else if (m_mem)      m_done = (lsu_idle || st_fast) && win_fin;
+        else if (m_qr)       m_done = (m_cnt == 3'd2);
         else if (m_vt)       m_done = m_vt_tail;
         else                 m_done = 1'b1;
     end
@@ -576,10 +663,21 @@ module core_pipe
         .clk, .rst,
         .start(e_lsu_go), .active(mask),
         .go(m_walk && !vt_block), .is_store(m_is_store), .funct3(m_funct3),
-        .addr(l_res), .rs2(l_mrs2), .done(lsu_done),
+        .addr(l_res), .rs2(l_mrs2), .done(lsu_done), .last(lsu_last), .skip(win_lane), .idle(lsu_idle),
         .ex_addr_lo(lsu_lo), .misaligned(lsu_mis),
         .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,
         .ld_cap, .ld_value
+    );
+
+    // The dmem window's lanes, all served in parallel, one per bank per
+    // cycle (rtl/core_pipe/win_lsu.sv).
+    win_lsu #(.LANES(LANES)) u_win (
+        .clk, .rst,
+        .start(e_lsu_go), .active(mask),
+        .go(m_valid && m_mem && !m_halt), .is_store(m_is_store), .funct3(m_funct3),
+        .addr(l_res), .rs2(l_mrs2),
+        .win(win_lane), .served(win_srv), .fin(win_fin), .value(win_val),
+        .b_we(win_we), .b_addr(win_addr), .b_wdata(win_wdata), .b_rdata(win_rdata)
     );
 
     // ------------------------------------------------------------------
@@ -619,10 +717,19 @@ module core_pipe
     logic [31:0]      retire_lane_wdata [LANES];
     /* verilator lint_on UNUSEDSIGNAL */
 
-    assign state = halted ? 4'd6 : m_walk ? 4'd4 : 4'd0;
+    assign state = halted ? 4'd6 : (m_walk && !lsu_idle) ? 4'd4 : 4'd0;
+
+    // A store retires in the cycle the bus accepts its last lane, as on the
+    // multi-cycle core, or, with no bus lane left, in the cycle the window
+    // serves its last lanes; m_sret marks it retired. A world, texture, MMIO
+    // or unmapped store then spends one more cycle in MEM; a dmem or
+    // framebuffer store leaves in its retiring cycle (st_fast implies
+    // lsu_done, so m_done and st_ret rise together and m_sret never sets).
+    logic st_ret;
+    assign st_ret = !m_sret && (lsu_done || lsu_idle) && win_fin;
 
     assign retire_valid      = m_valid && !m_halt &&
-                               ((m_mem && m_is_store) ? lsu_done : m_done);
+                               ((m_mem && m_is_store) ? st_ret : m_done);
     assign retire_pc         = m_pc;
     assign retire_inst       = m_inst;
     assign retire_lane_we    = retire_valid ? m_we : '0;

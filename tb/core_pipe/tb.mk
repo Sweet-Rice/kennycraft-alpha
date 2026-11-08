@@ -13,9 +13,9 @@
 #                           multi-cycle state machine
 #   tb-core-pipe-t_qrcp(-l8)
 #                           tb/core_pipe/t_qrcp_pipe_tb.sv: t_qrcp.S with
-#                           core_pipe's QRCP latency (6 cycles after the
-#                           previous retirement, 8 after a flush) instead
-#                           of the multi-cycle 9
+#                           core_pipe's QRCP latency (3 cycles after the
+#                           previous retirement, 5 after a flush) instead
+#                           of the multi-cycle 7
 #   tb-core-pipe-t_mmio     tb/core_pipe/t_mmio_pipe_tb.sv: t_mmio.S with its
 #                           two CYCLES checks at the pipelined MMIO LW and SW
 #                           CPI (2 and 2: deltas 2 and 42 instead of 5 and 47)
@@ -29,9 +29,16 @@
 #   tb-core-pipe-t_pipe_stress(-ref), tracediff-core-pipe-t_pipe_stress
 #                           tb/core_pipe/sw/t_pipe_stress.S: back-to-back
 #                           hazards (forwarding, load-use, MUL, QRCP,
-#                           VSET/VTRACE/VGET, mask writers, DIF/DELSE, JALR)
-#                           on the Stage 2 core with QRCP, self-checking, on
+#                           VSET/VTRACE/VGET, mask writers, DIF/DELSE, JALR,
+#                           BTB-predicted branches and JAL) on the Stage 2
+#                           core with QRCP, self-checking, on
 #                           both cores, traces compared
+#   tb-core-pipe-t_dwin(-ref), tracediff-core-pipe-t_dwin
+#                           tb/core_pipe/sw/t_dwin.S: loads and stores in the
+#                           dmem window that core_pipe keeps in distributed
+#                           RAM (bank conflicts, coalescing, mixed window and
+#                           BRAM lanes, aliases, edges, initial contents),
+#                           memory checked, on both cores, traces compared
 #   lint-core-pipe          verilator -Wall over kc_soc with PIPELINED = 1 at
 #                           LANES = 1, 3 and 8 and every HAS_DIV_STACK,
 #                           HAS_RAY_UNIT, HAS_QRCP combination, one target
@@ -163,6 +170,27 @@ tracediff-core-pipe-t_pipe_stress: tb-core-pipe-t_pipe_stress-ref tb-core-pipe-t
 	python3 tb/core_pipe/tracediff_pipe.py --tail $(CORE_PIPE_TAIL) t_pipe_stress@pipe \
 	    $(call core_bin,t_pipe_stress_tb) $(call core_bin,t_pipe_stress_tb,_pipe)
 
+# dmem window (tb/core_pipe/sw/t_dwin.S, t_dwin_tb.sv): loads and stores in
+# dmem 0x6000..0x7FFF, which core_pipe serves from distributed RAM, on both
+# cores, with the memory checked through dmem_rd and the traces compared.
+CORE_PIPE_DWIN_HEX := $(CORE_PIPE_SW_OBJ)/t_dwin_imem.hex $(CORE_PIPE_SW_OBJ)/t_dwin_dmem.hex
+CORE_HEX_t_dwin_tb := -GIMEM_HEX='"$(CURDIR)/$(CORE_PIPE_SW_OBJ)/t_dwin_imem.hex"' \
+                      -GDMEM_HEX='"$(CURDIR)/$(CORE_PIPE_SW_OBJ)/t_dwin_dmem.hex"'
+
+tb-core-pipe-t_dwin-ref: $(CORE_PIPE_DWIN_HEX)
+	@mkdir -p $(OBJ)
+	$(call CORE_PIPE_VL,t_dwin_tb,,t_dwin_tb,$(CORE_S2Q))
+	$(call core_bin,t_dwin_tb) $(PLUSARGS)
+
+tb-core-pipe-t_dwin: $(CORE_PIPE_DWIN_HEX)
+	@mkdir -p $(OBJ)
+	$(call CORE_PIPE_VL,t_dwin_tb,_pipe,t_dwin_tb,$(CORE_S2Q) $(CORE_PIPE_TB))
+	$(call core_bin,t_dwin_tb,_pipe) $(PLUSARGS)
+
+tracediff-core-pipe-t_dwin: tb-core-pipe-t_dwin-ref tb-core-pipe-t_dwin
+	python3 tb/core_pipe/tracediff_pipe.py --tail $(CORE_PIPE_TAIL) t_dwin@pipe \
+	    $(call core_bin,t_dwin_tb) $(call core_bin,t_dwin_tb,_pipe)
+
 # Lint matrix: LANES x HAS_DIV_STACK x HAS_RAY_UNIT x HAS_QRCP
 define CORE_PIPE_LINT_RULE
 CORE_PIPE_LINT += lint-core-pipe-l$(1)-d$(2)r$(3)q$(4)
@@ -179,6 +207,7 @@ lint-core-pipe: $(CORE_PIPE_LINT)
 TB_TARGETS += $(addprefix tb-core-pipe-,$(CORE_PIPE_NAMES)) lint-core-pipe \
               $(addprefix tracediff-core-pipe-,$(CORE_PIPE_NAMES)) \
               tb-core-pipe-t_pipe_stress-ref tb-core-pipe-t_pipe_stress \
-              tracediff-core-pipe-t_pipe_stress
+              tracediff-core-pipe-t_pipe_stress \
+              tb-core-pipe-t_dwin-ref tb-core-pipe-t_dwin tracediff-core-pipe-t_dwin
 
 .PHONY: $(CORE_PIPE_LINT)

@@ -1,9 +1,11 @@
 // t_branch_uniform: runs every case of sw/t_branch_uniform.S (Stage 1 rung
 // 6) from its own reset. Case 0 must not halt and must record each
 // branch's outcome as the active lanes (or lane 0 when M = 0) decided it.
-// Cases 1..9 must halt at the branch (ERR_PC = slot + 4) with ERR.DIVERGE,
-// except case 9 (uniform, misaligned target), which is ERR.ILLEGAL. With
-// one lane that can be active (LANES = 1, or LANE0_ONLY) nothing can
+// Cases 1..10 must halt at the branch (ERR_PC = slot + 4, slot + 12 for case
+// 10) with ERR.DIVERGE, except case 9 (uniform, misaligned target), which is
+// ERR.ILLEGAL. Case 10's branch is a loop back edge that diverges after nine
+// or more uniform taken passes (on core_pipe: while the BTB predicts it).
+// With one lane that can be active (LANES = 1, or LANE0_ONLY) nothing can
 // diverge, so only case 0 runs.
 module t_branch_uniform_tb;
     parameter string IMEM_HEX = "";
@@ -11,7 +13,7 @@ module t_branch_uniform_tb;
     `include "soc_harness.svh"
     `include "lane_check.svh"
 
-    localparam int NCASES = 9;
+    localparam int NCASES = 10;
 
     function automatic string case_name(input int k);
         case (k)
@@ -21,6 +23,7 @@ module t_branch_uniform_tb;
             7: return "M = 0x24, lanes 2/5 disagree";
             8: return "divergent + misaligned target";
             9: return "uniform taken, misaligned target, M = 0xF0";
+            10: return "predicted-taken back edge diverges";
             default: return "?";
         endcase
     endfunction
@@ -55,7 +58,7 @@ module t_branch_uniform_tb;
         if (ALANES > 1) begin
             for (int k = 1; k <= NCASES; k++) begin
                 logic [31:0] pc;
-                pc = 32'h100 + 32'h40 * k + 32'h4;
+                pc = 32'h100 + 32'h40 * k + ((k == 10) ? 32'hC : 32'h4);
                 run_case(k, 2000);
                 expect_halt(case_name(k), (k == 9) ? 3'b100 : 3'b001, pc);
                 $display("  case %2d  %-44s ERR=%0d ERR_PC=%08h", k, case_name(k),

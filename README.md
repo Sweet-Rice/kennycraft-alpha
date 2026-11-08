@@ -184,6 +184,21 @@ it. ERR halts report the faulting instruction's own PC. While a VTRACE x0
 walk is in flight, the next custom-1 instruction waits in EX, and world
 accesses and MMIO stores wait in MEM.
 
+- **BTB** (`rtl/core_pipe/btb.sv`): 64 entries of distributed RAM, looked up
+  from the fetch PC, with 2-bit counters. A hit predicted taken fetches the
+  target next; ID checks the target and EX redirects only on a wrong guess.
+  Only conditional branches and JAL are predicted.
+- **dmem window** (`rtl/mem/dmem_win.sv`, `rtl/core_pipe/win_lsu.sv`): dmem
+  0x6000 to 0x7FFF, where crt0 puts the eight 1 KB lane stacks, is 8 banks
+  of distributed RAM (bank = address bits 12:10) on the pipelined core, so
+  an 8-lane spill or reload is one cycle with no load tail. Same addresses
+  and values as the dmem BRAM, which still holds the rest. It is initialized
+  from `kc_dmem.hex` at build time; `fpga/patch_bit.sh` refuses images that
+  change that range.
+- **MUL** writes its product straight into WB and is forwarded from WB only
+  (mul-use bubble); **QRCP** (`rtl/core_pipe/qrcp_pipe.sv`) does its two
+  Newton steps in two MEM cycles, bit-exact with `rtl/core/qrcp.sv`.
+
 ```sh
 make tb-core-pipe-<t>          # any tb/core test on the pipelined core
 make tracediff-core-pipe-<t>   # its retire trace against the multi-cycle core

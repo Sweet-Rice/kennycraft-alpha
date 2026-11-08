@@ -101,6 +101,12 @@ module kc_soc
     logic [ERR_WIDTH-1:0] err_set;
     logic [31:0]          err_pc, pc;
 
+    // dmem window (pipelined core only): the core's per-bank port to dmem_win
+    logic [3:0]           win_we    [DWIN_BANKS];
+    logic [7:0]           win_addr  [DWIN_BANKS];
+    logic [31:0]          win_wdata [DWIN_BANKS];
+    logic [31:0]          win_rdata [DWIN_BANKS];
+
     // Both branches are named g_core so the core sits at g_core.u_core
     // whichever is built: PIPELINED = 1 builds the 5-stage core_pipe (P8,
     // rtl/core_pipe), PIPELINED = 0 the multi-cycle core.
@@ -112,7 +118,8 @@ module kc_soc
             .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,
             .err_set, .err_pc, .halted(err_led), .pc,
             .vt_cfg_we, .vt_cfg_field, .vt_lane_mask, .vt_cfg_data, .vt_start, .vt_max_steps,
-            .vt_done, .vt_result, .vt_hit_cell, .vt_t_hit
+            .vt_done, .vt_result, .vt_hit_cell, .vt_t_hit,
+            .win_we, .win_addr, .win_wdata, .win_rdata
         );
     end else begin : g_core
         core #(.LANES(LANES), .HAS_DIV_STACK(HAS_DIV_STACK), .HAS_RAY_UNIT(HAS_RAY_UNIT),
@@ -124,6 +131,18 @@ module kc_soc
             .vt_cfg_we, .vt_cfg_field, .vt_lane_mask, .vt_cfg_data, .vt_start, .vt_max_steps,
             .vt_done, .vt_result, .vt_hit_cell, .vt_t_hit
         );
+        /* verilator lint_off UNUSEDSIGNAL */
+        logic unused_win;
+        /* verilator lint_on UNUSEDSIGNAL */
+        always_comb begin
+            unused_win = 1'b0;
+            for (int b = 0; b < DWIN_BANKS; b++) begin
+                win_we[b]    = '0;
+                win_addr[b]  = '0;
+                win_wdata[b] = '0;
+                unused_win  ^= ^win_rdata[b];
+            end
+        end
     end
 
     // ------------------------------------------------------------------
@@ -140,6 +159,13 @@ module kc_soc
 
     memory_arr #(.W(32), .D(DMEM_WORDS), .INIT_FILE(DMEM_HEX)) u_dmem (
         .clk, .we(dmem_we), .addr(dmem_addr), .wdata(dmem_wdata), .rdata(dmem_rdata)
+    );
+
+    // The top 8 KB of dmem in distributed RAM for the pipelined core's
+    // lane-parallel stack accesses (kc_isa_pkg DWIN_*); unused, and removed
+    // by synthesis, with the multi-cycle core.
+    dmem_win #(.INIT_FILE(DMEM_HEX)) u_dwin (
+        .clk, .we(win_we), .addr(win_addr), .wdata(win_wdata), .rdata(win_rdata)
     );
 
     // ------------------------------------------------------------------

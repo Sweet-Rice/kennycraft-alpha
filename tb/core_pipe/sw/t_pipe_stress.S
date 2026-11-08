@@ -15,14 +15,36 @@
    VSET from just-computed values, VTRACE with a forwarded cap, VGET right
    after, VTRACE with cap 0 (no write) and under a partial mask, BALLOT,
    LMASK, MASKGET and MASKSET from forwarded values, DIF/DELSE/DENDIF on a
-   loaded condition, JALR through a loaded target and use of its link. */
+   loaded condition, JALR through a loaded target and use of its link,
+   QRCP into an ALU op, a branch, store data, another QRCP and a JALR
+   target, back-to-back QRCPs (independent and two apart), and QRCP plus a
+   dependent op under a partial mask;
+   mul-use (MUL leaves MEM in one cycle and is forwarded only from WB): a
+   MUL right before a dependent ALU op (rs1 and rs2), branch (taken and not),
+   JALR target, store data, store address, load address, QRCP and VSET;
+   MUL -> MULH -> MULHSU -> MULHU chains; MULH/MULHSU/MULHU into ALU ops;
+   dependents at distance 2; MUL and its dependent under a partial mask,
+   where the inactive lanes keep their old rd. A stale operand there takes
+   a wrong path (s11), a decoy address, or a different value.
+   Branch prediction (core_pipe's BTB): a loop back edge predicted taken
+   that falls through on its last pass, JAL in a loop (the back edge's
+   target, so two predictions in a row) with its link used right after, a
+   branch right after MASKSET whose outcome depends on the new scalar lane,
+   and a predicted back edge on a just-loaded counter whose target is a
+   load used right after.
+   Stores that leave MEM in the cycle their last group goes to dmem or the
+   framebuffer: a load of the same word right after (dmem and framebuffer,
+   one, two and eight groups), a store right after, a mask writer and a
+   taken branch right after, a framebuffer store then an FB_SWAP store (the
+   testbench checks the framebuffer at swap_req), and dmem window lanes
+   mixed with bus lanes (the window done first, and the bus done first). */
 #include "kc_test.h"
 #include "kc_lanes.h"
 #define VSET(f, rs)    .insn r 0x2B, 0, f, x0, rs, x0
 #define VTRACE(rd, rs) .insn r 0x2B, 1, 0, rd, rs, x0
 #define VGET(rd, f)    .insn r 0x2B, 2, f, rd, x0, x0
 #define SLOW           nop; nop; nop
-#define RES(k)         (256 + 32 * (k))
+#define RES(k)         (32 * (k) - 2048)   /* 0x10001000 + 4 * lane + 32 * k */
 /* s11 |= res[k] ^ reg (t6 scratch) */
 #define CHECK(k, reg)  lw t6, RES(k)(s2); SLOW; xor t6, t6, reg; SLOW; or s11, s11, t6
 
@@ -32,8 +54,8 @@ _start:
     MASKALL
     LANEID(s0)
     slli  s1, s0, 2
-    li    s2, 0x10001000
-    add   s2, s2, s1            /* per-lane scratch: s2 = 0x10001000 + 4 * lane */
+    li    s2, 0x10001800
+    add   s2, s2, s1            /* per-lane scratch: s2 = 0x10001800 + 4 * lane */
     li    s9, 0
     li    s11, 0
 
@@ -142,6 +164,293 @@ fast_link:
     li    s11, 0xbad
 5:  add   s9, s9, ra
     sw    s9, RES(14)(s2)
+    /* QRCP into an ALU op, a branch, store data, another QRCP and a JALR
+       target; back-to-back QRCPs; QRCP and a dependent op under a partial
+       mask */
+    lw    t0, 0(s2)
+    slli  t0, t0, 12              /* (lane + 7) << 12 */
+    QRCP(t1, t0)
+    addi  t2, t1, 3               /* QRCP -> ALU */
+    QRCP(t3, t0)
+    beq   t3, t1, qr_br           /* QRCP -> branch, taken in every lane */
+    li    s11, 0xbad
+qr_br:
+    QRCP(t4, t2)
+    sw    t4, RES(16)(s2)         /* QRCP -> store data */
+    QRCP(t5, t4)                  /* QRCP -> QRCP */
+    QRCP(a1, t0)                  /* back to back, independent */
+    QRCP(a0, t5)                  /* QRCP two back */
+    sw    t2, RES(15)(s2)
+    sw    t5, RES(17)(s2)
+    sw    a1, RES(18)(s2)
+    sw    a0, RES(19)(s2)
+    lui   a5, 0x40000             /* qrcp(0x40000000) = 3 (t_qrcp.S qr_exp) */
+    QRCP(a2, a5)
+    .option push
+    .option norelax               /* else ld relaxes the base to x0 (< 2 KB) */
+    jalr  ra, %lo(qr_jt - 3)(a2)  /* QRCP -> JALR, to qr_jt (below 2 KB) */
+    .option pop
+qr_link:
+    li    s11, 0xbad
+qr_jt:
+    sw    ra, RES(20)(s2)
+    lui   a3, 0x5A5A0
+    or    a3, a3, s0              /* preset, kept by the inactive lanes */
+    mv    a4, a3
+    li    a6, 0x5A
+    MASKSET(a6)
+    QRCP(a3, t0)                  /* lanes 1, 3, 4, 6 */
+    add   a4, a3, a3              /* QRCP -> ALU under the mask */
+    MASKALL
+    sw    a3, RES(21)(s2)
+    sw    a4, RES(22)(s2)
+    /* mul-use: the product reaches the WB forward only */
+    li    a0, 0x9234567B
+    xor   a0, a0, s1            /* negative, per lane */
+    li    a1, 0x6543210F
+    add   a1, a1, s0            /* positive, per lane */
+    li    a2, 0xFEDCBA98
+    sub   a2, a2, s1            /* negative, per lane */
+    li    a4, 1
+    li    t0, 0
+    mul   t0, a0, a1            /* into an ALU op, then rs2 at distance 2 */
+    add   t1, t0, a2
+    sub   t2, a2, t0
+    sw    t1, RES(23)(s2)
+    sw    t2, RES(24)(s2)
+    li    t4, 0                 /* into a branch: not taken, then taken */
+    mul   t4, a0, a1
+    bne   t4, t0, mu_br_bad
+    li    t4, 0
+    mul   t4, a1, a0
+    beq   t0, t4, mu_br_ok
+mu_br_bad:
+    li    s11, 0xbad
+mu_br_ok:
+    la    t5, mu_jr_bad         /* into a JALR target (stale: the marker) */
+    la    t4, mu_jr_ok
+    mul   t5, t4, a4
+    jalr  ra, 0(t5)
+mu_jr_bad:
+    li    s11, 0xbad
+mu_jr_ok:
+    li    t3, 0
+    mul   t3, a0, a2            /* into store data */
+    sw    t3, RES(27)(s2)
+    sw    a2, 128(s2)           /* decoy at the stale address */
+    addi  a6, s2, RES(28)
+    addi  t3, s2, 128
+    mul   t3, a6, a4            /* into a store address */
+    sw    a1, 0(t3)
+    addi  t3, s2, 128
+    mul   t3, a6, a4            /* into a load address */
+    lw    t4, 0(t3)
+    sw    t4, RES(29)(s2)
+    andi  a7, a1, 0x7FF
+    addi  a7, a7, 0x100
+    li    t3, 0x10000
+    mul   t3, a7, a7            /* into QRCP */
+    QRCP(t4, t3)
+    sw    t4, RES(30)(s2)
+    slli  a6, s0, 3
+    addi  a6, a6, 3
+    andi  a7, s0, 7
+    addi  t3, a6, 1
+    mul   t3, a6, a4            /* into VSET: start cell, step signs */
+    VSET(0, t3)
+    xori  t3, a7, 5
+    mul   t3, a7, a4
+    VSET(7, t3)
+    li    t2, 12
+    VTRACE(a3, t2)
+    VGET(a5, 0)
+    add   a3, a3, a5
+    sw    a3, RES(31)(s2)
+    mul   t0, a0, a1            /* MUL -> MUL -> MULH -> MULHSU -> MULHU */
+    mul   t1, t0, a2
+    mulh  t2, t1, t0
+    mulhsu t3, t2, a0
+    mulhu t4, a2, t3
+    sw    t4, RES(32)(s2)
+    sw    t2, RES(33)(s2)
+    mulh  t0, a0, a2            /* MULH, MULHSU, MULHU into ALU ops */
+    add   t1, t0, a1
+    mulhsu t2, a2, a1
+    sub   t3, a0, t2
+    mulhu t4, a0, a2
+    xor   t5, t4, t1
+    sw    t1, RES(34)(s2)
+    sw    t3, RES(35)(s2)
+    sw    t5, RES(36)(s2)
+    mul   t0, a1, a1            /* distance 2: rs1, store data */
+    addi  t1, a0, 1
+    xor   t2, t0, t1
+    mulhu t3, a0, a1
+    nop
+    sw    t3, RES(38)(s2)
+    sw    t2, RES(37)(s2)
+    addi  a3, s0, 0x111         /* partial mask: inactive lanes keep rd */
+    addi  a5, s0, 0x222
+    li    t3, 0x5A
+    MASKSET(t3)
+    mul   a3, a0, a1
+    add   a5, a3, s0
+    MASKALL
+    sw    a3, RES(39)(s2)
+    sw    a5, RES(40)(s2)
+    /* BTB: loop back edge, predicted taken from the second pass on, falls
+       through on the last (predicted taken: flush) */
+    li    t0, 6
+    li    t1, 0
+20: add   t1, t1, s0
+    addi  t1, t1, 3
+    addi  t0, t0, -1
+    bnez  t0, 20b
+    sw    t1, RES(41)(s2)
+    /* BTB: JAL in a loop, link used right after; the back edge's target is
+       the JAL, so the fetch follows two predictions in a row */
+    li    t0, 5
+    li    t2, 0
+21: jal   a0, 22f
+fast_jal_link:
+    li    s11, 0xbad
+22: add   t2, t2, a0
+    addi  t0, t0, -1
+    bnez  t0, 21b
+    sw    t2, RES(42)(s2)
+    /* BTB: branch right after a mask writer. Pass k runs BLT under the mask
+       1 << k, so lane k decides: taken for k = 1..3, falls through at 4 */
+    li    t5, 1
+    li    t3, 0
+    li    t4, 4
+23: MASKALL
+    addi  t3, t3, 1
+    slli  t5, t5, 1
+    MASKSET(t5)
+    blt   s0, t4, 23b
+    MASKALL
+    add   t3, t3, t5
+    sw    t3, RES(43)(s2)
+    /* BTB: predicted back edge on a just-loaded counter (load-use), whose
+       target is a load used right after */
+    li    t0, 4
+    sw    t0, 128(s2)
+    li    t1, 0
+24: lw    t3, 0(s2)
+    add   t1, t1, t3
+    lw    t4, 128(s2)
+    addi  t4, t4, -1
+    sw    t4, 128(s2)
+    lw    t0, 128(s2)
+    bnez  t0, 24b
+    sw    t1, RES(44)(s2)
+
+    /* stores that leave MEM at their last group's accept (dmem, framebuffer) */
+    li    s4, 0x800
+    add   s4, s4, s2            /* per-lane dmem word: s4 = s2 + 0x800 */
+    li    s3, 0x10001900
+    add   s3, s3, s0            /* per-lane dmem byte: 0x10001900 + lane */
+    li    s5, 0x40000100
+    add   s5, s5, s1            /* per-lane framebuffer word */
+    li    s6, 0x40000140
+    add   s6, s6, s0            /* per-lane framebuffer byte */
+    /* store, then a load of the same word: dmem eight groups, one group
+       (every lane on one word, the highest lane wins), two groups (bytes) */
+    addi  t0, s0, 0x31
+    sw    t0, 0(s4)
+    lw    t1, 0(s4)
+    li    a0, 0x10001A00
+    addi  t2, s0, 0x41
+    sw    t2, 0(a0)
+    lw    t3, 0(a0)
+    addi  t4, s0, 0x51
+    sb    t4, 0(s3)
+    lbu   t5, 0(s3)
+    sw    t1, RES(45)(s2)
+    sw    t3, RES(46)(s2)
+    sw    t5, RES(47)(s2)
+    /* framebuffer: eight groups, two groups */
+    addi  t0, s0, 0x61
+    sw    t0, 0(s5)
+    lw    t1, 0(s5)
+    addi  t2, s0, 0x71
+    sb    t2, 0(s6)
+    lbu   t3, 0(s6)
+    sw    t1, RES(48)(s2)
+    sw    t3, RES(49)(s2)
+    /* store then store: same words, then dmem then framebuffer */
+    addi  t0, s0, 0x81
+    addi  t1, s0, 0x91
+    sw    t0, 32(s4)
+    sw    t1, 32(s4)
+    sw    t0, 64(s4)
+    sw    t1, 32(s5)
+    lw    t2, 32(s4)
+    lw    t3, 64(s4)
+    lw    t4, 32(s5)
+    sw    t2, RES(50)(s2)
+    sw    t3, RES(51)(s2)
+    sw    t4, RES(52)(s2)
+    /* store, then a mask writer and a taken branch; store, then a jump */
+    li    t1, 0
+    li    t3, 0x0F
+    addi  t0, s0, 0xA1
+    sw    t0, 96(s4)
+    MASKSET(t3)
+    beq   x0, x0, 9f
+    li    s11, 0xbad
+9:  lw    t1, 96(s4)            /* lanes 0 to 3 only */
+    MASKALL
+    lw    t2, 96(s4)
+    sw    t0, 128(s4)
+    j     10f
+    li    s11, 0xbad
+10: lw    t4, 128(s4)
+    sw    t1, RES(53)(s2)
+    sw    t2, RES(54)(s2)
+    sw    t4, RES(55)(s2)
+    /* framebuffer store, FB_SWAP store (1 from lane 0 only), framebuffer
+       store: the testbench checks every lane's first value at swap_req */
+    seqz  t1, s0
+    li    a0, MMIO_BASE
+    addi  t0, s0, 0x11
+    addi  t2, s0, 0x21
+    li    s7, 0x40000180
+    add   s7, s7, s1
+    sw    t0, 0(s7)
+    sw    t1, MMIO_FB_SWAP(a0)
+    sw    t2, 0(s7)
+    lw    t3, 0(s7)
+    sw    t3, RES(56)(s2)
+    /* dmem window lanes (even) mixed with bus lanes (odd). First a window
+       bank per lane (window done in one cycle, bus in four groups), then
+       every window lane in bank 0 (four cycles) and the bus lanes on one
+       word (one group) */
+    andi  t0, s0, 1
+    neg   t0, t0                /* -1 in odd lanes */
+    li    a0, 0x10006040
+    slli  t1, s0, 10
+    add   a0, a0, t1            /* window: 0x10006040 + 0x400 * lane */
+    addi  a1, s4, 160           /* bus: own dmem word */
+    xor   t2, a1, a0
+    and   t2, t2, t0
+    xor   s8, a0, t2
+    addi  t3, s0, 0xB1
+    sw    t3, 0(s8)
+    lw    t4, 0(s8)
+    sw    t4, RES(57)(s2)
+    li    a0, 0x10006080
+    add   a0, a0, s1            /* window bank 0, a word per lane */
+    srli  t1, s0, 1
+    li    a1, 0x10001A40
+    add   a1, a1, t1            /* bus: a byte each of one word */
+    xor   t2, a1, a0
+    and   t2, t2, t0
+    xor   s8, a0, t2
+    addi  t3, s0, 0xC1
+    sb    t3, 0(s8)
+    lbu   t4, 0(s8)
+    sw    t4, RES(58)(s2)
 
     /* ---------------- slow pass ---------------- */
     li    s9, 0
@@ -275,6 +584,297 @@ fast_link:
     add   s9, s9, t0
     SLOW
     CHECK(14, s9)
+
+    lw    t0, 0(s2)
+    SLOW
+    slli  t0, t0, 12
+    SLOW
+    QRCP(t1, t0)
+    SLOW
+    addi  t2, t1, 3
+    SLOW
+    CHECK(15, t2)
+    QRCP(t4, t2)
+    SLOW
+    CHECK(16, t4)
+    QRCP(t5, t4)
+    SLOW
+    CHECK(17, t5)
+    QRCP(a1, t0)
+    SLOW
+    CHECK(18, a1)
+    QRCP(a0, t5)
+    SLOW
+    CHECK(19, a0)
+    la    t1, qr_link
+    SLOW
+    CHECK(20, t1)
+    lui   a3, 0x5A5A0
+    SLOW
+    or    a3, a3, s0
+    SLOW
+    mv    a4, a3
+    li    a6, 0x5A
+    SLOW
+    MASKSET(a6)
+    QRCP(a3, t0)
+    SLOW
+    add   a4, a3, a3
+    SLOW
+    MASKALL
+    CHECK(21, a3)
+    CHECK(22, a4)
+    li    a0, 0x9234567B
+    li    a1, 0x6543210F
+    li    a2, 0xFEDCBA98
+    li    a4, 1
+    SLOW
+    xor   a0, a0, s1
+    add   a1, a1, s0
+    sub   a2, a2, s1
+    SLOW
+    mul   t0, a0, a1
+    mul   t3, a0, a2
+    SLOW
+    add   t1, t0, a2
+    sub   t2, a2, t0
+    SLOW
+    CHECK(23, t1)
+    CHECK(24, t2)
+    CHECK(27, t3)
+    CHECK(28, a1)
+    CHECK(29, a1)
+    andi  a7, a1, 0x7FF
+    SLOW
+    addi  a7, a7, 0x100
+    SLOW
+    mul   t3, a7, a7
+    SLOW
+    QRCP(t4, t3)
+    SLOW
+    CHECK(30, t4)
+    slli  a6, s0, 3
+    andi  a7, s0, 7
+    li    t2, 12
+    SLOW
+    addi  a6, a6, 3
+    SLOW
+    VSET(0, a6)
+    VSET(7, a7)
+    VTRACE(a3, t2)
+    SLOW
+    VGET(a5, 0)
+    SLOW
+    add   a3, a3, a5
+    SLOW
+    CHECK(31, a3)
+    mul   t0, a0, a1
+    SLOW
+    mul   t1, t0, a2
+    SLOW
+    mulh  t2, t1, t0
+    SLOW
+    mulhsu t3, t2, a0
+    SLOW
+    mulhu t4, a2, t3
+    SLOW
+    CHECK(32, t4)
+    CHECK(33, t2)
+    mulh  t0, a0, a2
+    mulhsu t2, a2, a1
+    mulhu t4, a0, a2
+    SLOW
+    add   t1, t0, a1
+    sub   t3, a0, t2
+    SLOW
+    xor   t5, t4, t1
+    SLOW
+    CHECK(34, t1)
+    CHECK(35, t3)
+    CHECK(36, t5)
+    mul   t0, a1, a1
+    addi  t1, a0, 1
+    mulhu t3, a0, a1
+    SLOW
+    xor   t2, t0, t1
+    SLOW
+    CHECK(37, t2)
+    CHECK(38, t3)
+    addi  a3, s0, 0x111
+    addi  a5, s0, 0x222
+    li    t3, 0x5A
+    SLOW
+    MASKSET(t3)
+    mul   a3, a0, a1
+    SLOW
+    add   a5, a3, s0
+    SLOW
+    MASKALL
+    CHECK(39, a3)
+    CHECK(40, a5)
+    addi  t1, s0, 3
+    SLOW
+    li    t3, 6
+    SLOW
+    mul   t1, t1, t3
+    SLOW
+    CHECK(41, t1)
+    la    t3, fast_jal_link
+    li    t4, 5
+    SLOW
+    mul   t2, t3, t4
+    SLOW
+    CHECK(42, t2)
+    li    t3, 20                /* four passes, mask bit 1 << 4 */
+    SLOW
+    CHECK(43, t3)
+    addi  t1, s0, 7
+    SLOW
+    slli  t1, t1, 2
+    SLOW
+    CHECK(44, t1)
+    li    s4, 0x800
+    SLOW
+    add   s4, s4, s2
+    li    s3, 0x10001900
+    SLOW
+    add   s3, s3, s0
+    li    s5, 0x40000100
+    SLOW
+    add   s5, s5, s1
+    li    s6, 0x40000140
+    SLOW
+    add   s6, s6, s0
+    addi  t0, s0, 0x31
+    SLOW
+    sw    t0, 0(s4)
+    SLOW
+    lw    t1, 0(s4)
+    SLOW
+    CHECK(45, t1)
+    li    a0, 0x10001A00
+    addi  t2, s0, 0x41
+    SLOW
+    sw    t2, 0(a0)
+    SLOW
+    lw    t3, 0(a0)
+    SLOW
+    CHECK(46, t3)
+    addi  t4, s0, 0x51
+    SLOW
+    sb    t4, 0(s3)
+    SLOW
+    lbu   t5, 0(s3)
+    SLOW
+    CHECK(47, t5)
+    addi  t0, s0, 0x61
+    SLOW
+    sw    t0, 0(s5)
+    SLOW
+    lw    t1, 0(s5)
+    SLOW
+    CHECK(48, t1)
+    addi  t2, s0, 0x71
+    SLOW
+    sb    t2, 0(s6)
+    SLOW
+    lbu   t3, 0(s6)
+    SLOW
+    CHECK(49, t3)
+    addi  t0, s0, 0x81
+    addi  t1, s0, 0x91
+    SLOW
+    sw    t0, 32(s4)
+    SLOW
+    sw    t1, 32(s4)
+    SLOW
+    sw    t0, 64(s4)
+    SLOW
+    sw    t1, 32(s5)
+    SLOW
+    lw    t2, 32(s4)
+    lw    t3, 64(s4)
+    lw    t4, 32(s5)
+    SLOW
+    CHECK(50, t2)
+    CHECK(51, t3)
+    CHECK(52, t4)
+    li    t1, 0
+    li    t3, 0x0F
+    addi  t0, s0, 0xA1
+    SLOW
+    sw    t0, 96(s4)
+    SLOW
+    MASKSET(t3)
+    lw    t1, 96(s4)
+    SLOW
+    MASKALL
+    lw    t2, 96(s4)
+    SLOW
+    sw    t0, 128(s4)
+    SLOW
+    lw    t4, 128(s4)
+    SLOW
+    CHECK(53, t1)
+    CHECK(54, t2)
+    CHECK(55, t4)
+    seqz  t1, s0
+    li    a0, MMIO_BASE
+    addi  t0, s0, 0x11
+    addi  t2, s0, 0x21
+    li    s7, 0x40000180
+    SLOW
+    add   s7, s7, s1
+    SLOW
+    sw    t0, 0(s7)
+    SLOW
+    sw    t1, MMIO_FB_SWAP(a0)
+    SLOW
+    sw    t2, 0(s7)
+    SLOW
+    lw    t3, 0(s7)
+    SLOW
+    CHECK(56, t3)
+    andi  t0, s0, 1
+    SLOW
+    neg   t0, t0
+    li    a0, 0x10006040
+    slli  t1, s0, 10
+    SLOW
+    add   a0, a0, t1
+    addi  a1, s4, 160
+    SLOW
+    xor   t2, a1, a0
+    SLOW
+    and   t2, t2, t0
+    SLOW
+    xor   s8, a0, t2
+    addi  t3, s0, 0xB1
+    SLOW
+    sw    t3, 0(s8)
+    SLOW
+    lw    t4, 0(s8)
+    SLOW
+    CHECK(57, t4)
+    li    a0, 0x10006080
+    srli  t1, s0, 1
+    li    a1, 0x10001A40
+    SLOW
+    add   a0, a0, s1
+    add   a1, a1, t1
+    SLOW
+    xor   t2, a1, a0
+    SLOW
+    and   t2, t2, t0
+    SLOW
+    xor   s8, a0, t2
+    addi  t3, s0, 0xC1
+    SLOW
+    sb    t3, 0(s8)
+    SLOW
+    lbu   t4, 0(s8)
+    SLOW
+    CHECK(58, t4)
 
     li    t1, 1
     MASKSET(t1)
