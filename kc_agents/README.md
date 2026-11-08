@@ -33,9 +33,14 @@ NANO_BASE_URL=http://127.0.0.1:8080/v1 python -m kc_agents.demo  # villagers on 
 
 ## Local Nano (laptop GPU, 6 GB)
 ```sh
-llama-server -hf <Nemotron Nano 4B GGUF repo>:Q4_K_M -ngl 999 -c 8192 -np 4 --port 8080 --jinja
+winget install ggml.llamacpp          # Vulkan build, runs on the RTX 3060
+llama-server -hf nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M --device Vulkan0 -ngl 999 -c 8192 -np 4 \
+  --jinja --port 8080
 ```
-About 2.8 GB of weights; 4 parallel slots at 8k context fit in 6 GB.
+Measured on the RTX 3060 Laptop (6 GB): 3.7 GB of GPU memory in use, 0.7-2.6 s per call for two
+villagers with thinking off (`llm.py` turns it off; with it on, Nano spends every token reasoning).
+`--device Vulkan0` picks the NVIDIA GPU over the integrated one. 20 s of the demo: 20 villager
+decisions from the model, 0 fallbacks.
 
 ## Super on Brev (1x H200, Nebius, about $6.48/hr)
 ```sh
