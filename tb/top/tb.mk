@@ -7,7 +7,8 @@
 #   kc_chip_raster   1 lane, tile rasterizer      HAS_DIV_STACK = 1 for the
 #   kc_chip8_raster  8 lanes, tile rasterizer     kc_chip8* builds, else Stage 0)
 #   kc_chip8_vtrace  8 lanes, ray tracer on the VTRACE unit (Kennedy's
-#                    KC_VTRACE = 1 kc_trace; Stage 2 core: HAS_RAY_UNIT = 1)
+#                    KC_VTRACE = 1 kc_trace; Stage 2 core: HAS_RAY_UNIT = 1,
+#                    HAS_QRCP = 1)
 # The raster builds link with chip/stub_kc.ld (kc.ld + the D17 GPU memory).
 # game/Makefile has no target for kc_chip8_vtrace yet, so tb/top instantiates
 # game's own CHIP_ELF macro for it (variant chip8_vtrace, -DKC_LANES=8
@@ -33,9 +34,9 @@
 #                    t_top_frame.sv);
 #                    TOP_HEX=dir runs other images (e.g. ones patched in with
 #                    fpga/patch_bit.sh), TOP_OUT=dir puts the frames elsewhere.
-#   lint-top         verilator -Wall over the whole top at Stage 2, Stage 1 and
-#                    Stage 0 (sim models for the MMCM, BUFG, MIG and XPM, as in
-#                    tb/ddr)
+#   lint-top         verilator -Wall over the whole top at Stage 2 (with and
+#                    without QRCP), Stage 1 and Stage 0 (sim models for the
+#                    MMCM, BUFG, MIG and XPM, as in tb/ddr)
 
 TOP_ELFS      := kc_chip kc_chip8 kc_chip_raster kc_chip8_raster kc_chip8_vtrace
 TOP_ELF       ?= kc_chip
@@ -54,10 +55,11 @@ TOP_RTL    := rtl/kc_isa_pkg.sv $(wildcard rtl/core/*.sv) $(wildcard rtl/mem/*.s
 TOP_IMAGES := kc_imem.hex kc_dmem.hex textures.hex palette.hex
 
 # Core configuration for a game build: 8 lanes + divergence stack for kc_chip8*,
-# plus the ray unit for kc_chip8_vtrace.
+# plus the ray unit and QRCP (Stage 2) for kc_chip8_vtrace.
 top_lanes = $(if $(filter kc_chip8%,$(1)),8,1)
 top_div   = $(if $(filter kc_chip8%,$(1)),1,0)
 top_ray   = $(if $(filter kc_chip8_vtrace,$(1)),1,0)
+top_qrcp  = $(call top_ray,$(1))
 top_elf   = game/build/$(1).elf
 
 TB_TARGETS += tb-top-t_top_frame lint-top
@@ -106,6 +108,7 @@ define top_run
 	@mkdir -p $(3)
 	$(VERILATOR) $(VL_TB) -O3 --timescale 1ns/1ps --top-module t_top_frame -Mdir $(OBJ)/top_t_top_frame_$(1) \
 	  -GLANES=$(call top_lanes,$(1)) -GHAS_DIV_STACK=$(call top_div,$(1)) -GHAS_RAY_UNIT="1'b$(call top_ray,$(1))" \
+	  -GHAS_QRCP="1'b$(call top_qrcp,$(1))" \
 	  -GIMEM_HEX='"$(2)/kc_imem.hex"' -GDMEM_HEX='"$(2)/kc_dmem.hex"' \
 	  -GTEX_HEX='"$(2)/textures.hex"' -GPAL_HEX='"$(2)/palette.hex"' \
 	  $(TOP_RTL) tb/top/t_top_frame.sv
@@ -118,6 +121,7 @@ tb-top-t_top_frame: $(addprefix $(TOP_HEX)/,$(TOP_IMAGES))
 lint-top:
 	$(VERILATOR) $(VL_LINT) --timing --top-module top $(TOP_RTL)
 	$(VERILATOR) $(VL_LINT) --timing --top-module top -GHAS_RAY_UNIT="1'b1" $(TOP_RTL)
+	$(VERILATOR) $(VL_LINT) --timing --top-module top -GHAS_RAY_UNIT="1'b1" -GHAS_QRCP="1'b1" $(TOP_RTL)
 	$(VERILATOR) $(VL_LINT) --timing --top-module top -GLANES=1 -GHAS_DIV_STACK=0 $(TOP_RTL)
 	$(VERILATOR) $(VL_LINT) --timing --top-module top -GLANES=1 -GHAS_DIV_STACK=0 -GHAS_RAY_UNIT="1'b1" $(TOP_RTL)
 	$(VERILATOR) $(VL_LINT) --top-module world_mem rtl/mem/world_mem.sv

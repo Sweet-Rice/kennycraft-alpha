@@ -67,9 +67,11 @@ package kc_isa_pkg;
     localparam logic [6:0] OPC_CUSTOM1  = 7'h2B;  // ray unit, R-type (Stage 2)
     localparam logic [6:0] OPC_CUSTOM2  = 7'h5B;  // divergence, B-type / R-type
 
-    // custom-0 (0x0B) funct3. 010 and 100 are reserved (illegal).
+    // custom-0 (0x0B) funct3. 100 is reserved (illegal); QRCP (010) is
+    // legal only in a build with HAS_QRCP = 1 (D22).
     localparam logic [2:0] F3_LANEID    = 3'b000;
     localparam logic [2:0] F3_LMASK     = 3'b001;
+    localparam logic [2:0] F3_QRCP      = 3'b010;
     localparam logic [2:0] F3_BALLOT    = 3'b011;
     localparam logic [2:0] F3_MASKGET   = 3'b101;
     localparam logic [2:0] F3_MASKSET   = 3'b110;
@@ -202,7 +204,8 @@ package kc_isa_pkg;
     //     SRAI 0100000, SUB/SRA 0100000)
     //   - Zmmul: OP with funct7 0000001 and funct3 000..011
     //   - FENCE, FENCE.I (MISC-MEM funct3 000/001), executed as no-ops
-    //   - custom-0: funct7 0 and funct3 000, 001, 011, 101, 110, 111
+    //   - custom-0: funct7 0 and funct3 000, 001, 011, 101, 110, 111, plus
+    //     QRCP (funct3 010) with rs2 = 0 only when has_qrcp
     //   - custom-1 (only when has_ray_unit): VSET with funct7 0..7, VTRACE
     //     with funct7 0, VGET with funct7 0..1
     //   - custom-2 (only when has_div_stack): funct3 000..010
@@ -210,7 +213,8 @@ package kc_isa_pkg;
     // every other opcode (including 16-bit compressed words) and every
     // reserved funct3/funct7 are illegal. Fields marked 0 in the custom
     // encoding table (rd/rs1/rs2, custom-2 funct7) are ignored, as Tai_2
-    // states, and never make an instruction illegal.
+    // states, and never make an instruction illegal, except QRCP's rs2,
+    // which Tai_2 requires to be 0.
     //
     // The remaining illegal cases depend on runtime state, not on the
     // instruction word: misaligned data accesses (is_misaligned() below),
@@ -221,7 +225,8 @@ package kc_isa_pkg;
     // The interface is LANES-independent: one 32-bit word in, one bit out.
     function automatic logic is_illegal(input logic [31:0] instr,
                                         input logic        has_ray_unit  = 1'b0,
-                                        input logic        has_div_stack = 1'b1);
+                                        input logic        has_div_stack = 1'b1,
+                                        input logic        has_qrcp      = 1'b0);
         logic [6:0] opc;
         logic [2:0] f3;
         logic [6:0] f7;
@@ -256,7 +261,8 @@ package kc_isa_pkg;
             OPC_MISC_MEM:
                 ill = (f3[2:1] != 2'b00);                               // FENCE, FENCE.I
             OPC_CUSTOM0:
-                ill = (f3 == 3'b010) || (f3 == 3'b100) || (f7 != 7'd0);
+                ill = (f3 == 3'b100) || (f7 != 7'd0) ||
+                      ((f3 == F3_QRCP) && (!has_qrcp || (instr[24:20] != 5'd0)));
             OPC_CUSTOM1: begin
                 unique case (f3)
                     F3_VSET:   ill = (f7 > VSET_STEP_SIGN);

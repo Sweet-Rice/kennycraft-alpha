@@ -5,16 +5,19 @@
 // With HAS_RAY_UNIT = 1, cases 12 (VTRACE, cap 0), 26 (VSET field 0) and 27
 // (VGET field 1) are legal: they must not halt and must reach the next
 // instruction, and VTRACE with a cap of 0 and VSET must leave rd alone.
+// With HAS_QRCP = 1, case 13 (QRCP a2, x0) is legal and writes
+// qrcp(0) = Q16_BIG to a2; QRCP with funct7 1 or rs2 != 0 (cases 28, 29)
+// and custom-0 funct3 100 (case 30) halt in every build.
 module t_illegal_tb;
     parameter string IMEM_HEX = "";
     parameter string DMEM_HEX = "";
     `include "soc_harness.svh"
 
-    localparam int NCASES = 28;   // faulting cases 0..27, control is 28
+    localparam int NCASES = 31;   // faulting cases 0..30, control is 31
 
-    // custom-1 cases that only the ray unit makes legal
-    function automatic bit ray_legal(input int k);
-        return HAS_RAY_UNIT && (k == 12 || k == 26 || k == 27);
+    // custom-1 cases that only the ray unit makes legal, and QRCP
+    function automatic bit unit_legal(input int k);
+        return (HAS_RAY_UNIT && (k == 12 || k == 26 || k == 27)) || (HAS_QRCP && k == 13);
     endfunction
 
     localparam logic [31:0] TB_SELECT = 32'h1000_00F0;
@@ -32,7 +35,7 @@ module t_illegal_tb;
             6: return "CSR read";   7: return "misaligned LW";
             8: return "misaligned LH";  9: return "misaligned SW";
             10: return "misaligned SH"; 11: return "VGET field 2";
-            12: return "VTRACE cap 0 (unit absent)"; 13: return "custom-0 funct3 010";
+            12: return "VTRACE cap 0 (unit absent)"; 13: return "QRCP (unit absent)";
             14: return HAS_DIV_STACK ? "DENDIF, empty stack" : "DENDIF (Stage 0)";
             15: return "fetch outside imem";
             16: return "all-zero word";        17: return "JALR misaligned target";
@@ -42,6 +45,8 @@ module t_illegal_tb;
             23: return "VSET field 8";         24: return "VTRACE funct7 1";
             25: return "custom-1 funct3 011";  26: return "VSET field 0 (unit absent)";
             27: return "VGET field 1 (unit absent)";
+            28: return "QRCP funct7 1";        29: return "QRCP rs2 = a1";
+            30: return "custom-0 funct3 100";
             default: return "?";
         endcase
     endfunction
@@ -63,14 +68,18 @@ module t_illegal_tb;
             dmem_wr(TB_DONE, 32'd0);
             do_reset();
 
-            if (ray_legal(k)) begin
+            if (unit_legal(k)) begin
                 for (int i = 0; i < 2000 && dmem_rd(TB_MARK) == 0 && !err_led; i++)
                     @(posedge clk);
                 expect32($sformatf("case %0d: halted", k), {31'b0, err_led}, 32'd0);
                 expect32($sformatf("case %0d: next instr run", k), dmem_rd(TB_MARK), 32'd1);
-                if (k != 27) expect32($sformatf("case %0d: rd not written", k), xreg(12), 32'h55);
-                $display("  case %2d  legal with the ray unit: %s", k,
-                         k == 12 ? "VTRACE cap 0, no write" : k == 26 ? "VSET field 0" : "VGET field 1");
+                if (k == 13)
+                    expect32($sformatf("case %0d: rd = qrcp(0)", k), xreg(12), 32'h4000_0000);
+                else if (k != 27)
+                    expect32($sformatf("case %0d: rd not written", k), xreg(12), 32'h55);
+                $display("  case %2d  legal with the %s: %s", k, k == 13 ? "QRCP unit" : "ray unit",
+                         k == 12 ? "VTRACE cap 0, no write" : k == 13 ? "QRCP a2, x0 = Q16_BIG" :
+                         k == 26 ? "VSET field 0" : "VGET field 1");
                 continue;
             end
 

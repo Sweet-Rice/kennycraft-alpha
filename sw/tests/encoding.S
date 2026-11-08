@@ -5,9 +5,9 @@
  * objdump output against the example hex, in table order.
  *
  * Layout (word index: instruction):
- *   0-11  the 12 table rows, in table order
- *   12    nop, DELSE target (DELSE at 10, +8)
- *   13    nop, DIF target   (DIF at 9, +16)
+ *   0-12  the 13 table rows, in table order
+ *   13    nop, DELSE target (DELSE at 11, +8)
+ *   14    nop, DIF target   (DIF at 10, +16)
  */
 
     .text
@@ -15,6 +15,7 @@
 encoding_table:
     .insn r 0x0B, 0, 0, a0, x0, x0          # LANEID a0         0x0000050B
     .insn r 0x0B, 1, 0, x0, a1, x0          # LMASK a1          0x0005900B
+    .insn r 0x0B, 2, 0, a0, a1, x0          # QRCP a0, a1       0x0005A50B
     .insn r 0x0B, 3, 0, a0, a1, x0          # BALLOT a0, a1     0x0005B50B
     .insn r 0x0B, 5, 0, a0, x0, x0          # MASKGET a0        0x0000550B
     .insn r 0x0B, 6, 0, x0, a1, x0          # MASKSET a1        0x0005E00B

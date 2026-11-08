@@ -9,7 +9,8 @@
 //    Tai_2 never defines (undefined opcodes, funct3, funct7), which are
 //    illegal because anything not explicitly defined is illegal.
 // 3. Exhaustive sweep of every opcode x funct3 x funct7 x has_ray_unit x
-//    has_div_stack against a reference model written from Tai_2 section 1.
+//    has_div_stack x has_qrcp against a reference model written from Tai_2
+//    section 1, with rs2 = 0 and rs2 != 0 (QRCP needs rs2 = 0).
 //
 // Exits 0 only if every check passes.
 
@@ -27,10 +28,11 @@ int g_checks = 0;
 
 std::unique_ptr<Visa_decode_check> dut;
 
-void apply(uint32_t instr, bool has_ray, bool has_div = true) {
+void apply(uint32_t instr, bool has_ray, bool has_div = true, bool has_qrcp = false) {
     dut->instr = instr;
     dut->has_ray_unit = has_ray;
     dut->has_div_stack = has_div;
+    dut->has_qrcp = has_qrcp;
     dut->eval();
 }
 
@@ -78,23 +80,25 @@ struct Row {
     int32_t imm;      // B-type rows only
     uint32_t id;      // isa_decode_check instr_id (table order)
     bool ray;         // needs the ray unit (custom-1)
+    bool qrcp;        // needs HAS_QRCP (QRCP)
 };
 
 // Tai_2 section 1, "Custom instruction formats", one entry per row, using the
 // example operands of the Example hex column.
 const Row kRows[] = {
-    {"LANEID",  0x0000050B, 0x0B, 0, 0, A0, 0,  0, false, 0,  1,  false},
-    {"LMASK",   0x0005900B, 0x0B, 1, 0, 0,  A1, 0, false, 0,  2,  false},
-    {"BALLOT",  0x0005B50B, 0x0B, 3, 0, A0, A1, 0, false, 0,  3,  false},
-    {"MASKGET", 0x0000550B, 0x0B, 5, 0, A0, 0,  0, false, 0,  4,  false},
-    {"MASKSET", 0x0005E00B, 0x0B, 6, 0, 0,  A1, 0, false, 0,  5,  false},
-    {"MASKALL", 0x0000700B, 0x0B, 7, 0, 0,  0,  0, false, 0,  6,  false},
-    {"VSET",    0x0605802B, 0x2B, 0, 3, 0,  A1, 0, false, 0,  7,  true},
-    {"VTRACE",  0x0005952B, 0x2B, 1, 0, A0, A1, 0, false, 0,  8,  true},
-    {"VGET",    0x0200252B, 0x2B, 2, 1, A0, 0,  0, false, 0,  9,  true},
-    {"DIF",     0x0005885B, 0x5B, 0, 0, 0,  A1, 0, true,  16, 10, false},
-    {"DELSE",   0x0000145B, 0x5B, 1, 0, 0,  0,  0, true,  8,  11, false},
-    {"DENDIF",  0x0000205B, 0x5B, 2, 0, 0,  0,  0, false, 0,  12, false},
+    {"LANEID",  0x0000050B, 0x0B, 0, 0, A0, 0,  0, false, 0,  1,  false, false},
+    {"LMASK",   0x0005900B, 0x0B, 1, 0, 0,  A1, 0, false, 0,  2,  false, false},
+    {"QRCP",    0x0005A50B, 0x0B, 2, 0, A0, A1, 0, false, 0,  3,  false, true},
+    {"BALLOT",  0x0005B50B, 0x0B, 3, 0, A0, A1, 0, false, 0,  4,  false, false},
+    {"MASKGET", 0x0000550B, 0x0B, 5, 0, A0, 0,  0, false, 0,  5,  false, false},
+    {"MASKSET", 0x0005E00B, 0x0B, 6, 0, 0,  A1, 0, false, 0,  6,  false, false},
+    {"MASKALL", 0x0000700B, 0x0B, 7, 0, 0,  0,  0, false, 0,  7,  false, false},
+    {"VSET",    0x0605802B, 0x2B, 0, 3, 0,  A1, 0, false, 0,  8,  true,  false},
+    {"VTRACE",  0x0005952B, 0x2B, 1, 0, A0, A1, 0, false, 0,  9,  true,  false},
+    {"VGET",    0x0200252B, 0x2B, 2, 1, A0, 0,  0, false, 0,  10, true,  false},
+    {"DIF",     0x0005885B, 0x5B, 0, 0, 0,  A1, 0, true,  16, 11, false, false},
+    {"DELSE",   0x0000145B, 0x5B, 1, 0, 0,  0,  0, true,  8,  12, false, false},
+    {"DENDIF",  0x0000205B, 0x5B, 2, 0, 0,  0,  0, false, 0,  13, false, false},
 };
 
 void check_table() {
@@ -107,8 +111,10 @@ void check_table() {
                                                  r.rs1, r.rs2);
         expect(rebuilt == r.hex, "rebuilt", name, instr, rebuilt, r.hex);
 
-        for (int ray = 0; ray < 2; ++ray) {
-            apply(instr, ray);
+        for (int unit = 0; unit < 4; ++unit) {
+            const bool ray = unit & 1;
+            const bool qrcp = unit & 2;
+            apply(instr, ray, true, qrcp);
             EXPECT_EQ(opcode, r.opcode);
             EXPECT_EQ(funct3, r.funct3);
             EXPECT_EQ(rs1, r.rs1);
@@ -125,7 +131,7 @@ void check_table() {
                 EXPECT_EQ(funct7, r.funct7);
                 EXPECT_EQ(rd, r.rd);
             }
-            const bool legal = ray || !r.ray;
+            const bool legal = (ray || !r.ray) && (qrcp || !r.qrcp);
             EXPECT_EQ(illegal, !legal);
             EXPECT_EQ(instr_id, legal ? r.id : 0);
         }
@@ -135,8 +141,10 @@ void check_table() {
 }
 
 // Reference model of Tai_2 section 1: everything it does not define is
-// illegal. Fields marked 0 in the custom table are ignored.
-bool ref_illegal(uint32_t op, uint32_t f3, uint32_t f7, bool ray, bool div) {
+// illegal. Fields marked 0 in the custom table are ignored, except QRCP's
+// rs2, which must be 0.
+bool ref_illegal(uint32_t op, uint32_t f3, uint32_t f7, uint32_t rs2, bool ray, bool div,
+                 bool qrcp) {
     switch (op) {
     case 0x37: case 0x17: case 0x6F: return false;          // LUI, AUIPC, JAL
     case 0x67: return f3 != 0;                               // JALR
@@ -153,7 +161,7 @@ bool ref_illegal(uint32_t op, uint32_t f3, uint32_t f7, bool ray, bool div) {
         if (f7 == 1) return f3 >= 4;                         // Zmmul; DIV/REM
         return true;
     case 0x0F: return f3 > 1;                                // FENCE, FENCE.I
-    case 0x0B: return f3 == 2 || f3 == 4 || f7 != 0;
+    case 0x0B: return f3 == 4 || f7 != 0 || (f3 == 2 && (!qrcp || rs2 != 0));
     case 0x2B:
         if (!ray) return true;
         if (f3 >= 3) return true;
@@ -171,10 +179,17 @@ void check_illegal_list() {
         uint32_t instr;
         bool ray;
         bool want_illegal;
+        bool qrcp;    // HAS_QRCP build (false when omitted)
     };
     const Case cases[] = {
-        // custom-0 with funct3 010 or 100, or funct7 != 0
+        // custom-0 with funct3 100, or funct7 != 0; funct3 010 (QRCP)
+        // without HAS_QRCP, or with rs2 != 0
         {"C0_F3_010", enc_r(0x0B, 2, 0, A0, A1, 0), true, true},
+        {"QRCP_RS2",  enc_r(0x0B, 2, 0, A0, A1, 1), true, true, true},
+        {"QRCP_RS2_31", enc_r(0x0B, 2, 0, A0, A1, 31), true, true, true},
+        {"QRCP_F7_1", enc_r(0x0B, 2, 1, A0, A1, 0), true, true, true},
+        {"QRCP_F7_40", enc_r(0x0B, 2, 0x40, A0, A1, 0), true, true, true},
+        {"C0_F3_100_QRCP", enc_r(0x0B, 4, 0, A0, A1, 0), true, true, true},
         {"C0_F3_100", enc_r(0x0B, 4, 0, A0, A1, 0), true, true},
         {"C0_F7_1",   enc_r(0x0B, 0, 1, A0, 0, 0), true, true},
         {"C0_F7_40",  enc_r(0x0B, 3, 0x40, A0, A1, 0), true, true},
@@ -224,6 +239,10 @@ void check_illegal_list() {
         {"MASKALL_JUNK", enc_r(0x0B, 7, 0, 31, 31, 31), false, false},
         {"VGET_JUNK", enc_r(0x2B, 2, 1, A0, 31, 31), true, false},
         {"DENDIF_JUNK", enc_r(0x5B, 2, 127, 31, 31, 31), false, false},
+        {"QRCP",      0x0005A50B, false, false, true},
+        {"QRCP_RD0",  enc_r(0x0B, 2, 0, 0, A1, 0), false, false, true},
+        {"QRCP_X0",   enc_r(0x0B, 2, 0, 31, 0, 0), true, false, true},
+        {"LANEID_JUNK_QRCP", enc_r(0x0B, 0, 0, A0, 31, 31), false, false, true},
         {"DELSE_JUNK", enc_b(0x5B, 1, 31, 31, -8), false, false},
         {"VSET_F7", enc_r(0x2B, 0, 7, 0, A1, 0), true, false},
         {"VGET_F0", enc_r(0x2B, 2, 0, A0, 0, 0), true, false},
@@ -253,26 +272,28 @@ void check_illegal_list() {
     for (const Case& c : cases) {
         const char* name = c.name;
         const uint32_t instr = c.instr;
-        apply(instr, c.ray);
+        apply(instr, c.ray, true, c.qrcp);
         EXPECT_EQ(illegal, c.want_illegal);
     }
     std::printf("illegal list: %zu named cases checked\n", sizeof(cases) / sizeof(cases[0]));
 }
 
 void sweep_all() {
-    const uint32_t junk[] = {0, A0, 31};
+    // rd, rs1, rs2 per variant: three with rs2 != 0, one with rs2 = 0
+    const uint32_t regs[][3] = {{0, 1, 2}, {A0, A0 ^ 1, A0 ^ 2}, {31, 30, 29}, {A0, A1, 0}};
     unsigned n = 0;
     for (uint32_t op = 0; op < 128; ++op)
         for (uint32_t f3 = 0; f3 < 8; ++f3)
             for (uint32_t f7 = 0; f7 < 128; ++f7)
-                for (uint32_t j : junk)
-                    for (int unit = 0; unit < 4; ++unit) {
+                for (const auto& r : regs)
+                    for (int unit = 0; unit < 8; ++unit) {
                         const bool ray = unit & 1;
                         const bool div = unit & 2;
+                        const bool qrcp = unit & 4;
                         const char* name = "sweep";
-                        const uint32_t instr = enc_r(op, f3, f7, j, j ^ 1, j ^ 2);
-                        apply(instr, ray, div);
-                        EXPECT_EQ(illegal, ref_illegal(op, f3, f7, ray, div));
+                        const uint32_t instr = enc_r(op, f3, f7, r[0], r[1], r[2]);
+                        apply(instr, ray, div, qrcp);
+                        EXPECT_EQ(illegal, ref_illegal(op, f3, f7, r[2], ray, div, qrcp));
                         ++n;
                     }
     std::printf("full sweep: %u encodings checked\n", n);

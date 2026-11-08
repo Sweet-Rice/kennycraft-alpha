@@ -25,13 +25,22 @@
 #   tb-core-t_illegal-ray   t_illegal with the ray unit (HAS_RAY_UNIT = 1,
 #                           Stage 2: LANES = 8, divergence stack), where
 #                           only the reserved custom-1 encodings halt
+#   tb-core-t_illegal-qrcp  t_illegal on the Stage 2 core with QRCP
+#                           (HAS_QRCP = 1): QRCP is legal, QRCP with
+#                           funct7 != 0 or rs2 != 0 still halts
+#   tb-core-t_qrcp, tb-core-t_qrcp-l8
+#                           QRCP (D22) at LANES = 1 (HAS_QRCP = 1) and on the
+#                           Stage 2 core with QRCP (LANES = 8, divergence
+#                           stack, ray unit, HAS_QRCP = 1): per-lane results
+#                           against fixed.c qrcp(), inactive lanes, rd = x0,
+#                           rd = rs1, fixed latency
 #   tracediff-core-<tb>     Stage 1 rung 2: the same test at LANES = 8 with
 #                           only lane 0 able to activate (LANE0_ONLY), whose
 #                           retirement trace must equal the LANES = 1 trace
 #                           (tb/core/tracediff.py)
 #   lint-core               verilator -Wall over rtl/core, rtl/mem, rtl/soc
 #                           at LANES = 1, 3 and 8, with and without the
-#                           divergence stack, and with the ray unit
+#                           divergence stack, with the ray unit and with QRCP
 #
 # Not in `make check`: `make tracediff-base-core` (Stage 1 rung 1) builds
 # every test above against the Stage 0 core of git ref CORE_BASE_REF and
@@ -60,6 +69,8 @@ CORE_L8   := t_illegal t_laneid t_lsu_order t_mmio_lanes $(CORE_RUNG5) $(CORE_RU
              $(CORE_RUNG7) $(CORE_GAPS)
 CORE_ALL  := $(CORE_TBS) $(CORE_PROG)
 PLUSARGS  ?=
+
+TB_TARGETS += tb-core-t_qrcp tb-core-t_qrcp-l8 tb-core-t_illegal-qrcp
 
 TB_TARGETS += tb-core-t_illegal-ray
 TB_TARGETS += $(addprefix tb-core-,$(CORE_ALL)) $(addprefix tracediff-core-,$(CORE_ALL)) \
@@ -125,6 +136,28 @@ tb-core-t_illegal-ray: $(call core_hex_deps,t_illegal)
 	$(call CORE_VL,t_illegal_tb,_ray,-GLANES=8 -GHAS_DIV_STACK="1'b1" -GHAS_RAY_UNIT="1'b1")
 	$(call core_bin,t_illegal_tb,_ray) $(PLUSARGS)
 
+# QRCP (D22): t_illegal on the Stage 2 core with QRCP, and t_qrcp at LANES = 1
+# and on the Stage 2 core with QRCP
+CORE_S2Q := -GLANES=8 -GHAS_DIV_STACK="1'b1" -GHAS_RAY_UNIT="1'b1" -GHAS_QRCP="1'b1"
+CORE_HEX_t_qrcp_tb := -GIMEM_HEX='"$(CURDIR)/$(CORE_SW_OBJ)/t_qrcp_imem.hex"' \
+                      -GDMEM_HEX='"$(CURDIR)/$(CORE_SW_OBJ)/t_qrcp_dmem.hex"'
+CORE_QRCP_HEX := $(CORE_SW_OBJ)/t_qrcp_imem.hex $(CORE_SW_OBJ)/t_qrcp_dmem.hex
+
+tb-core-t_illegal-qrcp: $(call core_hex_deps,t_illegal)
+	@mkdir -p $(OBJ)
+	$(call CORE_VL,t_illegal_tb,_qrcp,$(CORE_S2Q))
+	$(call core_bin,t_illegal_tb,_qrcp) $(PLUSARGS)
+
+tb-core-t_qrcp: $(CORE_QRCP_HEX)
+	@mkdir -p $(OBJ)
+	$(call CORE_VL,t_qrcp_tb,,-GHAS_QRCP="1'b1")
+	$(call core_bin,t_qrcp_tb) $(PLUSARGS)
+
+tb-core-t_qrcp-l8: $(CORE_QRCP_HEX)
+	@mkdir -p $(OBJ)
+	$(call CORE_VL,t_qrcp_tb,_l8,$(CORE_S2Q))
+	$(call core_bin,t_qrcp_tb,_l8) $(PLUSARGS)
+
 # Rung 1: the Stage 0 core (git ref CORE_BASE_REF) against the current core,
 # both at LANES = 1, same harness, same test images
 CORE_BASE_REF ?= 16bccea
@@ -154,3 +187,6 @@ lint-core:
 	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=3 -GHAS_DIV_STACK="1'b1" $(CORE_RTL)
 	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=8 -GHAS_DIV_STACK="1'b1" -GHAS_RAY_UNIT="1'b1" $(CORE_RTL)
 	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=3 -GHAS_RAY_UNIT="1'b1" $(CORE_RTL)
+	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=8 -GHAS_DIV_STACK="1'b1" -GHAS_RAY_UNIT="1'b1" -GHAS_QRCP="1'b1" $(CORE_RTL)
+	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GHAS_QRCP="1'b1" $(CORE_RTL)
+	$(VERILATOR) $(VL_LINT) --top-module qrcp rtl/core/qrcp.sv
