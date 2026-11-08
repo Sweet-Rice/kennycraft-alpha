@@ -240,7 +240,7 @@ def c_array(ctype, name, vals, per_line=16):
     return f"static const {ctype} {name}[{len(vals)}] = {{\n" + "\n".join(lines) + "\n};\n"
 
 # Vertex colors: one flat color per (block type, face), the most common color of that face's
-# art (the first one in scan order wins a tie). Both renderers and the hotbar use this table;
+# art (on a tie, the color that reached the top count first wins). Both renderers and the hotbar use this table;
 # nothing on the chip reads texture memory. Recolor a block by editing its art or this rule.
 face_color = []
 for t in range(NTYPES):
