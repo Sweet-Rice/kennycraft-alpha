@@ -19,6 +19,9 @@
 #   tb-core-pipe-t_mmio     tb/core_pipe/t_mmio_pipe_tb.sv: t_mmio.S with its
 #                           two CYCLES checks at the pipelined MMIO LW and SW
 #                           CPI (2 and 2: deltas 2 and 42 instead of 5 and 47)
+#   tb-core-pipe-t_vtrace_async
+#                           t_vtrace_async on core_pipe (the testbench takes
+#                           PIPELINED for its VTRACE x0 retire spacing)
 #   tracediff-core-pipe-<t> the multi-cycle (tb-core-<t>) and pipelined builds
 #                           of the same test with +trace, retire traces
 #                           compared without cycle numbers
@@ -76,6 +79,8 @@ CORE_PIPE_TD_t_lsu_order    := --poll 0x100000f0:TB_SELECT
 CORE_PIPE_TD_t_lsu_order-l8 := $(CORE_PIPE_TD_t_lsu_order)
 # CYCLES before and after every class
 CORE_PIPE_TD_t_cpi := $(CORE_PIPE_CYCLES)
+# CYCLES around the async and sync overlap runs, read under every lane
+CORE_PIPE_TD_t_vtrace_async := $(CORE_PIPE_CYCLES)
 
 # $(call CORE_PIPE_RULES,name,tb module,obj suffix,flags,hex images[,variant])
 # for the test tb/core/tb.mk builds as tb-core-<name>. With a variant, the
@@ -112,6 +117,8 @@ $(eval $(call CORE_PIPE_RULES,t_illegal-qrcp,t_illegal_tb,_qrcp,$(CORE_S2Q), \
 # t_qrcp with core_pipe's QRCP latency (t_qrcp_pipe_tb.sv)
 $(eval $(call CORE_PIPE_RULES,t_qrcp,t_qrcp_tb,,-GHAS_QRCP="1'b1",$(CORE_QRCP_HEX),t_qrcp_pipe_tb))
 $(eval $(call CORE_PIPE_RULES,t_qrcp-l8,t_qrcp_tb,_l8,$(CORE_S2Q),$(CORE_QRCP_HEX),t_qrcp_pipe_tb))
+# asynchronous VTRACE (tb/core/t_vtrace_async_tb.sv) on the Stage 2 core with QRCP
+$(eval $(call CORE_PIPE_RULES,t_vtrace_async,t_vtrace_async_tb,,$(CORE_S2Q),$(CORE_VTA_HEX)))
 # t_cpi with the pipelined stall model (t_cpi_pipe_tb.sv)
 $(eval $(call CORE_PIPE_RULES,t_cpi,t_cpi_tb,,,$(call core_hex_deps,t_cpi),t_cpi_pipe_tb))
 # t_mmio with its two CYCLES checks at the pipelined LW/SW CPI (t_mmio_pipe_tb.sv)
