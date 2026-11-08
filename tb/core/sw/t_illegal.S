@@ -7,19 +7,19 @@
    not 4-aligned (halt at the jump itself, link not written, D16), an
    undefined opcode (FLW), an undefined OP funct7, an undefined LOAD funct3
    (LD), the reserved custom-1 encodings (VSET field 8, VTRACE funct7 1,
-   funct3 011), and the reserved custom-0 encodings (QRCP with funct7 1 or
-   rs2 != 0, funct3 100), illegal in every build. Anything Tai_2 does not
-   define is illegal. The testbench writes the case number to TB_SELECT and
-   resets the core once per case. Case k sits at 0x100 + 0x40*k with the
-   faulting instruction first in its slot (case 15 faults at 0x8000, case 17
-   at 0x544). Cases 12 (VTRACE, cap a1 = 0), 26 (VSET field 0) and 27 (VGET
-   field 1) are illegal only without the ray unit; with it they run and reach
-   NOT_REACHED, and the VTRACE (cap 0) and VSET leave rd alone. Case 13
-   (QRCP a2, x0) is illegal only without HAS_QRCP; with it a2 becomes
-   qrcp(0) = Q16_BIG. Case 31 is the legal control: FENCE/FENCE.I run, a
-   not-taken branch with a misaligned target falls through, reset has
-   cleared ERR/ERR_PC, unmapped and imem-region data accesses read 0 without
-   an error. */
+   funct3 011, VGET field 4), and the reserved custom-0 encodings (QRCP with
+   funct7 1 or rs2 != 0, funct3 100), illegal in every build. Anything Tai_2
+   does not define is illegal. The testbench writes the case number to
+   TB_SELECT and resets the core once per case. Case k sits at 0x100 + 0x40*k
+   with the faulting instruction first in its slot (case 15 faults at 0x8000,
+   case 17 at 0x544). Cases 12 (VTRACE, cap a1 = 0), 26 (VSET field 0), 27
+   (VGET field 1) and 31 (VGET field 3) are illegal only without the ray
+   unit; with it they run and reach NOT_REACHED, and the VTRACE (cap 0) and
+   VSET leave rd alone. Case 13 (QRCP a2, x0) is illegal only without
+   HAS_QRCP; with it a2 becomes qrcp(0) = Q16_BIG. Case 33 is the legal
+   control: FENCE/FENCE.I run, a not-taken branch with a misaligned target
+   falls through, reset has cleared ERR/ERR_PC, unmapped and imem-region data
+   accesses read 0 without an error. */
 #include "kc_test.h"
 
     /* DIV/REM and FENCE.I are not in rv32i_zmmul; assemble them anyway. */
@@ -137,7 +137,13 @@ _start:
     .org 0x880                  /* 30: custom-0 funct3 100 (reserved) */
     .insn r 0x0B, 4, 0, a2, a1, x0
     NOT_REACHED
-    .org 0x8c0                  /* 31: legal control */
+    .org 0x8c0                  /* 31: VGET field 3; illegal without the ray unit */
+    .insn r 0x2B, 2, 3, a2, x0, x0
+    NOT_REACHED
+    .org 0x900                  /* 32: VGET field 4 (reserved) */
+    .insn r 0x2B, 2, 4, a2, x0, x0
+    NOT_REACHED
+    .org 0x940                  /* 33: legal control */
     fence
     fence.i
     .word  0x00001363           /* BNE x0, x0, +6: not taken, no error */

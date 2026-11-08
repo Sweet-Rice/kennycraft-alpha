@@ -2,9 +2,10 @@
 // that each one halts with ERR.ILLEGAL, the right ERR_PC, the error LED on,
 // rd and memory untouched and nothing fetched afterwards. The last case is
 // the legal control (no halt, reset cleared ERR/ERR_PC, unmapped reads 0).
-// With HAS_RAY_UNIT = 1, cases 12 (VTRACE, cap 0), 26 (VSET field 0) and 27
-// (VGET field 1) are legal: they must not halt and must reach the next
-// instruction, and VTRACE with a cap of 0 and VSET must leave rd alone.
+// With HAS_RAY_UNIT = 1, cases 12 (VTRACE, cap 0), 26 (VSET field 0), 27
+// (VGET field 1) and 31 (VGET field 3) are legal: they must not halt and must
+// reach the next instruction, and VTRACE with a cap of 0 and VSET must leave
+// rd alone. VGET field 4 (case 32) halts in every build.
 // With HAS_QRCP = 1, case 13 (QRCP a2, x0) is legal and writes
 // qrcp(0) = Q16_BIG to a2; QRCP with funct7 1 or rs2 != 0 (cases 28, 29)
 // and custom-0 funct3 100 (case 30) halt in every build.
@@ -13,11 +14,12 @@ module t_illegal_tb;
     parameter string DMEM_HEX = "";
     `include "soc_harness.svh"
 
-    localparam int NCASES = 31;   // faulting cases 0..30, control is 31
+    localparam int NCASES = 33;   // faulting cases 0..32, control is 33
 
     // custom-1 cases that only the ray unit makes legal, and QRCP
     function automatic bit unit_legal(input int k);
-        return (HAS_RAY_UNIT && (k == 12 || k == 26 || k == 27)) || (HAS_QRCP && k == 13);
+        return (HAS_RAY_UNIT && (k == 12 || k == 26 || k == 27 || k == 31)) ||
+               (HAS_QRCP && k == 13);
     endfunction
 
     localparam logic [31:0] TB_SELECT = 32'h1000_00F0;
@@ -47,6 +49,8 @@ module t_illegal_tb;
             27: return "VGET field 1 (unit absent)";
             28: return "QRCP funct7 1";        29: return "QRCP rs2 = a1";
             30: return "custom-0 funct3 100";
+            31: return "VGET field 3 (unit absent)";
+            32: return "VGET field 4";
             default: return "?";
         endcase
     endfunction
@@ -75,11 +79,11 @@ module t_illegal_tb;
                 expect32($sformatf("case %0d: next instr run", k), dmem_rd(TB_MARK), 32'd1);
                 if (k == 13)
                     expect32($sformatf("case %0d: rd = qrcp(0)", k), xreg(12), 32'h4000_0000);
-                else if (k != 27)
+                else if (k != 27 && k != 31)
                     expect32($sformatf("case %0d: rd not written", k), xreg(12), 32'h55);
                 $display("  case %2d  legal with the %s: %s", k, k == 13 ? "QRCP unit" : "ray unit",
                          k == 12 ? "VTRACE cap 0, no write" : k == 13 ? "QRCP a2, x0 = Q16_BIG" :
-                         k == 26 ? "VSET field 0" : "VGET field 1");
+                         k == 26 ? "VSET field 0" : k == 27 ? "VGET field 1" : "VGET field 3");
                 continue;
             end
 

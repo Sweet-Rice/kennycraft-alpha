@@ -1,7 +1,7 @@
 /* t_mmio: every MMIO register and the display / chunk-engine / byte-region
    ports of kc_soc, against the harness models in soc_harness.svh, plus the
-   GPU memory region. Results go to res[] in dmem; the testbench checks them
-   and the models. */
+   unmapped 0x7 region (the removed GPU memory). Results go to res[] in dmem;
+   the testbench checks them and the models. */
 #include "kc_test.h"
 #define DDR_STATUS  0x2C
 #define CHUNK_CMD   0x30
@@ -81,6 +81,19 @@ _start:
     sb    t0, 0(t3)                 /* last pixel */
     lbu   t1, 0(t3)
     sw    t1, 60(s1)
+    li    t0, 0xBEEF
+    sh    t0, 18(s2)
+    lw    t1, 16(s2)
+    sw    t1, 96(s1)                /* 0xBEEF2211 */
+    lb    t1, 19(s2)
+    sw    t1, 100(s1)               /* 0xFFFFFFBE */
+    lh    t1, 18(s2)
+    sw    t1, 104(s1)               /* 0xFFFFBEEF */
+    li    t3, 0x40020011            /* addr[27:17] not decoded: byte 17 */
+    li    t0, 0x5A
+    sb    t0, 0(t3)
+    lw    t1, 16(s2)
+    sw    t1, 108(s1)               /* 0xBEEF5A11 */
 
     li    s3, 0x60000000            /* palette */
     li    t0, 0x7ABC
@@ -103,43 +116,21 @@ _start:
     lh    t1, 0x100(s4)
     sw    t1, 76(s1)                /* 0x0F0C */
 
-    li    s6, GPU_BASE              /* GPU memory: 68 KB word BRAM */
+    li    s6, UNMAPPED_BASE         /* 0x7000_0000: unmapped */
     li    t0, 0x12345678
     sw    t0, 0(s6)
-    li    t3, GPU_BASE + 0x10FFC    /* last word */
-    li    t0, 0xCAFEF00D
-    sw    t0, 0(t3)
-    lw    t1, 0(s6)
-    sw    t1, 80(s1)                /* 0x12345678 */
-    lw    t1, 0(t3)
-    sw    t1, 84(s1)                /* 0xCAFEF00D */
-    li    t0, 0x11223344
-    sw    t0, 4(s6)
-    li    t0, 0x80
     sb    t0, 5(s6)
-    li    t0, 0x8001
     sh    t0, 6(s6)
-    lw    t1, 4(s6)
-    sw    t1, 88(s1)                /* 0x80018044 */
-    lbu   t1, 5(s6)
-    sw    t1, 92(s1)                /* 0x80 */
-    lb    t1, 5(s6)
-    sw    t1, 96(s1)                /* 0xFFFFFF80 */
-    lhu   t1, 6(s6)
-    sw    t1, 100(s1)               /* 0x8001 */
-    lh    t1, 6(s6)
-    sw    t1, 104(s1)               /* 0xFFFF8001 */
-    li    t3, GPU_BASE + 0x11000    /* first offset past the end: unmapped */
-    li    t4, GPU_BASE + 0x20000    /* would alias onto offset 0 mod 128 KB */
-    li    t0, 0xDEADBEEF
+    li    t3, UNMAPPED_BASE + 0x10FFC   /* the old GPU memory's last word */
     sw    t0, 0(t3)
-    sw    t0, 0(t4)
-    lw    t1, 0(t3)
-    sw    t1, 108(s1)               /* 0 */
-    lw    t1, 0(t4)
-    sw    t1, 112(s1)               /* 0 */
     lw    t1, 0(s6)
-    sw    t1, 116(s1)               /* still 0x12345678 */
+    sw    t1, 80(s1)                /* 0 */
+    lw    t1, 0(t3)
+    sw    t1, 84(s1)                /* 0 */
+    lbu   t1, 5(s6)
+    sw    t1, 88(s1)                /* 0 */
+    lh    t1, 6(s6)
+    sw    t1, 92(s1)                /* 0 */
 
     li    t0, 1
     li    t1, TB_DONE

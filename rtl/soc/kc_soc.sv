@@ -46,9 +46,10 @@ module kc_soc
     // Display core-side port (P1)
     output logic        fb_we,
     output logic        fb_re,
-    output logic [16:0] fb_addr,
-    output logic [7:0]  fb_wdata,
-    input  logic [7:0]  fb_rdata,
+    output logic [3:0]  fb_be,
+    output logic [14:0] fb_addr,
+    output logic [31:0] fb_wdata,
+    input  logic [31:0] fb_rdata,
     output logic        pal_we,
     output logic [7:0]  pal_addr,
     output logic [11:0] pal_wdata,
@@ -89,7 +90,6 @@ module kc_soc
 
     localparam int IMEM_WORDS = IMEM_BYTES / 4;
     localparam int DMEM_WORDS = DMEM_BYTES / 4;
-    localparam int GPU_WORDS  = GPU_BYTES / 4;
 
     // ------------------------------------------------------------------
     // Core
@@ -142,32 +142,6 @@ module kc_soc
         .clk, .we(dmem_we), .addr(dmem_addr), .wdata(dmem_wdata), .rdata(dmem_rdata)
     );
 
-    // GPU memory as a 16 K-word bank (offsets 0x0_0000..0x0_FFFF) and a
-    // 1 K-word bank (0x1_0000..0x1_0FFF). One 17 K-deep array makes Vivado
-    // build 32 K x 1 slices (32 BRAM36); the split maps to 16 + 1. The decoder
-    // only enables writes inside the 68 KB, so gpu_addr[13:10] is 0 whenever
-    // the 1 K bank is written. The bank select is registered with the read.
-    localparam int GPU_LO_WORDS = 16 * 1024;
-    localparam int GPU_HI_WORDS = GPU_WORDS - GPU_LO_WORDS;
-
-    logic [3:0]  gpu_we;
-    logic [14:0] gpu_addr;
-    logic [31:0] gpu_wdata, gpu_rdata, gpu_lo_rdata, gpu_hi_rdata;
-    logic        gpu_hi_q;
-
-    memory_arr #(.W(32), .D(GPU_LO_WORDS)) u_gpu_lo (
-        .clk, .we(gpu_addr[14] ? 4'b0 : gpu_we), .addr(gpu_addr[13:0]),
-        .wdata(gpu_wdata), .rdata(gpu_lo_rdata)
-    );
-
-    memory_arr #(.W(32), .D(GPU_HI_WORDS)) u_gpu_hi (
-        .clk, .we(gpu_addr[14] ? gpu_we : 4'b0), .addr(gpu_addr[9:0]),
-        .wdata(gpu_wdata), .rdata(gpu_hi_rdata)
-    );
-
-    always_ff @(posedge clk) gpu_hi_q <= gpu_addr[14];
-    assign gpu_rdata = gpu_hi_q ? gpu_hi_rdata : gpu_lo_rdata;
-
     // ------------------------------------------------------------------
     // Address decoder
     // ------------------------------------------------------------------
@@ -186,11 +160,10 @@ module kc_soc
         .req(bus_req), .we(bus_we), .addr(bus_addr), .be(bus_be), .wdata(bus_wdata),
         .ready(bus_ready), .rdata(bus_rdata),
         .dmem_we, .dmem_addr, .dmem_wdata, .dmem_rdata,
-        .gpu_we, .gpu_addr, .gpu_wdata, .gpu_rdata,
         .world_req(w_req), .world_we(w_we), .world_addr(w_addr), .world_wdata(w_wdata),
         .world_ready(w_ready), .world_rdata(w_rdata),
         .tex_req, .tex_we, .tex_addr, .tex_wdata, .tex_ready, .tex_rdata,
-        .fb_we, .fb_re, .fb_addr, .fb_wdata, .fb_rdata,
+        .fb_we, .fb_re, .fb_be, .fb_addr, .fb_wdata, .fb_rdata,
         .mmio_req, .mmio_we, .mmio_addr, .mmio_wdata, .mmio_ready, .mmio_rdata,
         .pal_we, .pal_addr, .pal_wdata
     );

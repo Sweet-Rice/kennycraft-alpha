@@ -1,12 +1,14 @@
 // Display path: framebuffers -> palette -> Pmod VGA pins (Tai page, Memory &
-// Display). The core side is a plain byte port on clk_core; everything else
-// runs on clk_pix.
+// Display). The core side is a word port with byte enables on clk_core;
+// everything else runs on clk_pix.
 //
 // Core-side port (clk_core, 50 MHz), wired to MMIO by the core:
-//   fb_we/fb_re/fb_addr/fb_wdata  byte access to the CPU's draw buffer,
-//                                  region 0x4000_0000, fb_addr = byte index
-//                                  0..76799
-//   fb_rdata                      read data, valid the cycle after fb_re
+//   fb_we/fb_re/fb_be/fb_addr/fb_wdata
+//                                 word access to the CPU's draw buffer,
+//                                 region 0x4000_0000, fb_addr = word index
+//                                 0..19199 (pixel 4 fb_addr + k in byte k),
+//                                 fb_be[k] writes byte k on fb_we
+//   fb_rdata                      read word, valid the cycle after fb_re
 //   pal_we/pal_addr/pal_wdata     palette store, region 0x6000_0000
 //   swap_req                      1-cycle pulse: store of 1 to FB_SWAP
 //   swap_pending                  FB_SWAP read value
@@ -83,9 +85,10 @@ module display #(
     // Core side (clk_core)
     input  logic        fb_we,
     input  logic        fb_re,
-    input  logic [16:0] fb_addr,
-    input  logic [7:0]  fb_wdata,
-    output logic [7:0]  fb_rdata,
+    input  logic [3:0]  fb_be,
+    input  logic [14:0] fb_addr,
+    input  logic [31:0] fb_wdata,
+    output logic [31:0] fb_rdata,
     input  logic        pal_we,
     input  logic [7:0]  pal_addr,
     input  logic [11:0] pal_wdata,
@@ -286,7 +289,7 @@ module display #(
     framebuffer #(.FB_COUNT(FB_COUNT)) u_fb (
         .clk_a  (clk_core),
         .en_a   (fb_we || fb_re),
-        .we_a   (fb_we),
+        .we_a   (fb_we ? fb_be : 4'b0),
         .sel_a  (draw_sel_core),
         .addr_a (fb_addr),
         .wdata_a(fb_wdata),

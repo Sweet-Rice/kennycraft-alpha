@@ -1,5 +1,5 @@
 // Splits one 32-bit bus access into byte accesses for a byte-wide region
-// (world, textures, framebuffer). Both sides use the same handshake: req is
+// (world, textures). Both sides use the same handshake: req is
 // held until ready, the access happens once in the req && ready cycle, and
 // read data is valid the cycle after.
 //

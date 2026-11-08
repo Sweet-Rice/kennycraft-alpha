@@ -88,7 +88,13 @@ uint8_t hal_fb_get(uint32_t idx) { return fb[back][idx % (FB_STRIDE * 240)]; }
 
 const uint8_t *host_front_buffer(void) { return fb[back ^ 1]; }
 const uint8_t *host_back_buffer(void)  { return fb[back]; }
-const uint16_t *host_palette(void)     { return kc_palette; }
+static uint16_t pal[256];                 // palette RAM: starts as palette.hex, game code may rewrite it
+static int      pal_loaded;
+const uint16_t *host_palette(void) {
+    if (!pal_loaded) { memcpy(pal, kc_palette, sizeof pal); pal_loaded = 1; }
+    return pal;
+}
+void hal_pal_set(uint32_t i, uint16_t rgb444) { host_palette(); pal[i & 255] = rgb444 & 0xFFF; }
 int host_fb_mode(void)                 { return (int)fb_mode; }
 
 // Real DDR3 is not initialized at power-on: fill a chunk's 4 KB (8192 nibbles, one per byte

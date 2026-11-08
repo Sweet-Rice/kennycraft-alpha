@@ -79,8 +79,8 @@ package kc_isa_pkg;
 
     // custom-1 (0x2B) funct3. 011 to 111 are illegal.
     localparam logic [2:0] F3_VSET      = 3'b000;  // funct7 = field 0..7
-    localparam logic [2:0] F3_VTRACE    = 3'b001;  // funct7 = 0
-    localparam logic [2:0] F3_VGET      = 3'b010;  // funct7 = field 0..1
+    localparam logic [2:0] F3_VTRACE    = 3'b001;  // funct7 = 0; rd = x0: asynchronous
+    localparam logic [2:0] F3_VGET      = 3'b010;  // funct7 = field 0, 1, 3
 
     // custom-2 (0x5B) funct3. 011 to 111 are illegal.
     localparam logic [2:0] F3_DIF       = 3'b000;  // B-type
@@ -100,10 +100,10 @@ package kc_isa_pkg;
     localparam logic [6:0] VSET_STEP_SIGN  = 7'd7;  // bit 0 x, 1 y, 2 z; 1 = negative
 
     // VGET fields (funct7 of VGET). Field 2 is reserved for the fog stretch
-    // and is illegal in v1.0.
+    // and is illegal, as is every field above 3.
     localparam logic [6:0] VGET_HIT_CELL   = 7'd0;  // packed like VSET_START_CELL
     localparam logic [6:0] VGET_T_HIT      = 7'd1;  // Q16.16
-    localparam int unsigned VGET_NUM_FIELDS = 2;
+    localparam logic [6:0] VGET_RESULT     = 7'd3;  // VTRACE result, zero-extended
 
     // ------------------------------------------------------------------
     // ERR register bit positions (MMIO ERR, Tai_2 section 2 Errors)
@@ -129,8 +129,6 @@ package kc_isa_pkg;
     localparam logic [31:0] FB_BASE      = 32'h4000_0000;
     localparam logic [31:0] MMIO_BASE    = 32'h5000_0000;
     localparam logic [31:0] PAL_BASE     = 32'h6000_0000;
-    localparam logic [31:0] GPU_BASE     = 32'h7000_0000;
-    localparam int unsigned GPU_BYTES    = 32'h0001_1000;  // 68 KB; offsets past it unmapped
 
     localparam logic [3:0]  REG_IMEM     = 4'h0;
     localparam logic [3:0]  REG_DMEM     = 4'h1;
@@ -139,7 +137,6 @@ package kc_isa_pkg;
     localparam logic [3:0]  REG_FB       = 4'h4;
     localparam logic [3:0]  REG_MMIO     = 4'h5;
     localparam logic [3:0]  REG_PAL      = 4'h6;
-    localparam logic [3:0]  REG_GPU      = 4'h7;
 
     // ------------------------------------------------------------------
     // MMIO offsets from MMIO_BASE
@@ -207,7 +204,7 @@ package kc_isa_pkg;
     //   - custom-0: funct7 0 and funct3 000, 001, 011, 101, 110, 111, plus
     //     QRCP (funct3 010) with rs2 = 0 only when has_qrcp
     //   - custom-1 (only when has_ray_unit): VSET with funct7 0..7, VTRACE
-    //     with funct7 0, VGET with funct7 0..1
+    //     with funct7 0, VGET with funct7 0, 1 or 3
     //   - custom-2 (only when has_div_stack): funct3 000..010
     // So DIV/DIVU/REM/REMU, the whole SYSTEM opcode (ECALL, EBREAK, CSR*),
     // every other opcode (including 16-bit compressed words) and every
@@ -267,7 +264,8 @@ package kc_isa_pkg;
                 unique case (f3)
                     F3_VSET:   ill = (f7 > VSET_STEP_SIGN);
                     F3_VTRACE: ill = (f7 != 7'd0);
-                    F3_VGET:   ill = (f7 >= 7'(VGET_NUM_FIELDS));
+                    F3_VGET:   ill = (f7 != VGET_HIT_CELL) && (f7 != VGET_T_HIT) &&
+                                     (f7 != VGET_RESULT);
                     default:   ill = 1'b1;
                 endcase
                 if (!has_ray_unit) ill = 1'b1;

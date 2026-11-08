@@ -59,7 +59,9 @@ typedef struct {
     int32_t right[3], up[3];    // unit camera axes, Q16
     int32_t focal;              // pixels per unit of tangent, Q16
     int32_t corner_x, corner_z; // committed window corner (absolute blocks) for the kernel
-} kc_rparams;                   // 64 bytes, ends at 0x1000_0070
+    int32_t hud_x0, hud_x1;     // pixels [hud_x0, hud_x1) x [hud_y0, hud_y1) are opaque overlay
+    int32_t hud_y0, hud_y1;     // (the hotbar): the kernel skips 4x2 blocks fully inside them
+} kc_rparams;                   // 80 bytes, ends at 0x1000_0080
 
 #ifdef KC_HOST
 // ---------------------------------------------------------------- laptop emulation ----
@@ -75,6 +77,7 @@ void     hal_fb_put(uint32_t idx, uint8_t v);
 uint8_t  hal_fb_get(uint32_t idx);
 uint32_t hal_mmio_r(uint32_t off);
 void     hal_mmio_w(uint32_t off, uint32_t v);
+void     hal_pal_set(uint32_t i, uint16_t rgb444);
 
 #else
 // ---------------------------------------------------------------- chip ---------------------
@@ -84,6 +87,7 @@ void     hal_mmio_w(uint32_t off, uint32_t v);
 #define KC_TEX   ((volatile uint8_t *)0x30000000u)
 #define KC_FB    ((volatile uint8_t *)0x40000000u)
 #define KC_MMIO  ((volatile uint32_t *)0x50000000u)
+#define KC_PAL   ((volatile uint32_t *)0x60000000u)   // write only, one RGB444 entry per word
 
 // Hardware adds WIN_ORIGIN and returns air for invalid slots. Low 4 bits = type.
 static inline uint8_t  hal_win_get(int32_t x, int32_t y, int32_t z) { return KC_WORLD[WIN_INDEX(x, y, z)] & 15; }
@@ -93,6 +97,7 @@ static inline void     hal_fb_put(uint32_t idx, uint8_t v) { KC_FB[idx] = v; }
 static inline uint8_t  hal_fb_get(uint32_t idx) { return KC_FB[idx]; }
 static inline uint32_t hal_mmio_r(uint32_t off) { return KC_MMIO[off >> 2]; }
 static inline void     hal_mmio_w(uint32_t off, uint32_t v) { KC_MMIO[off >> 2] = v; }
+static inline void     hal_pal_set(uint32_t i, uint16_t rgb444) { KC_PAL[i & 255] = rgb444; }
 #endif
 
 // Debug text over UART_TX (game code only, lane 0).

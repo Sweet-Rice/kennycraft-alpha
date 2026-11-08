@@ -1,7 +1,7 @@
 // Standalone display bitstream (KC_TARGET=display_test) for the on-board
 // check of the P1 display path. After reset it writes the palette, fills the
-// back buffer through the core-side port, reads every byte back and checks
-// it, then requests one swap:
+// back buffer through the core-side word port one byte (byte enable) at a
+// time, reads every byte back and checks it, then requests one swap:
 //   rows   0..179  eight 40-pixel colour bars (FB_MODE 0, 320x240 buffer):
 //                  white, yellow, cyan, green, magenta, red, blue, black
 //   rows 180..239  sixteen 20-pixel grey steps, black to white
@@ -38,12 +38,13 @@ module display_test (
     logic [16:0] addr;
     logic [7:0]  pal_i;
     logic        fb_we, fb_re, pal_we, swap_req, swap_pending;
-    logic [7:0]  fb_wdata;
+    logic [7:0]  pix;
     logic [11:0] pal_wdata;
     logic        vblank;
     logic [31:0] frame_count;
-    logic [7:0]  fb_rdata;
-    logic        check_valid;    // fb_rdata holds the byte read last cycle
+    logic [31:0] fb_rdata;
+    logic        check_valid;    // fb_rdata holds the word read last cycle
+    logic [1:0]  check_lo;       // and this byte of it is the pixel checked
     logic [7:0]  check_expect;
     logic        read_ok;
 
@@ -70,8 +71,8 @@ module display_test (
     // Pixel byte for (x, y) of the 320x240 buffer.
     logic [8:0] x_div20;
     assign x_div20  = x / 9'd20;
-    assign fb_wdata = (y < 8'd180) ? {1'b0, x[3:0] ^ y[3:0], x_div20[3:1]}
-                                   : {1'b1, y[2:0], x_div20[3:0]};
+    assign pix = (y < 8'd180) ? {1'b0, x[3:0] ^ y[3:0], x_div20[3:1]}
+                              : {1'b1, y[2:0], x_div20[3:0]};
 
     always_ff @(posedge clk_core) begin
         if (rst_core) begin
@@ -83,12 +84,14 @@ module display_test (
             swap_req     <= 1'b0;
             check_valid  <= 1'b0;
             check_expect <= '0;
+            check_lo     <= '0;
             read_ok      <= 1'b1;
         end else begin
             swap_req    <= 1'b0;
             check_valid <= (state == S_CHECK);
-            check_expect <= fb_wdata;
-            if (check_valid && fb_rdata != check_expect) read_ok <= 1'b0;
+            check_expect <= pix;
+            check_lo     <= addr[1:0];
+            if (check_valid && fb_rdata[check_lo*8 +: 8] != check_expect) read_ok <= 1'b0;
             unique case (state)
                 S_PAL: begin
                     pal_i <= pal_i + 8'd1;
@@ -128,8 +131,9 @@ module display_test (
         .rst_pix     (rst_pix),
         .fb_we       (fb_we),
         .fb_re       (fb_re),
-        .fb_addr     (addr),
-        .fb_wdata    (fb_wdata),
+        .fb_be       (4'b0001 << addr[1:0]),
+        .fb_addr     (addr[16:2]),
+        .fb_wdata    ({4{pix}}),
         .fb_rdata    (fb_rdata),
         .pal_we      (pal_we),
         .pal_addr    (pal_i),
