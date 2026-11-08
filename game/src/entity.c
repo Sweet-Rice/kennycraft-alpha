@@ -96,20 +96,32 @@ int32_t entity_count(void) { return nents; }
 
 static void screen_rect(ent_box *b, const q16 e[3]) {
     const kc_rparams *p = KC_RP;
+    int32_t W = p->width, H = p->height, w2 = W / 2, h2 = H / 2;
+    q16 focal = p->focal;
+    // A corner's coordinate on axis a is lo[a] - e[a] or hi[a] - e[a], so each of the 9
+    // camera-axis products has only two values per box: compute those 18 once and add them up
+    // per corner, in the same order as before (identical sums).
+    q16 px[3][2], py[3][2], pz[3][2];
+    for (int32_t a = 0; a < 3; a++) {
+        q16 rl = b->lo[a] - e[a], rh = b->hi[a] - e[a];
+        q16 ra = p->right[a], ua = p->up[a], fa = KC_CAM->forward[a];
+        px[a][0] = qmul(rl,ra); px[a][1] = qmul(rh,ra);
+        py[a][0] = qmul(rl,ua); py[a][1] = qmul(rh,ua);
+        pz[a][0] = qmul(rl,fa); pz[a][1] = qmul(rh,fa);
+    }
     int32_t x0 = 4096, y0 = 4096, x1 = -4096, y1 = -4096;
     for (int32_t k = 0; k < 8; k++) {
-        q16 r[3];
-        for (int32_t a = 0; a < 3; a++) r[a] = (((k >> a) & 1) ? b->hi[a] : b->lo[a]) - e[a];
-        q16 x = qmul(r[0],p->right[0]) + qmul(r[1],p->right[1]) + qmul(r[2],p->right[2]);
-        q16 y = qmul(r[0],p->up[0]) + qmul(r[1],p->up[1]) + qmul(r[2],p->up[2]);
-        q16 z = qmul(r[0],KC_CAM->forward[0]) + qmul(r[1],KC_CAM->forward[1]) + qmul(r[2],KC_CAM->forward[2]);
+        int32_t i0 = k & 1, i1 = (k >> 1) & 1, i2 = (k >> 2) & 1;
+        q16 x = px[0][i0] + px[1][i1] + px[2][i2];
+        q16 y = py[0][i0] + py[1][i1] + py[2][i2];
+        q16 z = pz[0][i0] + pz[1][i1] + pz[2][i2];
         if (z < Q16(0.05)) {
-            b->sx0 = b->sy0 = 0; b->sx1 = p->width - 1; b->sy1 = p->height - 1;
+            b->sx0 = b->sy0 = 0; b->sx1 = W - 1; b->sy1 = H - 1;
             return;
         }
         q16 iz = qrcp(z);
-        int32_t sx = p->width / 2 + iclamp(qmul(qmul(x,p->focal),iz) >> 16,-4096,4096);
-        int32_t sy = p->height / 2 - iclamp(qmul(qmul(y,p->focal),iz) >> 16,-4096,4096);
+        int32_t sx = w2 + iclamp(qmul(qmul(x,focal),iz) >> 16,-4096,4096);
+        int32_t sy = h2 - iclamp(qmul(qmul(y,focal),iz) >> 16,-4096,4096);
         x0 = imin(x0,sx); x1 = imax(x1,sx); y0 = imin(y0,sy); y1 = imax(y1,sy);
     }
     x0 -= 2; y0 -= 2; x1 += 2; y1 += 2;
@@ -158,14 +170,17 @@ void entity_prepare(void) {
         ent_rect_box[ent_nrects][0] = (uint8_t)first; ent_rect_box[ent_nrects][1] = (uint8_t)ent_nboxes;
         ent_nrects += u[0] <= u[2];
     }
+    // Row spans: block row r (pixels 2r, 2r + 1) overlaps rect rows [u1, u3] when
+    // 2r + 1 >= u1 and 2r <= u3, i.e. r in [u1 >> 1, u3 >> 1] (u1 >= 0): walk only those rows.
     int32_t rows = KC_RP->height >> 1;
-    for (int32_t r = 0; r < rows; r++) {
-        int32_t by = r * 2, x0 = 4096, x1 = -4096;
-        for (int32_t i = 0; i < ent_nrects; i++) {
-            const int16_t *u = ent_rects[i];
-            if (by + 1 >= u[1] && by <= u[3]) { x0 = imin(x0, u[0]); x1 = imax(x1, u[2]); }
+    for (int32_t r = 0; r < rows; r++) { ent_span[r][0] = 4096; ent_span[r][1] = -4096; }
+    for (int32_t i = 0; i < ent_nrects; i++) {
+        const int16_t *u = ent_rects[i];
+        int32_t r0 = u[1] >> 1, r1 = imin(u[3] >> 1, rows - 1);
+        for (int32_t r = r0; r <= r1; r++) {
+            ent_span[r][0] = (int16_t)imin(ent_span[r][0], u[0]);
+            ent_span[r][1] = (int16_t)imax(ent_span[r][1], u[2]);
         }
-        ent_span[r][0] = (int16_t)x0; ent_span[r][1] = (int16_t)x1;
     }
 }
 
