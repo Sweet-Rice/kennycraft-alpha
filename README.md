@@ -31,7 +31,7 @@ needs `--headless`. `make golden-check` also needs clang and `zig cc`;
 
 | Target | Behavior |
 | --- | --- |
-| `make check-bench` | Fixture checks, every self-checking test at Stage 0 (LANES = 1) and Stage 1 (LANES = 8, divergence stack), and the golden shots (part of `make check`) |
+| `make check-bench` | Fixture checks, every self-checking test at Stage 0 (LANES = 1), Stage 1 (LANES = 8, divergence stack) and Stage 2 (plus the VTRACE ray unit, on `rtl/top.sv`), and the golden shots (part of `make check`) |
 | `make sw [PROG="sources.c"]` | Build ELF, disassembly, map and two 8192-word memory images |
 | `make arena-host` | Compile the allocator for the host with `HOST_CC` |
 | `make vl [RUN_ARGS="..."]` | Run the Verilated RTL; SDL3 window, UART and keyboard when built with SDL3 |
