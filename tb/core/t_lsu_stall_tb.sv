@@ -18,7 +18,7 @@ module t_lsu_stall_tb;
     always @(posedge clk) begin
         if (!rst && ddr_reg_en && ddr_reg_we && ddr_reg_off == 6'h30 && !ddr_reg_stall)
             chunk_log.push_back(ddr_reg_wdata);
-        if (!rst && dut.u_core.bus_req && !dut.u_core.bus_ready) bus_wait <= bus_wait + 1;
+        if (!rst && `KC_CORE.bus_req && !`KC_CORE.bus_ready) bus_wait <= bus_wait + 1;
     end
 
     initial begin

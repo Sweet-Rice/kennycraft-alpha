@@ -7,19 +7,25 @@
 #   make chip       rv32i_zmmul build with stand-in crt0/linker; checks no div/float/libcalls
 #                   and that every lane's call chain fits its 1 KB stack
 #   make chip8      same with KC_LANES=8 (Stage 1 kernel)
-#   make chip-raster  tile rasterizer builds (1 and 8 lanes) + lane lint + stack check
-#   make compare    ray tracer vs rasterizer on the golden poses (out/cmp)
-SRC      := src/kc_libc.c src/arena.c src/fixed.c src/trace.c src/render.c src/terrain.c src/chunks.c src/game.c src/kc_main.c
-RASTER   := src/mesh.c src/raster.c
+#   make models     entity checks and review shots (out/models)
+#   make cr6        CR6 UART link checks (out/cr6/cr6_hud.png shows the HUD)
+# Build options (any target): KC_GEN_BITMAP=1 (issue #2's 8 KB bitmap instead of chunk tags),
+# KC_TAG_PERSIST=1 (chunk tags without the boot nonce: stored chunks survive a reset).
+# KC_QRCP=1: 8-lane chip builds use the QRCP instruction for qrcp() (D22; Stage 2 core).
+# KC_FIXED_DT=1: fixed per-frame dt and frame-synchronous chunk loads, so replays retire the
+#   same instructions on any core speed (trace comparison; use with KC_TAG_PERSIST=1).
+SRC      := src/kc_libc.c src/arena.c src/fixed.c src/trace.c src/render.c src/entity.c src/terrain.c src/chunks.c src/game.c src/kc_main.c src/cr6.c
 HOST_SRC := host/hal_host.c host/png.c host/main_host.c
 GEN      := gen/kc_tables.h gen/kc_assets.h gen/textures.hex gen/palette.hex
+KC_DEFS  := $(if $(KC_GEN_BITMAP),-DKC_GEN_BITMAP=$(KC_GEN_BITMAP)) $(if $(KC_TAG_PERSIST),-DKC_TAG_PERSIST=$(KC_TAG_PERSIST)) \
+            $(if $(KC_QRCP),-DKC_QRCP=$(KC_QRCP)) $(if $(KC_FIXED_DT),-DKC_FIXED_DT=$(KC_FIXED_DT))
 
 CC       ?= cc
-CFLAGS   := -std=c11 -O2 -Wall -Wextra -Wno-unused-parameter -Isrc -Igen -Ihost
+CFLAGS   := -std=c11 -O2 -Wall -Wextra -Wno-unused-parameter -Isrc -Igen -Ihost $(KC_DEFS)
 CHIP_CC  ?= clang
-CHIP_FLAGS := --target=riscv32-unknown-elf -march=rv32i_zmmul -mabi=ilp32 -ffreestanding \
+CHIP_FLAGS := --target=riscv32-unknown-elf -march=rv32i_zmmul -mabi=ilp32 -O2 -ffreestanding \
               -nostdlib -fno-builtin -fno-jump-tables -Wall -Isrc -Igen -mno-relax \
-              -DKC_CHIP -msmall-data-limit=0 -ffunction-sections -fdata-sections
+              -DKC_CHIP -msmall-data-limit=0 -ffunction-sections -fdata-sections $(KC_DEFS)
 CHIP_LDFLAGS := -Wl,--gc-sections,--entry=_start
 # -msmall-data-limit=0: no .sdata/.sbss, Bennett's kc.ld only collects .bss*.
 # --gc-sections drops functions a build never calls (kc.ld has no ENTRY, so name _start).
@@ -27,10 +33,17 @@ CHIP_LDFLAGS := -Wl,--gc-sections,--entry=_start
 # triangle) stay at -O2; lane-0 game code is built for size: IMEM is 32 KB.
 KERNEL_OPT := -O2
 GAME_OPT   := -Os
-GAME_FILES := arena.c terrain.c chunks.c game.c kc_main.c mesh.c
+GAME_FILES := arena.c terrain.c chunks.c game.c kc_main.c cr6.c
 chip_opt    = $(if $(filter $(GAME_FILES),$(notdir $(1))),$(GAME_OPT),$(KERNEL_OPT))
 
-.PHONY: all shots play vectors contract compare bench chip chip8 chip-raster clean
+# Per-frame arena size override, applied to the laptop AND chip builds alike (default 8 KB in
+# src/arena.h). Measured peak (kc_host sweep): 288 B. make clean after changing.
+ifdef ARENA_SIZE
+CFLAGS     += -DARENA_SIZE=$(ARENA_SIZE)
+CHIP_FLAGS += -DARENA_SIZE=$(ARENA_SIZE)
+endif
+
+.PHONY: all shots play vectors contract models cr6 bench chip chip8 clean FORCE
 all: build/kc_host
 
 $(GEN): tools/gen_assets.py $(wildcard assets/textures.png)
@@ -40,8 +53,8 @@ $(GEN): tools/gen_assets.py $(wildcard assets/textures.png)
 atlas-edit:
 	mkdir -p assets && cp gen/textures_atlas.png assets/textures.png && echo "edit assets/textures.png, then make"
 
-build/kc_host: $(SRC) $(RASTER) $(HOST_SRC) $(GEN) src/*.h host/*.h | build
-	$(CC) $(CFLAGS) -DKC_HOST -DKC_RASTER=1 $(SRC) $(RASTER) $(HOST_SRC) -o $@
+build/kc_host: $(SRC) $(HOST_SRC) $(GEN) src/*.h host/*.h build/defs | build
+	$(CC) $(CFLAGS) -DKC_HOST $(SRC) $(HOST_SRC) -o $@
 
 shots: build/kc_host
 	mkdir -p out/shots && ./build/kc_host shots out/shots
@@ -51,8 +64,10 @@ vectors: build/kc_host
 	mkdir -p out/vectors && ./build/kc_host vectors out/vectors
 contract: build/kc_host
 	./build/kc_host contract
-compare: build/kc_host
-	mkdir -p out/cmp && ./build/kc_host compare out/cmp
+models: build/kc_host
+	mkdir -p out/models && ./build/kc_host models out/models
+cr6: build/kc_host
+	mkdir -p out/cr6 && ./build/kc_host cr6 out/cr6
 bench: build/kc_host
 	./build/kc_host bench
 
@@ -61,7 +76,7 @@ bench: build/kc_host
 # Each variant compiles its objects into build/<variant>/ with that variant's defines.
 # $(1) variant, $(2) defines, $(3) sources, $(4) linker script
 define CHIP_ELF
-build/$(1)/%.o: src/%.c $$(GEN) $$(wildcard src/*.h) Makefile | build
+build/$(1)/%.o: src/%.c $$(GEN) $$(wildcard src/*.h) Makefile build/defs | build
 	@mkdir -p $$(@D)
 	$$(CHIP_CC) $$(CHIP_FLAGS) $$(call chip_opt,$$<) $(2) -c $$< -o $$@
 build/kc_$(1).elf: $$(patsubst src/%.c,build/$(1)/%.o,$(3)) chip/bench/crt0.S $(4) Makefile | build
@@ -69,15 +84,6 @@ build/kc_$(1).elf: $$(patsubst src/%.c,build/$(1)/%.o,$(3)) chip/bench/crt0.S $(
 endef
 $(eval $(call CHIP_ELF,chip,-DKC_LANES=1,$(SRC),chip/bench/kc.ld))
 $(eval $(call CHIP_ELF,chip8,-DKC_LANES=8,$(SRC),chip/bench/kc.ld))
-$(eval $(call CHIP_ELF,chip_raster,-DKC_LANES=1 -DKC_RASTER=1,$(SRC) $(RASTER),chip/stub_kc.ld))
-$(eval $(call CHIP_ELF,chip8_raster,-DKC_LANES=8 -DKC_RASTER=1,$(SRC) $(RASTER),chip/stub_kc.ld))
-
-chip-raster: build/kc_chip_raster.elf build/kc_chip8_raster.elf
-	@sh tools/chip_check.sh build/kc_chip_raster.elf
-	@sh tools/chip_check.sh build/kc_chip8_raster.elf
-	@sh tools/lane_lint.sh build/kc_chip8_raster.elf
-	@sh tools/stack_check.sh build/kc_chip_raster.elf
-	@sh tools/stack_check.sh build/kc_chip8_raster.elf
 
 chip: build/kc_chip.elf
 	@sh tools/chip_check.sh $<
@@ -89,5 +95,8 @@ chip8: build/kc_chip8.elf
 
 build:
 	mkdir -p build
+# Rebuild when the build options change.
+build/defs: FORCE | build
+	@echo '$(KC_DEFS)' | cmp -s - $@ || echo '$(KC_DEFS)' > $@
 clean:
 	rm -rf build out gen

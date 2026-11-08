@@ -1,10 +1,11 @@
-// Instruction decoder for the core: RV32I + Zmmul + custom-0 lane control +
-// custom-2 divergence stack (Tai_2 section 1).
+// Instruction decoder for the core: RV32I + Zmmul + custom-0 lane control and
+// QRCP + custom-1 ray unit + custom-2 divergence stack (Tai_2 section 1).
 //
 // illegal is exactly kc_isa_pkg::is_illegal: every encoding Tai_2 section 1
-// does not define is illegal, plus custom-1/custom-2 when the build lacks the
-// ray unit / divergence stack (the "unit absent" rule). is_div is only ever
-// set when HAS_DIV_STACK = 1. FENCE and FENCE.I decode as no-ops.
+// does not define is illegal, plus custom-1/custom-2/QRCP when the build lacks
+// the ray unit / divergence stack / QRCP unit (the "unit absent" rule).
+// is_ray / is_div / is_qrcp are only ever set when HAS_RAY_UNIT /
+// HAS_DIV_STACK / HAS_QRCP = 1. FENCE and FENCE.I decode as no-ops.
 //
 // alu_ctrl = {sub/sra, funct3} for OP and OP-IMM, and the compare the branch
 // needs for BRANCH (XOR for BEQ/BNE, SLT for BLT/BGE, SLTU for BLTU/BGEU).
@@ -12,7 +13,8 @@ module inst_decoder
     import kc_isa_pkg::*;
 #(
     parameter bit HAS_DIV_STACK = 1'b0,   // custom-2 (DIF, DELSE, DENDIF)
-    parameter bit HAS_RAY_UNIT  = 1'b0    // custom-1 (VSET, VTRACE, VGET)
+    parameter bit HAS_RAY_UNIT  = 1'b0,   // custom-1 (VSET, VTRACE, VGET)
+    parameter bit HAS_QRCP      = 1'b0    // custom-0 funct3 010 (QRCP, D22)
 ) (
     input  logic [31:0] inst,
     output logic [3:0]  alu_ctrl,
@@ -29,6 +31,8 @@ module inst_decoder
     output logic        is_jalr,
     output logic        is_lane,     // custom-0 lane control, op in funct3
     output logic        is_div,      // custom-2 DIF / DELSE / DENDIF, op in funct3
+    output logic        is_ray,      // custom-1 VSET / VTRACE / VGET, op in funct3
+    output logic        is_qrcp,     // QRCP (custom-0 funct3 010), not is_lane
     output logic        uniform_wr,  // writes rd in every lane (BALLOT, MASKGET)
     output logic        illegal
 );
@@ -55,8 +59,10 @@ module inst_decoder
         is_jalr    = 1'b0;
         is_lane    = 1'b0;
         is_div     = 1'b0;
+        is_ray     = 1'b0;
+        is_qrcp    = 1'b0;
         uniform_wr = 1'b0;
-        illegal    = is_illegal(inst, HAS_RAY_UNIT, HAS_DIV_STACK);
+        illegal    = is_illegal(inst, HAS_RAY_UNIT, HAS_DIV_STACK, HAS_QRCP);
 
         unique case (opc)
             OPC_LUI: begin
@@ -109,15 +115,21 @@ module inst_decoder
                 is_mul    = (f7 == F7_MULDIV);
             end
             OPC_CUSTOM0: begin
-                is_lane    = 1'b1;
-                r_we       = (f3 == F3_LANEID) || (f3 == F3_BALLOT) || (f3 == F3_MASKGET);
+                is_qrcp    = HAS_QRCP && (f3 == F3_QRCP);
+                is_lane    = !is_qrcp;
+                r_we       = (f3 == F3_LANEID) || (f3 == F3_BALLOT) || (f3 == F3_MASKGET) ||
+                             is_qrcp;
                 uniform_wr = (f3 == F3_BALLOT) || (f3 == F3_MASKGET);
+            end
+            OPC_CUSTOM1: begin
+                is_ray = HAS_RAY_UNIT;
+                r_we   = HAS_RAY_UNIT && ((f3 == F3_VTRACE) || (f3 == F3_VGET));
             end
             OPC_CUSTOM2: begin
                 is_div  = HAS_DIV_STACK;
                 imm_sig = 3'b110;           // DIF, DELSE: B-type label
             end
-            default: ;   // MISC-MEM (FENCE no-op), custom-1 and illegal words
+            default: ;   // MISC-MEM (FENCE no-op) and illegal words
         endcase
     end
 

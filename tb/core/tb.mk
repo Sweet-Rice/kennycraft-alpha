@@ -9,7 +9,8 @@
 #                           RISC-V GCC, loaded as kc_imem/kc_dmem images
 #   tb-core-t_laneid        Stage 1 rung 3, LANEID / MASKALL / scalar lane
 #   tb-core-t_lsu_order, tb-core-t_mmio_lanes
-#                           Stage 1 rung 4, lane-serial LSU and MMIO
+#                           Stage 1 rung 4, LSU (coalescing, lane order) and
+#                           MMIO
 #   tb-core-t_mask, -t_ballot, -t_maskgetset, -t_mask_zero
 #                           Stage 1 rung 5, mask control and mask loops
 #   tb-core-t_branch_uniform, -t_jalr_uniform
@@ -22,13 +23,30 @@
 #                           lane-serial accesses to stalling slaves, and
 #                           illegal cases raised by lanes other than 0
 #   tb-core-<t>-l8          the Stage 1 tests (CORE_L8) at LANES = 8
+#   tb-core-t_illegal-ray   t_illegal with the ray unit (HAS_RAY_UNIT = 1,
+#                           Stage 2: LANES = 8, divergence stack), where
+#                           only the reserved custom-1 encodings halt
+#   tb-core-t_illegal-qrcp  t_illegal on the Stage 2 core with QRCP
+#                           (HAS_QRCP = 1): QRCP is legal, QRCP with
+#                           funct7 != 0 or rs2 != 0 still halts
+#   tb-core-t_qrcp, tb-core-t_qrcp-l8
+#                           QRCP (D22) at LANES = 1 (HAS_QRCP = 1) and on the
+#                           Stage 2 core with QRCP (LANES = 8, divergence
+#                           stack, ray unit, HAS_QRCP = 1): per-lane results
+#                           against fixed.c qrcp(), inactive lanes, rd = x0,
+#                           rd = rs1, fixed latency
+#   tb-core-t_vtrace_async  asynchronous VTRACE (VTRACE x0) and VGET field 3 on
+#                           the Stage 2 core with QRCP: overlap with ALU work,
+#                           the custom-1, world and MMIO-store interlocks,
+#                           cap 0, M = 0, back-to-back walks, a halt mid-walk
 #   tracediff-core-<tb>     Stage 1 rung 2: the same test at LANES = 8 with
 #                           only lane 0 able to activate (LANE0_ONLY), whose
 #                           retirement trace must equal the LANES = 1 trace
 #                           (tb/core/tracediff.py)
-#   lint-core               verilator -Wall over rtl/core, rtl/mem, rtl/soc
+#   lint-core               verilator -Wall over rtl/core, rtl/core_pipe,
+#                           rtl/mem, rtl/soc
 #                           at LANES = 1, 3 and 8, with and without the
-#                           divergence stack
+#                           divergence stack, with the ray unit and with QRCP
 #
 # Not in `make check`: `make tracediff-base-core` (Stage 1 rung 1) builds
 # every test above against the Stage 0 core of git ref CORE_BASE_REF and
@@ -43,8 +61,9 @@ CORE_SW_FLAGS := -march=rv32i_zmmul -mabi=ilp32 -nostdlib -nostartfiles \
 CORE_SW_OBJ   := $(OBJ)/core_sw
 
 CORE_RTL_CORE := $(wildcard rtl/core/*.sv)
-CORE_RTL_REST := $(wildcard rtl/mem/*.sv) $(wildcard rtl/soc/*.sv)
-CORE_RTL      := rtl/kc_isa_pkg.sv $(CORE_RTL_CORE) $(CORE_RTL_REST)
+CORE_RTL_REST := $(wildcard rtl/mem/*.sv) $(wildcard rtl/soc/*.sv) rtl/vtrace/vtrace.sv
+CORE_RTL      := rtl/kc_isa_pkg.sv $(CORE_RTL_CORE) $(wildcard rtl/core_pipe/*.sv) \
+                 $(CORE_RTL_REST)
 CORE_TBS  := datapath_tb program_mem_tb
 CORE_RUNG5 := t_mask t_ballot t_maskgetset t_mask_zero
 CORE_RUNG6 := t_branch_uniform t_jalr_uniform
@@ -58,6 +77,9 @@ CORE_L8   := t_illegal t_laneid t_lsu_order t_mmio_lanes $(CORE_RUNG5) $(CORE_RU
 CORE_ALL  := $(CORE_TBS) $(CORE_PROG)
 PLUSARGS  ?=
 
+TB_TARGETS += tb-core-t_qrcp tb-core-t_qrcp-l8 tb-core-t_illegal-qrcp
+
+TB_TARGETS += tb-core-t_illegal-ray
 TB_TARGETS += $(addprefix tb-core-,$(CORE_ALL)) $(addprefix tracediff-core-,$(CORE_ALL)) \
               $(addsuffix -l8,$(addprefix tb-core-,$(CORE_L8))) lint-core
 
@@ -115,6 +137,45 @@ tb-core-$(1)-l8: $(call core_hex_deps,$(1))
 endef
 $(foreach t,$(CORE_L8),$(eval $(call CORE_L8_RULES,$(t))))
 
+# Stage 2: t_illegal with the ray unit
+tb-core-t_illegal-ray: $(call core_hex_deps,t_illegal)
+	@mkdir -p $(OBJ)
+	$(call CORE_VL,t_illegal_tb,_ray,-GLANES=8 -GHAS_DIV_STACK="1'b1" -GHAS_RAY_UNIT="1'b1")
+	$(call core_bin,t_illegal_tb,_ray) $(PLUSARGS)
+
+# QRCP (D22): t_illegal on the Stage 2 core with QRCP, and t_qrcp at LANES = 1
+# and on the Stage 2 core with QRCP
+CORE_S2Q := -GLANES=8 -GHAS_DIV_STACK="1'b1" -GHAS_RAY_UNIT="1'b1" -GHAS_QRCP="1'b1"
+CORE_HEX_t_qrcp_tb := -GIMEM_HEX='"$(CURDIR)/$(CORE_SW_OBJ)/t_qrcp_imem.hex"' \
+                      -GDMEM_HEX='"$(CURDIR)/$(CORE_SW_OBJ)/t_qrcp_dmem.hex"'
+CORE_QRCP_HEX := $(CORE_SW_OBJ)/t_qrcp_imem.hex $(CORE_SW_OBJ)/t_qrcp_dmem.hex
+
+tb-core-t_illegal-qrcp: $(call core_hex_deps,t_illegal)
+	@mkdir -p $(OBJ)
+	$(call CORE_VL,t_illegal_tb,_qrcp,$(CORE_S2Q))
+	$(call core_bin,t_illegal_tb,_qrcp) $(PLUSARGS)
+
+tb-core-t_qrcp: $(CORE_QRCP_HEX)
+	@mkdir -p $(OBJ)
+	$(call CORE_VL,t_qrcp_tb,,-GHAS_QRCP="1'b1")
+	$(call core_bin,t_qrcp_tb) $(PLUSARGS)
+
+tb-core-t_qrcp-l8: $(CORE_QRCP_HEX)
+	@mkdir -p $(OBJ)
+	$(call CORE_VL,t_qrcp_tb,_l8,$(CORE_S2Q))
+	$(call core_bin,t_qrcp_tb,_l8) $(PLUSARGS)
+
+# Asynchronous VTRACE on the Stage 2 core with QRCP
+CORE_HEX_t_vtrace_async_tb := -GIMEM_HEX='"$(CURDIR)/$(CORE_SW_OBJ)/t_vtrace_async_imem.hex"' \
+                              -GDMEM_HEX='"$(CURDIR)/$(CORE_SW_OBJ)/t_vtrace_async_dmem.hex"'
+CORE_VTA_HEX := $(CORE_SW_OBJ)/t_vtrace_async_imem.hex $(CORE_SW_OBJ)/t_vtrace_async_dmem.hex
+TB_TARGETS   += tb-core-t_vtrace_async
+
+tb-core-t_vtrace_async: $(CORE_VTA_HEX)
+	@mkdir -p $(OBJ)
+	$(call CORE_VL,t_vtrace_async_tb,,$(CORE_S2Q))
+	$(call core_bin,t_vtrace_async_tb) $(PLUSARGS)
+
 # Rung 1: the Stage 0 core (git ref CORE_BASE_REF) against the current core,
 # both at LANES = 1, same harness, same test images
 CORE_BASE_REF ?= 16bccea
@@ -142,3 +203,8 @@ lint-core:
 	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=8 -GHAS_DIV_STACK="1'b1" $(CORE_RTL)
 	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=3 $(CORE_RTL)
 	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=3 -GHAS_DIV_STACK="1'b1" $(CORE_RTL)
+	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=8 -GHAS_DIV_STACK="1'b1" -GHAS_RAY_UNIT="1'b1" $(CORE_RTL)
+	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=3 -GHAS_RAY_UNIT="1'b1" $(CORE_RTL)
+	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GLANES=8 -GHAS_DIV_STACK="1'b1" -GHAS_RAY_UNIT="1'b1" -GHAS_QRCP="1'b1" $(CORE_RTL)
+	$(VERILATOR) $(VL_LINT) --top-module kc_soc -GHAS_QRCP="1'b1" $(CORE_RTL)
+	$(VERILATOR) $(VL_LINT) --top-module qrcp rtl/core/qrcp.sv

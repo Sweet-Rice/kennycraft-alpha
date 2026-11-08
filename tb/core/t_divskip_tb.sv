@@ -24,7 +24,7 @@ module t_divskip_tb;
         expect_kept(A7, 32'h57, "4: nested and else bodies skipped");
         expect_uniform(T3, 32'd0, "4: M = 0 after the nested DENDIF");
         expect_uniform(T4, 32'(FULL), "4: MASKGET after the outer DENDIF");
-        expect32("stack empty", 32'(dut.u_core.g_divstack.u_divstack.sp), 32'd0);
+        expect32("stack empty", 32'(`KC_CORE.g_divstack.u_divstack.sp), 32'd0);
         finish_test("t_divskip");
     end
 endmodule

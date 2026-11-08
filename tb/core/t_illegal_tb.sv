@@ -2,12 +2,25 @@
 // that each one halts with ERR.ILLEGAL, the right ERR_PC, the error LED on,
 // rd and memory untouched and nothing fetched afterwards. The last case is
 // the legal control (no halt, reset cleared ERR/ERR_PC, unmapped reads 0).
+// With HAS_RAY_UNIT = 1, cases 12 (VTRACE, cap 0), 26 (VSET field 0), 27
+// (VGET field 1) and 31 (VGET field 3) are legal: they must not halt and must
+// reach the next instruction, and VTRACE with a cap of 0 and VSET must leave
+// rd alone. VGET field 4 (case 32) halts in every build.
+// With HAS_QRCP = 1, case 13 (QRCP a2, x0) is legal and writes
+// qrcp(0) = Q16_BIG to a2; QRCP with funct7 1 or rs2 != 0 (cases 28, 29)
+// and custom-0 funct3 100 (case 30) halt in every build.
 module t_illegal_tb;
     parameter string IMEM_HEX = "";
     parameter string DMEM_HEX = "";
     `include "soc_harness.svh"
 
-    localparam int NCASES = 23;   // faulting cases 0..22, control is 23
+    localparam int NCASES = 33;   // faulting cases 0..32, control is 33
+
+    // custom-1 cases that only the ray unit makes legal, and QRCP
+    function automatic bit unit_legal(input int k);
+        return (HAS_RAY_UNIT && (k == 12 || k == 26 || k == 27 || k == 31)) ||
+               (HAS_QRCP && k == 13);
+    endfunction
 
     localparam logic [31:0] TB_SELECT = 32'h1000_00F0;
     localparam logic [31:0] TB_MARK   = 32'h1000_00F4;
@@ -24,12 +37,20 @@ module t_illegal_tb;
             6: return "CSR read";   7: return "misaligned LW";
             8: return "misaligned LH";  9: return "misaligned SW";
             10: return "misaligned SH"; 11: return "VGET field 2";
-            12: return "VTRACE (no ray unit)"; 13: return "custom-0 funct3 010";
-            14: return "DENDIF (Stage 0)";     15: return "fetch outside imem";
+            12: return "VTRACE cap 0 (unit absent)"; 13: return "QRCP (unit absent)";
+            14: return HAS_DIV_STACK ? "DENDIF, empty stack" : "DENDIF (Stage 0)";
+            15: return "fetch outside imem";
             16: return "all-zero word";        17: return "JALR misaligned target";
             18: return "opcode 0x07 (FLW)";    19: return "OP funct7 0x10";
             20: return "LOAD funct3 011 (LD)"; 21: return "BEQ misaligned target";
             22: return "JAL misaligned target";
+            23: return "VSET field 8";         24: return "VTRACE funct7 1";
+            25: return "custom-1 funct3 011";  26: return "VSET field 0 (unit absent)";
+            27: return "VGET field 1 (unit absent)";
+            28: return "QRCP funct7 1";        29: return "QRCP rs2 = a1";
+            30: return "custom-0 funct3 100";
+            31: return "VGET field 3 (unit absent)";
+            32: return "VGET field 4";
             default: return "?";
         endcase
     endfunction
@@ -50,6 +71,22 @@ module t_illegal_tb;
             dmem_wr(TB_MARK, 32'd0);
             dmem_wr(TB_DONE, 32'd0);
             do_reset();
+
+            if (unit_legal(k)) begin
+                for (int i = 0; i < 2000 && dmem_rd(TB_MARK) == 0 && !err_led; i++)
+                    @(posedge clk);
+                expect32($sformatf("case %0d: halted", k), {31'b0, err_led}, 32'd0);
+                expect32($sformatf("case %0d: next instr run", k), dmem_rd(TB_MARK), 32'd1);
+                if (k == 13)
+                    expect32($sformatf("case %0d: rd = qrcp(0)", k), xreg(12), 32'h4000_0000);
+                else if (k != 27 && k != 31)
+                    expect32($sformatf("case %0d: rd not written", k), xreg(12), 32'h55);
+                $display("  case %2d  legal with the %s: %s", k, k == 13 ? "QRCP unit" : "ray unit",
+                         k == 12 ? "VTRACE cap 0, no write" : k == 13 ? "QRCP a2, x0 = Q16_BIG" :
+                         k == 26 ? "VSET field 0" : k == 27 ? "VGET field 1" : "VGET field 3");
+                continue;
+            end
+
             run_until_done(2000);
 
             if (k == NCASES) begin
@@ -65,12 +102,15 @@ module t_illegal_tb;
             end
 
             // Halted: let it sit and make sure nothing moves.
-            pc_halt = dut.u_core.pc;
+            pc_halt = `KC_CORE.pc;
             repeat (100) @(posedge clk);
             expect32($sformatf("%s: error LED", case_name(k)), {31'b0, err_led}, 32'd1);
-            expect32($sformatf("%s: ERR", case_name(k)), {29'b0, dut.u_mmio.err}, 32'd4);
+            // With the divergence stack, DENDIF on the empty stack halts with
+            // ERR.DIVSTACK at the same PC instead (Tai_2 section 2).
+            expect32($sformatf("%s: ERR", case_name(k)), {29'b0, dut.u_mmio.err},
+                     (k == 14 && HAS_DIV_STACK) ? 32'd2 : 32'd4);
             expect32($sformatf("%s: ERR_PC", case_name(k)), dut.u_mmio.err_pc, case_pc(k));
-            expect32($sformatf("%s: PC frozen", case_name(k)), dut.u_core.pc, pc_halt);
+            expect32($sformatf("%s: PC frozen", case_name(k)), `KC_CORE.pc, pc_halt);
             expect32($sformatf("%s: rd not written", case_name(k)), xreg(12), 32'h55);
             expect32($sformatf("%s: next instr not run", case_name(k)), dmem_rd(TB_MARK), 32'd0);
             $display("  case %2d  %-22s ERR=%0d ERR_PC=%08h", k, case_name(k),

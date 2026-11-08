@@ -8,12 +8,26 @@
 //           one cycle after the address).
 //   port B  VTRACE only.
 //
-// VTRACE (WORLD_LATENCY = 2). Copy n serves lanes 4n..4n+3. vt_paddr is held
-// for two cycles; vt_phase alternates 0, 1 while vt_busy is high. In phase 0
-// ports A and B of copy n read lanes 4n and 4n+1, in phase 1 lanes 4n+2 and
-// 4n+3. The phase-0 data is captured on the phase-1 edge, so every lane's
-// vt_rdata is valid after the second edge (lanes 4n+2, 4n+3 straight from the
-// BRAM outputs, which hold until the next VTRACE read).
+// VTRACE (WORLD_LATENCY = 2). Copy n serves lanes 4n..4n+3. vtrace takes a
+// step every 2 cycles from its start edge, so vt_paddr holds one step's
+// address A for the first two busy cycles and for each later pair. vt_phase
+// alternates 0, 1 from the first busy cycle, i.e. it is 0 in the first cycle
+// of A and 1 in the second:
+//   phase 0  ports A and B of copy n read lanes 4n and 4n+1 at A;
+//   phase 1  they read lanes 4n+2 and 4n+3 at A, and the phase-1 edge copies
+//            the phase-0 data into hold_a / hold_b;
+//   next     (phase 0 of the next step's address) every lane's vt_rdata is
+//            A's data: 4n, 4n+1 from hold, 4n+2, 4n+3 straight from the BRAM
+//            outputs. vtrace checks here. The next edge overwrites the
+//            outputs, so lanes 4n+2, 4n+3 are valid for this cycle only.
+// world_remap registers each lane's slot-valid bit every cycle from that
+// lane's current address and applies it the next cycle. In the check cycle
+// it comes from phase 1, still address A, so it matches both the hold data
+// (read in phase 0 at A) and the output data (phase 1 at A), even though
+// vt_paddr already shows the next step. A lane that finishes at a check moves
+// its address back mid-step, but it never reads again. A walk is an odd number
+// of busy cycles ending in phase 0, and busy low clears the phase, so every
+// walk starts in phase 0.
 //
 // The chunk engine only drives eng_we / eng_re while vt_busy and core_req are
 // both 0 (chunk_engine grant), so it never loses port A mid-access.

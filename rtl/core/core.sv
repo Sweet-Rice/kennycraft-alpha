@@ -1,26 +1,37 @@
-// KennyCraft core, Stage 1: multi-cycle RV32I + Zmmul + custom-0 lane
-// control, plus custom-2 divergence stack when HAS_DIV_STACK = 1, on LANES
-// SIMD lanes with one shared control path (Tai page, GPU Core; Tai_2
-// sections 1 and 2).
+// KennyCraft core, Stages 1 and 2: multi-cycle RV32I + Zmmul + custom-0 lane
+// control, plus custom-2 divergence stack when HAS_DIV_STACK = 1, custom-1
+// ray unit (VSET, VTRACE, VGET) when HAS_RAY_UNIT = 1 and QRCP when
+// HAS_QRCP = 1, on LANES SIMD lanes with one shared control path (Tai page,
+// GPU Core; Tai_2 sections 1 and 2).
 //
 // Grown from Tai's multicycle core (datapath.sv in RISC-V-Core-progression).
 // No pipeline registers, no forwarding, no hazard logic. One FSM walks every
 // instruction through the states of the Tai page, GPU Core, SIMD state
 // machine:
 //
-//   IF    send PC to the instruction BRAM                          1 cycle
+//   IF    send PC to the instruction BRAM (reset only, see below)  1 cycle
 //   ID    instruction arrives, decode once, read every lane's registers
 //   EX    every lane's ALU, comparator, address generator, multiply;
 //         lane control updates the mask                             1
 //   MUL   second EXECUTE cycle for MUL family (registered product) 1
-//   MEM   lane-serial LSU, one bus access per active lane, ascending
-//         order; stores retire on the last lane's access           N + slave wait
+//   VT    VTRACE rd (rd != x0): wait for the ray unit's done pulse walk + 1
+//   QR    QRCP: step every lane's QRCP unit, latch the result      4
+//   MEM   LSU, one bus access per group of active lanes (lanes in the
+//         same dmem/framebuffer word coalesce, else one per lane),
+//         ascending order; stores retire on the last access        G + slave wait
 //   WB    every lane writes rd together (the last load lane's data
 //         arrives here), update PC                                  1
 //
+// Fetch overlap. next_pc is registered in EX, so the cycle that retires an
+// instruction (WB, or a store's last MEM cycle) already drives next_pc to the
+// instruction BRAM and the FSM goes straight to ID: IF runs only after reset.
+// That is one cycle less for every instruction (ALU 3, MUL 4, an 8-lane load
+// 11). Register writes land at the end of WB and the next ID reads the
+// register file after them, so nothing else changes.
+//
 // Shared state here: PC, fetch, decode, FSM, the LANES-bit active mask (reset
 // 1) and the scalar-lane mux. rtl/core/lane.sv is one lane's datapath and
-// rtl/core/lsu.sv the lane-serial LSU.
+// rtl/core/lsu.sv the coalescing LSU.
 //
 // Lane control (custom-0). LANEID returns the lane index, LMASK clears the
 // bits of lanes whose rs1 = 0, MASKSET keeps rs1[LANES-1:0] of the scalar
@@ -35,8 +46,32 @@
 // JALR whose target differs between active lanes halts with ERR.DIVERGE and
 // err_pc = its PC, before anything is written; with M = 0 nothing is checked.
 // custom-2 (DIF, DELSE, DENDIF) runs on rtl/core/divstack.sv when
-// HAS_DIV_STACK = 1 and decodes as illegal otherwise; custom-1 (ray unit,
-// Stage 2) is absent and decodes as illegal.
+// HAS_DIV_STACK = 1 and decodes as illegal otherwise.
+//
+// custom-1 (Tai_2 sections 1 and 2) drives the ray unit (rtl/vtrace/vtrace.sv,
+// instantiated in rtl/top.sv) through the vt_* ports when HAS_RAY_UNIT = 1 and
+// decodes as illegal otherwise. vt_lane_mask is always M. VSET pulses
+// vt_cfg_we in EX with vt_cfg_field = funct7 and vt_cfg_data = each lane's
+// rs1. VTRACE pulses vt_start in EX with vt_max_steps = the scalar lane's
+// rs1[7:0]. VTRACE rd (rd != x0) waits in VT for vt_done, latches each lane's
+// {16'b0, result} and writes it to rd in active lanes; a cap of 0 or M = 0
+// writes nothing. VTRACE x0 is asynchronous: it goes straight to WB and the
+// walk runs on while later instructions execute. VGET latches hit_cell
+// (field 0, zero-extended), t_hit (field 1) or {16'b0, result} (field 3) in EX
+// and writes rd in active lanes.
+//
+// vt_pend is high from a vt_start until the ray unit's vt_done. The
+// interlock makes an asynchronous walk invisible: while vt_pend is high a
+// custom-1 instruction waits in EX (no strobe), so VSET cannot change the
+// rays, a second VTRACE cannot start and VGET reads the finished results;
+// and a lane's world access or MMIO store waits in MEM (bus_req low), since
+// the ray unit owns the world port while busy and WIN_ORIGIN / SLOT_VALID
+// steer its reads.
+//
+// QRCP (D22, HAS_QRCP = 1; illegal otherwise) runs rtl/core/qrcp.sv in every
+// lane: the unit latches its rs1 in EX, QR steps it through qr_ph 0..2 and
+// latches its result into res at qr_ph 3, and WB writes rd in active lanes
+// (rd = x0 never). Fixed latency: 7 cycles per QRCP (ID, EX, 4 x QR, WB; the fetch overlaps WB).
 //
 // Errors (Tai_2 sections 1 and 2). An illegal instruction or a fetch outside
 // instruction memory (caught in ID), a taken branch, JAL, JALR, or a DIF or
@@ -60,7 +95,8 @@ module core
     parameter int          LANES         = 1,
     parameter logic [31:0] RESET_VEC     = IMEM_BASE,
     parameter bit          HAS_DIV_STACK = 1'b0,
-    parameter bit          HAS_RAY_UNIT  = 1'b0
+    parameter bit          HAS_RAY_UNIT  = 1'b0,
+    parameter bit          HAS_QRCP      = 1'b0
 ) (
     input  logic                 clk,
     input  logic                 rst,
@@ -79,20 +115,29 @@ module core
     output logic [ERR_WIDTH-1:0] err_set,
     output logic [31:0]          err_pc,
     output logic                 halted,
-    output logic [31:0]          pc
+    output logic [31:0]          pc,
+
+    // Ray unit (HAS_RAY_UNIT = 1); outputs 0 and inputs ignored otherwise
+    output logic                 vt_cfg_we,
+    output logic [2:0]           vt_cfg_field,
+    output logic [LANES-1:0]     vt_lane_mask,
+    output logic [31:0]          vt_cfg_data [LANES],
+    output logic                 vt_start,
+    output logic [7:0]           vt_max_steps,
+    input  logic                 vt_done,
+    input  logic [15:0]          vt_result   [LANES],
+    input  logic [16:0]          vt_hit_cell [LANES],
+    input  logic [31:0]          vt_t_hit    [LANES]
 );
 
     if (LANES < 1 || LANES > 8) begin : g_lanes_check
         $error("core: LANES must be 1 to 8");
     end
-    if (HAS_RAY_UNIT) begin : g_unit_check
-        $error("core: the ray unit is not built yet");
-    end
 
     localparam int LW = (LANES > 1) ? $clog2(LANES) : 1;
 
-    typedef enum logic [2:0] {
-        S_IF, S_ID, S_EX, S_MUL, S_MEM, S_WB, S_HALT
+    typedef enum logic [3:0] {
+        S_IF, S_ID, S_EX, S_MUL, S_MEM, S_WB, S_HALT, S_VT, S_QR
     } state_t;
 
     state_t state;
@@ -102,19 +147,21 @@ module core
     // ------------------------------------------------------------------
     logic [3:0]  d_alu_ctrl;
     logic        d_alu_a_pc, d_r_we, d_res_imm, d_is_load, d_is_store, d_is_mul;
-    logic        d_is_branch, d_is_jal, d_is_jalr, d_is_lane, d_is_div, d_uniform_wr, d_illegal;
+    logic        d_is_branch, d_is_jal, d_is_jalr, d_is_lane, d_is_div, d_is_ray, d_is_qrcp;
+    logic        d_uniform_wr, d_illegal;
     logic [1:0]  d_alu_b_sel;
     logic [2:0]  d_imm_sig;
     logic [31:0] d_imm;
     logic        id_fault;
 
-    inst_decoder #(.HAS_DIV_STACK(HAS_DIV_STACK), .HAS_RAY_UNIT(HAS_RAY_UNIT)) u_dec (
+    inst_decoder #(.HAS_DIV_STACK(HAS_DIV_STACK), .HAS_RAY_UNIT(HAS_RAY_UNIT),
+                   .HAS_QRCP(HAS_QRCP)) u_dec (
         .inst(imem_rdata), .alu_ctrl(d_alu_ctrl), .alu_a_pc(d_alu_a_pc),
         .alu_b_sel(d_alu_b_sel), .imm_sig(d_imm_sig), .r_we(d_r_we),
         .res_imm(d_res_imm), .is_load(d_is_load), .is_store(d_is_store),
         .is_mul(d_is_mul), .is_branch(d_is_branch), .is_jal(d_is_jal),
-        .is_jalr(d_is_jalr), .is_lane(d_is_lane), .is_div(d_is_div),
-        .uniform_wr(d_uniform_wr), .illegal(d_illegal)
+        .is_jalr(d_is_jalr), .is_lane(d_is_lane), .is_div(d_is_div), .is_ray(d_is_ray),
+        .is_qrcp(d_is_qrcp), .uniform_wr(d_uniform_wr), .illegal(d_illegal)
     );
 
     immgen u_imm (.inst(imem_rdata[31:7]), .imm_sig(d_imm_sig), .imm(d_imm));
@@ -124,9 +171,11 @@ module core
     // ID -> EX registers (shared decode; the operands live in the lanes)
     logic [3:0]  ex_alu_ctrl;
     logic        ex_alu_a_pc, ex_r_we, ex_res_imm, ex_is_load, ex_is_store, ex_is_mul;
-    logic        ex_is_branch, ex_is_jal, ex_is_jalr, ex_is_lane, ex_is_div, ex_uniform_wr;
+    logic        ex_is_branch, ex_is_jal, ex_is_jalr, ex_is_lane, ex_is_div, ex_is_ray, ex_uniform_wr;
+    logic        ex_is_qrcp;
     logic [1:0]  ex_alu_b_sel;
     logic [2:0]  ex_funct3;
+    logic [2:0]  ex_field;    // funct7[2:0]: VSET / VGET field
     logic [4:0]  ex_rd;
     logic [31:0] ex_imm;
     logic [31:0] ir;          // instruction in flight, for the retire wires
@@ -147,8 +196,11 @@ module core
             ex_is_jalr    <= d_is_jalr;
             ex_is_lane    <= d_is_lane;
             ex_is_div     <= d_is_div;
+            ex_is_ray     <= d_is_ray;
+            ex_is_qrcp    <= d_is_qrcp;
             ex_uniform_wr <= d_uniform_wr;
             ex_funct3     <= instr_funct3(imem_rdata);
+            ex_field      <= imem_rdata[27:25];   // funct7[2:0]
             ex_rd         <= instr_rd(imem_rdata);
             ex_imm        <= d_imm;
         end
@@ -167,22 +219,30 @@ module core
     logic [31:0]      l_wdata [LANES];
     logic [1:0]       l_addr_lo [LANES];
     logic [LANES-1:0] l_cmp, l_we, nonzero, ld_cap, mis;
-    logic [31:0]      ld_value;
+    logic [31:0]      ld_value [LANES];
     logic             wb_en;
+    logic             ray_en;                 // latch ray_y into res (VGET, VTRACE)
+    logic [31:0]      ray_y [LANES];
+    logic             vt_nowr;                // VTRACE with a cap of 0: no write
+    logic [2:0]       qr_ph;                  // QRCP step in QR
+    logic             qr_wr;                  // QR, last step: latch the result
 
-    assign wb_en = (state == S_WB) && ex_r_we;
+    assign qr_wr = HAS_QRCP && (state == S_QR) && (qr_ph == 3'd3);
+
+    assign wb_en = (state == S_WB) && ex_r_we && !vt_nowr;
 
     for (genvar i = 0; i < LANES; i++) begin : g_lane
-        lane #(.ID(i)) u_lane (
+        lane #(.ID(i), .HAS_QRCP(HAS_QRCP)) u_lane (
             .clk,
             .id_en(state == S_ID),
             .rs1_addr(instr_rs1(imem_rdata)), .rs2_addr(instr_rs2(imem_rdata)),
             .ex_en(state == S_EX), .mul_en(state == S_MUL),
             .alu_ctrl(ex_alu_ctrl), .alu_a_pc(ex_alu_a_pc), .alu_b_sel(ex_alu_b_sel),
             .funct3(ex_funct3), .pc, .imm(ex_imm), .res_imm(ex_res_imm),
-            .is_lane(ex_is_lane), .lane_y,
+            .is_lane(ex_is_lane), .lane_y, .ray_en, .ray_y(ray_y[i]),
+            .qr_load((state == S_EX) && ex_is_qrcp), .qr_en(state == S_QR), .qr_ph, .qr_wr,
             .rs1(l_rs1[i]), .rs2(l_rs2[i]), .alu_y(l_alu[i]), .cmp(l_cmp[i]), .res(l_res[i]),
-            .ld_cap(ld_cap[i]), .ld_value,
+            .ld_cap(ld_cap[i]), .ld_value(ld_value[i]),
             .we(l_we[i]), .rd(ex_rd), .is_load(ex_is_load), .wdata(l_wdata[i])
         );
 
@@ -282,10 +342,84 @@ module core
         if (state == S_EX) next_pc <= take ? target : pc + 32'd4;
     end
 
+    // QRCP step counter: 0 from EX, counts through QR (constant 0 without QRCP)
+    if (HAS_QRCP) begin : g_qr_ph
+        always_ff @(posedge clk) begin
+            if (state == S_EX)      qr_ph <= 3'd0;
+            else if (state == S_QR) qr_ph <= qr_ph + 3'd1;
+        end
+    end else begin : g_no_qr_ph
+        assign qr_ph = 3'd0;
+    end
+
     // ------------------------------------------------------------------
-    // MEM: lane-serial LSU
+    // Ray unit (custom-1)
     // ------------------------------------------------------------------
-    logic ex_mem, ex_illegal, lsu_done;
+    logic ex_vtrace, ex_vt_wait, vt_pend;
+
+    if (HAS_RAY_UNIT) begin : g_ray
+        logic [7:0] cap;
+
+        assign ex_vtrace = ex_is_ray && (ex_funct3 == F3_VTRACE);
+        assign ex_vt_wait = ex_is_ray && vt_pend;
+        assign cap       = l_rs1[sl][7:0];
+
+        assign vt_lane_mask = mask;
+        assign vt_cfg_we    = (state == S_EX) && ex_is_ray && (ex_funct3 == F3_VSET) && !vt_pend;
+        assign vt_cfg_field = ex_field;
+        assign vt_cfg_data  = l_rs1;
+        assign vt_start     = (state == S_EX) && ex_vtrace && !vt_pend;
+        assign vt_max_steps = cap;
+        assign ray_en       = ex_is_ray && (((state == S_EX) && (ex_funct3 == F3_VGET)) ||
+                                            ((state == S_VT) && vt_done));
+
+        // VTRACE rd and VGET field 3 return the result, fields 0 and 1 the
+        // hit cell and t_hit (field 2 and 4 up are illegal).
+        for (genvar i = 0; i < LANES; i++) begin : g_y
+            assign ray_y[i] = ((ex_funct3 != F3_VGET) || ex_field[1]) ? {16'd0, vt_result[i]} :
+                              ex_field[0] ? vt_t_hit[i] : {15'd0, vt_hit_cell[i]};
+        end
+
+        always_ff @(posedge clk) begin
+            if (rst)           vt_pend <= 1'b0;
+            else if (vt_start) vt_pend <= 1'b1;
+            else if (vt_done)  vt_pend <= 1'b0;
+        end
+
+        // A cap of 0 finishes with no writes (M = 0 writes nothing anyway).
+        always_ff @(posedge clk) begin
+            if (state == S_EX) vt_nowr <= ex_vtrace && (cap == 8'd0);
+        end
+    end else begin : g_no_ray
+        assign ex_vtrace    = 1'b0;
+        assign ex_vt_wait   = 1'b0;
+        assign vt_pend      = 1'b0;
+        assign vt_lane_mask = '0;
+        assign vt_cfg_we    = 1'b0;
+        assign vt_cfg_field = '0;
+        assign vt_start     = 1'b0;
+        assign vt_max_steps = '0;
+        assign ray_en       = 1'b0;
+        assign vt_nowr      = 1'b0;
+        for (genvar i = 0; i < LANES; i++) begin : g_y
+            assign vt_cfg_data[i] = '0;
+            assign ray_y[i]       = '0;
+        end
+
+        /* verilator lint_off UNUSEDSIGNAL */
+        logic unused_ray;
+        /* verilator lint_on UNUSEDSIGNAL */
+        always_comb begin
+            unused_ray = vt_done ^ ex_is_ray ^ (^ex_field);
+            for (int i = 0; i < LANES; i++)
+                unused_ray ^= (^vt_result[i]) ^ (^vt_hit_cell[i]) ^ (^vt_t_hit[i]);
+        end
+    end
+
+    // ------------------------------------------------------------------
+    // MEM: LSU (lane order, same-word lanes coalesced)
+    // ------------------------------------------------------------------
+    logic ex_mem, ex_illegal, lsu_done, vt_block;
 
     assign ex_mem     = (ex_is_load || ex_is_store) && (mask != '0);
     // A taken jump to a target with bit 1 set halts at the jump (D16): a
@@ -296,10 +430,17 @@ module core
                         ((ex_mem && ((mis & mask) != '0)) || (take && target[1]));
     assign ex_halt    = ex_diverge || ex_divstack || ex_illegal;
 
+    // While a walk is in flight the current lane's access waits (bus_req
+    // low) if it touches the world, whose port A the ray unit owns while
+    // busy, or is an MMIO store, which could move WIN_ORIGIN or SLOT_VALID
+    // under the walk. No access is in progress when a walk starts.
+    assign vt_block = vt_pend && ((bus_addr[31:28] == REG_WORLD) ||
+                                  ((bus_addr[31:28] == REG_MMIO) && ex_is_store));
+
     lsu #(.LANES(LANES)) u_lsu (
         .clk, .rst,
         .start((state == S_EX) && ex_mem && !ex_halt), .active(mask),
-        .go(state == S_MEM), .is_store(ex_is_store), .funct3(ex_funct3),
+        .go((state == S_MEM) && !vt_block), .is_store(ex_is_store), .funct3(ex_funct3),
         .addr(l_res), .rs2(l_rs2), .done(lsu_done),
         .ex_addr_lo(l_addr_lo), .misaligned(mis),
         .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,
@@ -319,15 +460,20 @@ module core
                 S_ID:  state <= id_fault ? S_HALT : S_EX;
                 S_EX: begin
                     if (ex_halt)                         state <= S_HALT;
+                    else if (ex_vt_wait)                 state <= S_EX;
                     else if (ex_is_mul)                  state <= S_MUL;
                     else if (ex_mem)                     state <= S_MEM;
+                    else if (ex_vtrace && ex_r_we)       state <= S_VT;
+                    else if (HAS_QRCP && ex_is_qrcp)     state <= S_QR;
                     else                                 state <= S_WB;
                 end
                 S_MUL: state <= S_WB;
+                S_VT:  if (vt_done) state <= S_WB;
+                S_QR:  if (qr_wr) state <= S_WB;
                 S_MEM: begin
                     if (lsu_done) begin
                         if (ex_is_store) begin
-                            state <= S_IF;
+                            state <= S_ID;      // next_pc was fetched this cycle
                             pc    <= next_pc;
                         end else begin
                             state <= S_WB;
@@ -335,7 +481,7 @@ module core
                     end
                 end
                 S_WB: begin
-                    state <= S_IF;
+                    state <= S_ID;              // next_pc was fetched this cycle
                     pc    <= next_pc;
                 end
                 default: state <= S_HALT;
@@ -343,7 +489,10 @@ module core
         end
     end
 
-    assign imem_addr = pc;
+    // The retiring cycle fetches next_pc (fetch overlap, above); every other
+    // state keeps the current instruction at the BRAM output.
+    assign imem_addr = ((state == S_WB) || ((state == S_MEM) && lsu_done && ex_is_store))
+                     ? next_pc : pc;
     assign halted    = (state == S_HALT);
     assign err_pc    = pc;
 

@@ -41,7 +41,7 @@ module t_laneid_tb;
             expect32($sformatf("lane %0d MASKGET (uniform)", l), lane_x[l][15], 32'(m1));
             expect32($sformatf("lane %0d MASKSET scalar", l), lane_x[l][17], 32'(m3));
         end
-        expect32("mask at the end", 32'(dut.u_core.mask), 32'd1);
+        expect32("mask at the end", 32'(`KC_CORE.mask), 32'd1);
         $display("  active lanes %0d: MASKGET under 0xA5 = %02h, MASKSET from scalar lane %0d -> %02h",
                  ALANES, m1, sl, m3);
 

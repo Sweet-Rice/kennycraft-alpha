@@ -47,7 +47,7 @@ module datapath_tb;
         check("x2", xreg(2), 32'd10);
         check("x3 (x1+x2)", xreg(3), 32'd15);
         check("x6 (x2-x1)", xreg(6), 32'd5);
-        check("final pc", dut.u_core.pc, 32'h0000_0010);
+        check("final pc", `KC_CORE.pc, 32'h0000_0010);
         check("error led", {31'b0, err_led}, 32'd0);
 
         // -----------------------------------------------------------------
@@ -81,7 +81,7 @@ module datapath_tb;
         check("x5 (jal link)", xreg(5), 32'h0000_0024);
         check("x7 (after jal)", xreg(7), 32'd3);
         check("x9 (never written)", xreg(9), 32'd0);
-        check("final pc", dut.u_core.pc, 32'h0000_002C);
+        check("final pc", `KC_CORE.pc, 32'h0000_002C);
         check("error led", {31'b0, err_led}, 32'd0);
 
         // -----------------------------------------------------------------
@@ -120,7 +120,7 @@ module datapath_tb;
         check("dmem[0x41] (sb)", dut.u_dmem.mem[32'h41], 32'h0000_00FF);
         check("uart frames", uart_rx_q.size(), 32'd1);
         if (uart_rx_q.size() == 1) check("uart byte", {24'b0, uart_rx_q[0]}, 32'h0000_0048);
-        check("final pc", dut.u_core.pc, 32'h0000_002C);
+        check("final pc", `KC_CORE.pc, 32'h0000_002C);
         check("error led", {31'b0, err_led}, 32'd0);
 
         $display("");

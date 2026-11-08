@@ -54,14 +54,31 @@ VERILATOR ?= verilator
 RUN_ARGS ?=
 STAGE ?= 0
 DDR ?= 1
-# CHIP_TOP=top builds rtl/top.sv, which has no LANES / HAS_DIV_STACK
-# parameters and so runs Stage 0 only; bench_chip (the default) is the same
-# RTL with both. The harness reads the lane count from the built core.
+# CHIP_TOP=top builds rtl/top.sv, bench_chip (the default before Stage 2) the
+# same RTL without the board clocking and without the ray unit; both take
+# LANES and HAS_DIV_STACK, top also HAS_RAY_UNIT, HAS_QRCP and FB_COUNT (Stage 2
+# runs on top, with QRCP and three framebuffers like the Stage 2 bitstream,
+# D22/D24; bench_chip always has two). The harness reads the lane count
+# from the built core and gets the framebuffer count as KC_FB_COUNT.
 LANES ?= $(if $(filter 1 2,$(STAGE)),8,1)
 HAS_DIV_STACK ?= $(if $(filter 1 2,$(STAGE)),1,0)
-CHIP_TOP ?= bench_chip
-CHIP_PARAMS = $(if $(filter bench_chip,$(CHIP_TOP)),-GLANES=$(LANES) -GHAS_DIV_STACK="1'b$(HAS_DIV_STACK)")
-VL_MDIR ?= out/vl
+HAS_RAY_UNIT ?= $(if $(filter 2,$(STAGE)),1,0)
+HAS_QRCP ?= $(if $(filter 2,$(STAGE)),1,0)
+FB_COUNT ?= $(if $(filter 2,$(STAGE)),3,2)
+CHIP_TOP ?= $(if $(filter 2,$(STAGE)),top,bench_chip)
+# PIPELINED=1 builds either top on the 5-stage pipelined core (rtl/core_pipe)
+# instead of the multi-cycle rtl/core. Its kcvl models go in their own
+# directories (VL_SUFFIX), so both cores' builds coexist.
+PIPELINED ?= 0
+VL_SUFFIX = $(if $(filter 1,$(PIPELINED)),-pipe)
+CHIP_FB_COUNT = $(if $(filter top,$(CHIP_TOP)),$(FB_COUNT),2)
+CHIP_PARAMS = -GLANES=$(LANES) -GHAS_DIV_STACK="1'b$(HAS_DIV_STACK)" \
+	$(if $(filter top,$(CHIP_TOP)),-GHAS_RAY_UNIT="1'b$(HAS_RAY_UNIT)" -GHAS_QRCP="1'b$(HAS_QRCP)" -GFB_COUNT=$(FB_COUNT)) \
+	$(if $(filter 1,$(PIPELINED)),-GPIPELINED="1'b1")
+ifeq ($(STAGE)$(CHIP_TOP),2bench_chip)
+$(error STAGE=2 needs CHIP_TOP=top: bench_chip has no ray unit, so custom-1 would halt ERR.ILLEGAL)
+endif
+VL_MDIR ?= out/vl$(VL_SUFFIX)
 PAL_HEX ?=
 TEX_HEX ?=
 PALETTE_ARGS = $(if $(PAL_HEX),--palette-hex "$(abspath $(PAL_HEX))")
@@ -72,15 +89,22 @@ SDL_LIBS := $(shell pkg-config --libs sdl3 2>/dev/null)
 KC_SDL := $(if $(SDL_LIBS),1,0)
 # Verilator's wrapper drops an empty argument, so never pass -LDFLAGS "".
 SDL_LDFLAGS = $(if $(SDL_LIBS),-LDFLAGS "$(SDL_LIBS)")
-VL_FLAGS = --cc --exe --build -j 0 --verilate-jobs 1 -Wall --prefix Vkc --trace -o kcvl
+# The model's C++ at -O3 (Verilator's default is -Os): the golden runs are long.
+VL_FLAGS = --cc --exe --build -j 0 --verilate-jobs 1 -Wall --prefix Vkc -o kcvl \
+	-MAKEFLAGS OPT_FAST=-O3 -MAKEFLAGS OPT_GLOBAL=-O3
+# TRACE=1 builds kcvl with VCD support (--vcd / --vcd-window); without it the
+# model skips the per-signal activity tracking and runs faster. The fixture
+# always has it: check-fixture tests the VCD window.
+TRACE ?= 0
+VL_TRACE = $(if $(filter 1,$(TRACE)),--trace)
 HARNESS_CFLAGS = -std=c++17 -Wall -Wextra -I$(abspath tb/harness) -DKC_SDL=$(KC_SDL) $(SDL_CFLAGS)
-RTL_FILES = rtl/kc_isa_pkg.sv $(filter-out rtl/kc_isa_pkg.sv rtl/isa_decode_check.sv rtl/top.sv rtl/display/clk_gen.sv rtl/ddr/ddr_clk.sv,$(wildcard rtl/*.sv rtl/core/*.sv rtl/soc/*.sv rtl/mem/*.sv rtl/display/*.sv rtl/ddr/*.sv rtl/vtrace/*.sv))
+RTL_FILES = rtl/kc_isa_pkg.sv $(filter-out rtl/kc_isa_pkg.sv rtl/isa_decode_check.sv rtl/top.sv rtl/display/clk_gen.sv rtl/ddr/ddr_clk.sv,$(wildcard rtl/*.sv rtl/core/*.sv rtl/core_pipe/*.sv rtl/soc/*.sv rtl/mem/*.sv rtl/display/*.sv rtl/ddr/*.sv rtl/vtrace/*.sv))
 CHIP_FILE = $(if $(filter bench_chip,$(CHIP_TOP)),tb/harness/bench_chip.sv,rtl/top.sv)
 VL_STUBS = $(wildcard tb/harness/stubs/*.sv) tb/ddr/xpm_sim.sv
 
 .PHONY: vl-fixture vl-fixture-build check-fixture
 vl-fixture-build: | out
-	$(VERILATOR) $(VL_FLAGS) --Mdir out/vl-fixture --top-module fixture_top \
+	$(VERILATOR) $(VL_FLAGS) --trace --Mdir out/vl-fixture --top-module fixture_top \
 		-CFLAGS "$(HARNESS_CFLAGS) -DKC_FIXTURE" $(SDL_LDFLAGS) \
 		tb/harness/fixture/public.vlt tb/harness/fixture/fixture_top.sv \
 		$(abspath $(HARNESS_CPP))
@@ -95,10 +119,10 @@ check-fixture: vl-fixture-build
 .PHONY: vl vl-build
 vl-build: sw
 	@mkdir -p $(VL_MDIR)
-	$(VERILATOR) $(VL_FLAGS) --Mdir $(VL_MDIR) --top-module $(CHIP_TOP) $(CHIP_PARAMS) \
+	$(VERILATOR) $(VL_FLAGS) $(VL_TRACE) --Mdir $(VL_MDIR) --top-module $(CHIP_TOP) $(CHIP_PARAMS) \
 		-GIMEM_HEX='"out/kc_imem.hex"' -GDMEM_HEX='"out/kc_dmem.hex"' \
 		-GPAL_HEX='"$(if $(PAL_HEX),$(abspath $(PAL_HEX)))"' -GTEX_HEX='"$(if $(TEX_HEX),$(abspath $(TEX_HEX)))"' \
-		-CFLAGS "$(HARNESS_CFLAGS) -DCHIP_TOP=$(CHIP_TOP)" $(SDL_LDFLAGS) \
+		-CFLAGS "$(HARNESS_CFLAGS) -DCHIP_TOP=$(CHIP_TOP) -DKC_FB_COUNT=$(CHIP_FB_COUNT)" $(SDL_LDFLAGS) \
 		tb/harness/public.vlt $(RTL_FILES) $(CHIP_FILE) $(VL_STUBS) $(abspath $(HARNESS_CPP))
 
 vl: vl-build
@@ -112,8 +136,10 @@ TESTS_1 = t_laneid t_mask t_ballot t_maskgetset t_lsu_order t_branch_uniform \
 	t_divstack t_divskip t_mask_zero t_mmio_lanes t_jalr_uniform t_div_nested_lmask \
 	t_divstack_overflow
 TESTS_DDR = t_chunk_roundtrip t_slot_valid t_ring
-TESTS_2 = t_vtrace
-TESTS = $(TESTS_0)
+TESTS_2 = t_vtrace t_qrcp
+# t_fbswap checks double buffering; with three framebuffers (the Stage 2 top,
+# D24) t_fbswap3 replaces it.
+TESTS = $(if $(filter 3,$(CHIP_FB_COUNT)),$(patsubst t_fbswap,t_fbswap3,$(TESTS_0)),$(TESTS_0))
 ifeq ($(DDR),1)
 TESTS += $(TESTS_DDR)
 endif
@@ -123,15 +149,22 @@ endif
 ifeq ($(STAGE),2)
 TESTS += $(TESTS_2)
 endif
-TEST_ARGS = --stage $(STAGE) --cc "$(CC)" --objcopy "$(OBJCOPY)" --nm "$(CROSS)nm" --cflags "$(CFLAGS)"
+TEST_ARGS = --stage $(STAGE) --cc "$(CC)" --objcopy "$(OBJCOPY)" --nm "$(CROSS)nm" --cflags "$(CFLAGS)" \
+	--binary $(VL_MDIR)/kcvl
 
-# Stage 2 joins once P7 puts the ray unit in the core.
+# Stage 2 (ray unit, rtl/top.sv) runs every test plus t_vtrace, and the golden
+# shot with Kennedy's VTRACE kernel (game/src/trace.c, KC_VTRACE = 1) and qrcp()
+# on the QRCP instruction (KC_QRCP = 1, D22) against the plain C (software DDA)
+# reference.
 .PHONY: check-bench check-stage
 check-bench:
 	$(MAKE) check-fixture
 	$(MAKE) check-stage STAGE=0
 	$(MAKE) check-stage STAGE=1
+	$(MAKE) check-stage STAGE=2
 	$(MAKE) golden-check
+	$(MAKE) golden-check STAGE=1 CHIP_TOP=top GOLDEN_VL=out/golden/vl1$(VL_SUFFIX)
+	$(MAKE) golden-check STAGE=2 GOLDEN_VL=out/golden/vl2$(VL_SUFFIX) GAME_CHIP_CC="$(GAME_CHIP_CC) -DKC_VTRACE=1 -DKC_QRCP=1"
 check-stage: vl-build
 	$(PYTHON) scripts/run_tests.py $(TEST_ARGS) $(TESTS)
 
@@ -153,16 +186,28 @@ test-%: vl-build
 # reference (make -C game shots) against kcvl running the same pose, kcvl
 # built with the game's palette and textures in its own directory.
 .PHONY: golden-check tracediff
-GOLDEN_VL = out/golden/vl
+GOLDEN_VL = out/golden/vl$(VL_SUFFIX)
 GAME_CHIP_CC ?= clang
 golden-check:
 	$(MAKE) -C game CC="$(HOST_CC)" shots
 	$(MAKE) vl-build VL_MDIR=$(GOLDEN_VL) PAL_HEX=game/gen/palette.hex TEX_HEX=game/gen/textures.hex
 	$(PYTHON) scripts/golden.py --binary $(GOLDEN_VL)/kcvl --cc "$(GAME_CHIP_CC)" --objcopy "$(OBJCOPY)" \
-		--lanes $(if $(filter bench_chip,$(CHIP_TOP)),$(LANES),1)
+		--lanes $(LANES)
+# tracediff: REF= is a git ref (a temporary worktree in out/ref) or a checkout
+# directory (built in place in out/vl-tracediff). The reference is built with
+# this chip configuration plus REF_MAKE="NAME=VALUE ...", and both kcvl runs
+# get IMAGES=<dir>'s kc_imem.hex and kc_dmem.hex (default out/, PROG's).
+# POLLS=1 collapses MMIO poll loops that ran a different number of times
+# (scripts/tracecollapse.py: a different-CPI core) and lists each one.
+REF_MAKE ?=
+IMAGES ?= out
+TRACEDIFF_CONFIG = STAGE=$(STAGE) DDR=$(DDR) LANES=$(LANES) HAS_DIV_STACK=$(HAS_DIV_STACK) \
+	HAS_RAY_UNIT=$(HAS_RAY_UNIT) HAS_QRCP=$(HAS_QRCP) FB_COUNT=$(FB_COUNT) CHIP_TOP=$(CHIP_TOP)
 tracediff: vl-build
 	@test -n "$(REF)" || { echo "tracediff: set REF=" >&2; exit 5; }
-	$(PYTHON) scripts/compare_ref.py --ref "$(REF)" --frames $(if $(FRAMES),$(FRAMES),5) $(if $(KEYS),--keys "$(KEYS)") $(PALETTE_ARGS) $(TEXTURE_ARGS)
+	$(PYTHON) scripts/compare_ref.py --ref "$(REF)" --frames $(if $(FRAMES),$(FRAMES),5) $(if $(KEYS),--keys "$(KEYS)") \
+		--binary $(VL_MDIR)/kcvl --images "$(IMAGES)" $(foreach v,$(TRACEDIFF_CONFIG) $(REF_MAKE),--make-var "$(v)") \
+		$(if $(filter 1,$(POLLS)),--collapse-polls) $(PALETTE_ARGS) $(TEXTURE_ARGS)
 
 .PHONY: board keys
 board: check

@@ -33,7 +33,8 @@ module bench_chip #(
     parameter string IMEM_HEX = "out/kc_imem.hex",
     parameter string DMEM_HEX = "out/kc_dmem.hex",
     parameter string PAL_HEX  = "",
-    parameter string TEX_HEX  = ""
+    parameter string TEX_HEX  = "",
+    parameter bit    PIPELINED = 1'b0
 ) (
     input  logic        clk,            // harness clk = clk_core (stub clk_gen)
     input  logic        ck_rst,         // C2,  active low
@@ -108,8 +109,9 @@ module bench_chip #(
     // Display subsystem (P1)
     // ------------------------------------------------------------------
     logic        fb_we, fb_re;
-    logic [16:0] fb_addr;
-    logic [7:0]  fb_wdata, fb_rdata;
+    logic [3:0]  fb_be;
+    logic [14:0] fb_addr;
+    logic [31:0] fb_wdata, fb_rdata;
     logic        pal_we;
     logic [7:0]  pal_addr;
     logic [11:0] pal_wdata;
@@ -124,6 +126,7 @@ module bench_chip #(
         .rst_pix      (rst_pix),
         .fb_we        (fb_we),
         .fb_re        (fb_re),
+        .fb_be        (fb_be),
         .fb_addr      (fb_addr),
         .fb_wdata     (fb_wdata),
         .fb_rdata     (fb_rdata),
@@ -159,6 +162,18 @@ module bench_chip #(
     logic [7:0]  world_wdata;
     logic [7:0]  world_rdata;
 
+    // No ray unit here (kc_soc HAS_RAY_UNIT = 0): Stage 2 runs on rtl/top.sv
+    // (CHIP_TOP=top HAS_RAY_UNIT=1), so the vt_* port is tied off.
+    logic [15:0] vt_result   [LANES];
+    logic [16:0] vt_hit_cell [LANES];
+    logic [31:0] vt_t_hit    [LANES];
+
+    always_comb for (int l = 0; l < LANES; l++) begin
+        vt_result[l]   = '0;
+        vt_hit_cell[l] = '0;
+        vt_t_hit[l]    = '0;
+    end
+
     kc_soc #(
         .LANES     (LANES),
         .CLK_HZ    (50_000_000),
@@ -167,7 +182,8 @@ module bench_chip #(
         .DMEM_HEX  (DMEM_HEX),
         .TEX_HEX   (TEX_HEX),
         .EXT_WORLD (1'b1),
-        .HAS_DIV_STACK (HAS_DIV_STACK)
+        .HAS_DIV_STACK (HAS_DIV_STACK),
+        .PIPELINED     (PIPELINED)
     ) u_soc (
         .clk           (clk_core),
         .rst           (rst_core),
@@ -177,6 +193,7 @@ module bench_chip #(
         .err_led       (err_led),
         .fb_we         (fb_we),
         .fb_re         (fb_re),
+        .fb_be         (fb_be),
         .fb_addr       (fb_addr),
         .fb_wdata      (fb_wdata),
         .fb_rdata      (fb_rdata),
@@ -199,7 +216,19 @@ module bench_chip #(
         .world_addr    (world_addr),
         .world_wdata   (world_wdata),
         .world_ready   (world_ready),
-        .world_rdata   (world_rdata)
+        .world_rdata   (world_rdata),
+        /* verilator lint_off PINCONNECTEMPTY */
+        .vt_cfg_we     (),
+        .vt_cfg_field  (),
+        .vt_lane_mask  (),
+        .vt_cfg_data   (),
+        .vt_start      (),
+        .vt_max_steps  (),
+        /* verilator lint_on PINCONNECTEMPTY */
+        .vt_done       (1'b0),
+        .vt_result     (vt_result),
+        .vt_hit_cell   (vt_hit_cell),
+        .vt_t_hit      (vt_t_hit)
     );
 
     // ------------------------------------------------------------------

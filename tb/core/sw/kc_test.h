@@ -2,7 +2,7 @@
    page, Memory map and MMIO; offsets match rtl/kc_isa_pkg.sv). */
 #define DMEM_BASE         0x10000000
 #define MMIO_BASE         0x50000000
-#define GPU_BASE          0x70000000
+#define UNMAPPED_BASE     0x70000000
 #define MMIO_FB_SWAP      0x00
 #define MMIO_FRAME_COUNT  0x04
 #define MMIO_VSYNC        0x08

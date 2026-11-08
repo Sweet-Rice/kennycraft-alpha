@@ -1,0 +1,6 @@
+fastapi
+httpx
+openai
+pyserial
+solders
+uvicorn

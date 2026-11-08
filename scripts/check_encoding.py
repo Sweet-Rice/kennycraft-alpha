@@ -23,6 +23,7 @@ import tempfile
 TABLE = [
     ("LANEID", 0x0000050B),
     ("LMASK", 0x0005900B),
+    ("QRCP", 0x0005A50B),
     ("BALLOT", 0x0005B50B),
     ("MASKGET", 0x0000550B),
     ("MASKSET", 0x0005E00B),

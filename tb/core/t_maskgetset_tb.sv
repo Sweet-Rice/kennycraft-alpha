@@ -34,7 +34,7 @@ module t_maskgetset_tb;
         expect_uniform(A5, 32'(FULL), "MASKGET after MASKALL");
         expect_uniform(A6, 32'd0, "MASKSET 0x100 keeps rs1[LANES-1:0]");
         expect_uniform(A7, 32'd1, "MASKSET 1 under M = 0");
-        expect32("mask at the end", 32'(dut.u_core.mask), 32'd1);
+        expect32("mask at the end", 32'(`KC_CORE.mask), 32'd1);
         $display("  M: %02h (scalar %0d) -> %02h (scalar %0d) -> %02h -> %02h -> %02h -> 0 -> 1",
                  m0, sl0, m1, sl1, m2, m3, FULL);
         finish_test("t_maskgetset");

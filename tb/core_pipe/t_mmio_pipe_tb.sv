@@ -1,0 +1,102 @@
+// t_mmio_pipe: tb/core/t_mmio_tb.sv for the pipelined core. Same program
+// (tb/core/sw/t_mmio.S), same model and checks, except the two that measure
+// time with CYCLES. Both are the CPI of an MMIO LW / SW (P8 stall model, as
+// in tb/core_pipe/t_cpi_pipe_tb.sv), so they take them as parameters:
+//   "CYCLES delta (one LW)"            CPI_LW: the second CYCLES read is
+//                                      one LW after the first
+//   "CHUNK_CMD time (LW + SW + stall)" CPI_LW + CPI_SW + STALL + 1: the
+//                                      CYCLES LW, the CHUNK_CMD SW, and the
+//                                      model's STALL + 1 cycles of bus_ready
+//                                      low on that SW
+// Pipelined: CPI_LW = 2, CPI_SW = 2 (one bus cycle plus MEM's tail; the
+// next instruction's EX overlaps the tail), so 2 and 42. The multi-cycle
+// core passes with -GCPI_LW=5 -GCPI_SW=4 (5 and 47, tb/core/t_mmio_tb.sv).
+module t_mmio_pipe_tb;
+    parameter string IMEM_HEX = "";
+    parameter string DMEM_HEX = "";
+    parameter int    CPI_LW   = 2;
+    parameter int    CPI_SW   = 2;
+    `include "soc_harness.svh"
+
+    localparam logic [31:0] RES   = 32'h1000_0100;
+    localparam int          STALL = 37;
+
+    int errors = 0;
+
+    task automatic expect32(input string what, input logic [31:0] got, input logic [31:0] exp);
+        if (got !== exp) begin
+            $display("  FAIL %-30s got %08h expected %08h", what, got, exp);
+            errors++;
+        end else begin
+            $display("  ok   %-30s %08h", what, got);
+        end
+    endtask
+
+    // Display model: a swap request is pending for 300 cycles, then vblank
+    // flips it and FRAME_COUNT advances.
+    initial begin
+        forever begin
+            @(posedge clk);
+            if (swap_req) begin
+                swap_pending = 1'b1;
+                repeat (300) @(posedge clk);
+                vblank       = 1'b1;
+                swap_pending = 1'b0;
+                frame_count  = 32'h1234_5678;
+            end
+        end
+    end
+
+    initial begin
+        ddr_regs[0]   = 32'h0000_0001;   // DDR_STATUS: calibrated
+        ddr_cmd_stall = STALL;
+        do_reset();
+        run_until_done(50000);
+        if (err_led) $fatal(1, "FAIL: core halted, ERR_PC=%08h", dut.u_mmio.err_pc);
+
+        expect32("LEDS pins", {24'b0, leds}, 32'hA5);
+        expect32("LEDS read (write only)", dmem_rd(RES + 0), 32'h0);
+        expect32("FB_MODE read", dmem_rd(RES + 4), 32'h1);
+        expect32("fb_mode pin", {31'b0, fb_mode}, 32'h1);
+        expect32("FB_SWAP after write", dmem_rd(RES + 8), 32'h1);
+        expect32("swap_req pulses", swap_req_count, 32'd1);
+        if (dmem_rd(RES + 12) < 32'd10) begin
+            $display("  FAIL FB_SWAP poll count %0d, expected >= 10", dmem_rd(RES + 12));
+            errors++;
+        end
+        expect32("FRAME_COUNT", dmem_rd(RES + 16), 32'h1234_5678);
+        expect32("VSYNC", dmem_rd(RES + 20), 32'h1);
+        expect32("CYCLES delta (one LW)", dmem_rd(RES + 24), 32'(CPI_LW));
+        expect32("UART_STATUS idle", dmem_rd(RES + 28), 32'h0);
+        expect32("UART_RX empty", dmem_rd(RES + 32), 32'h0);
+        expect32("UART_STATUS TX busy", dmem_rd(RES + 36), 32'h2);
+        expect32("SLOT_VALID via ddr port", dmem_rd(RES + 40), 32'hBEEF);
+        expect32("DDR_STATUS via ddr port", dmem_rd(RES + 44), 32'h1);
+        expect32("CHUNK_CMD stall cycles", ddr_stalled_cycles, STALL + 1);
+        expect32("CHUNK_CMD time (LW + SW + stall)", dmem_rd(RES + 48), 32'(CPI_LW + CPI_SW + STALL + 1));
+        expect32("CHUNK_CMD value", ddr_regs[1], 32'h0000_0302);
+        expect32("WIN_ORIGIN value", ddr_regs[4], 32'h0000_1020);
+        expect32("fb LW after SW+SB", dmem_rd(RES + 52), 32'h7733_2211);
+        expect32("fb LHU", dmem_rd(RES + 56), 32'h7733);
+        expect32("fb model bytes 16..19", {fb_mem[19], fb_mem[18], fb_mem[17], fb_mem[16]}, 32'hBEEF_5A11);
+        expect32("fb last pixel", dmem_rd(RES + 60), 32'h9C);
+        expect32("fb LW after SH", dmem_rd(RES + 96), 32'hBEEF_2211);
+        expect32("fb LB sign extended", dmem_rd(RES + 100), 32'hFFFF_FFBE);
+        expect32("fb LH sign extended", dmem_rd(RES + 104), 32'hFFFF_BEEF);
+        expect32("fb LW after SB at an alias", dmem_rd(RES + 108), 32'hBEEF_5A11);
+        expect32("palette read (write only)", dmem_rd(RES + 64), 32'h0);
+        expect32("palette entry 5", {20'b0, pal_mem[5]}, 32'hABC);
+        expect32("world LW (4-bit stub)", dmem_rd(RES + 68), 32'h0F0E_0F0C);
+        expect32("texture LBU (4-bit stub)", dmem_rd(RES + 72), 32'h0A);
+        expect32("world LH", dmem_rd(RES + 76), 32'h0F0C);
+        expect32("0x7 LW after SW (unmapped)", dmem_rd(RES + 80), 32'h0);
+        expect32("0x7 LW +0x10FFC (unmapped)", dmem_rd(RES + 84), 32'h0);
+        expect32("0x7 LBU after SB (unmapped)", dmem_rd(RES + 88), 32'h0);
+        expect32("0x7 LH after SH (unmapped)", dmem_rd(RES + 92), 32'h0);
+        expect32("ERR after 0x7 accesses", {29'b0, dut.u_mmio.err}, 32'd0);
+
+        if (errors != 0) $fatal(1, "FAIL: t_mmio_pipe, %0d mismatches", errors);
+        $display("PASS: t_mmio_pipe (CPI_LW = %0d, CPI_SW = %0d)", CPI_LW, CPI_SW);
+        $finish;
+    end
+endmodule

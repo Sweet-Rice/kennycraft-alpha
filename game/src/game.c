@@ -5,7 +5,9 @@
 #include "terrain.h"
 #include "trace.h"
 #include "render.h"
+#include "cr6.h"
 #include "kc_hal.h"
+#include "kc_tables.h"
 
 kc_player kc_me;
 _Static_assert(WORLD_CHUNKS * CHUNK_W < 32767, "aim / place are int16");
@@ -18,6 +20,7 @@ _Static_assert(WORLD_CHUNKS * CHUNK_W < 32767, "aim / place are int16");
 #define FALL_MAX    Q16(40.0)
 #define LOOK_RATE   Q16(330.0)     // angle units per second (~116 deg/s)
 #define PITCH_MAX   Q16(235.0)     // ~83 deg
+#define MOUSE_STEP  Q16(3.0)       // angle units per mouse-look byte (~1 deg); sensitivity knob
 #define HALF_W      Q16(0.3)       // player box 0.6 x 1.8 x 0.6
 #define HEIGHT      Q16(1.8)
 #define EYE         Q16(1.62)
@@ -30,10 +33,33 @@ _Static_assert(WORLD_CHUNKS * CHUNK_W < 32767, "aim / place are int16");
 
 enum { H_W = 1, H_A = 2, H_S = 4, H_D = 8, H_JUMP = 16, H_LEFT = 32, H_RIGHT = 64, H_UP = 128, H_DOWN = 256 };
 
-static const uint8_t hotbar[9] = { B_GRASS, B_DIRT, B_STONE, B_COBBLE, B_LOG, B_LEAVES, B_PLANKS, B_SAND, B_BRICK };
+static q16 back_pos[3];   // where you left the overworld
+static int32_t landing;   // just travelled: hold still until the new window is in, then land
+
+static int32_t in_portal; // standing in a portal: it fires again only after you step out
+
+// Slot 6 is obsidian for portals (leaves were there; trees still grow them).
+// Sky and fog colors per world (generated, tools/gen_assets.py): rewritten on the way in and
+// out, and once at boot (palette RAM keeps the last world's colors across a reset).
+static const uint16_t pal_overworld[KC_PAL_SWAP_N] = KC_PAL_OVERWORLD;
+static const uint16_t pal_nether[KC_PAL_SWAP_N] = KC_PAL_NETHER;
+static int32_t pal_world = -1;   // which set is in palette RAM
+
+static void set_world_colors(int32_t nether) {
+    if (nether == pal_world) return;
+    const uint16_t *src = nether ? pal_nether : pal_overworld;
+    for (int32_t b = 0, k = 0; b < 256; b++)
+        if ((b >> 4) == 15 || (b & 3)) hal_pal_set((uint32_t)b, src[k++]);
+    pal_world = nether;
+}
+
+static const uint8_t hotbar[9] = { B_GRASS, B_DIRT, B_STONE, B_COBBLE, B_LOG, B_OBSIDIAN, B_PLANKS, B_SAND, B_BRICK };
 
 // ---------------------------------------------------------------- collision -------------
-static int32_t solid(int32_t x, int32_t y, int32_t z) { return world_get(x, y, z) != B_AIR; }
+static int32_t solid(int32_t x, int32_t y, int32_t z) {
+    uint8_t t = world_get(x, y, z);
+    return t != B_AIR && t != B_PORTAL;   // you walk into portals
+}
 
 static int32_t box_hits(const q16 p[3]) {
     int32_t x0 = qfloor(p[0] - HALF_W), x1 = qfloor(p[0] + HALF_W - 1);
@@ -59,12 +85,14 @@ static int32_t move_axis(int32_t a, q16 delta) {
     return 1;
 }
 
-static int32_t box_overlaps_block(int32_t bx, int32_t by, int32_t bz) {
+int32_t player_overlaps(int32_t x0, int32_t y0, int32_t z0, int32_t x1, int32_t y1, int32_t z1) {
     const q16 *p = kc_me.pos;
-    return qfloor(p[0] - HALF_W) <= bx && bx <= qfloor(p[0] + HALF_W - 1)
-        && qfloor(p[1]) <= by && by <= qfloor(p[1] + HEIGHT - 1)
-        && qfloor(p[2] - HALF_W) <= bz && bz <= qfloor(p[2] + HALF_W - 1);
+    return qfloor(p[0] - HALF_W) <= x1 && x0 <= qfloor(p[0] + HALF_W - 1)
+        && qfloor(p[1]) <= y1 && y0 <= qfloor(p[1] + HEIGHT - 1)
+        && qfloor(p[2] - HALF_W) <= z1 && z0 <= qfloor(p[2] + HALF_W - 1);
 }
+
+static int32_t box_overlaps_block(int32_t bx, int32_t by, int32_t bz) { return player_overlaps(bx, by, bz, bx, by, bz); }
 
 // ---------------------------------------------------------------- view vectors ----------
 static void view_vectors(q16 fwd[3], q16 right[3], q16 up[3]) {
@@ -103,10 +131,32 @@ static void update_aim(void) {
     kc_me.place[HIT_AXIS(h.res)] += (int16_t)(HIT_NEG(h.res) ? 1 : -1);   // the cell the ray came from
 }
 
+// Put out the 2 x 3 portal that holds (x, y, z): find its lower corner, then clear it.
+static void clear_portal(int32_t x, int32_t y, int32_t z) {
+    int32_t ax = world_get(x - 1, y, z) == B_PORTAL || world_get(x + 1, y, z) == B_PORTAL;
+    int32_t dx = ax, dz = !ax;
+    while (world_get(x, y - 1, z) == B_PORTAL) y--;
+    while (world_get(x - dx, y, z - dz) == B_PORTAL) { x -= dx; z -= dz; }
+    for (int32_t v = 0; v < 3; v++)
+        for (int32_t a = 0; a < 2; a++)
+            if (world_get(x + a * dx, y + v, z + a * dz) == B_PORTAL) world_set(x + a * dx, y + v, z + a * dz, B_AIR);
+}
+
+void game_break(int32_t x, int32_t y, int32_t z) {
+    uint8_t t = world_get(x, y, z);
+    if (t == B_BEDROCK) return;
+    world_set(x, y, z, B_AIR);
+    if (t == B_PORTAL) clear_portal(x, y, z);
+    if (t == B_OBSIDIAN) {                       // a frame block: put out the portal it held
+        static const int8_t n[6][3] = { {1,0,0}, {-1,0,0}, {0,1,0}, {0,-1,0}, {0,0,1}, {0,0,-1} };
+        for (int32_t i = 0; i < 6; i++)
+            if (world_get(x + n[i][0], y + n[i][1], z + n[i][2]) == B_PORTAL)
+                clear_portal(x + n[i][0], y + n[i][1], z + n[i][2]);
+    }
+}
+
 static void do_break(void) {
-    if (!kc_me.aim_hit) return;
-    if (world_get(kc_me.aim[0], kc_me.aim[1], kc_me.aim[2]) == B_BEDROCK) return;
-    world_set(kc_me.aim[0], kc_me.aim[1], kc_me.aim[2], B_AIR);
+    if (kc_me.aim_hit) game_break(kc_me.aim[0], kc_me.aim[1], kc_me.aim[2]);
 }
 
 static void do_place(void) {
@@ -116,6 +166,78 @@ static void do_place(void) {
     if (world_get(p[0], p[1], p[2]) != B_AIR) return;
     if (box_overlaps_block(p[0], p[1], p[2])) return;
     world_set(p[0], p[1], p[2], hotbar[kc_me.selected]);
+    if (hotbar[kc_me.selected] == B_OBSIDIAN) portal_light(p[0], p[1], p[2]);
+}
+
+// ---------------------------------------------------------------- the Nether ------------
+// P: overworld -> the Nether strip 512 blocks past NETHER_X0 (same z), and back to where you
+// left. The window then reloads around the new spot over a few frames (one chunk generated
+// per frame), so physics waits for it; land() then finds standing room in that column.
+// P stays as a shortcut beside obsidian portals (portal_light).
+static void travel(void) {
+    if (kc_me.pos[0] < Q16_INT(NETHER_X0)) {
+        for (int32_t i = 0; i < 3; i++) back_pos[i] = kc_me.pos[i];
+        kc_me.pos[0] = Q16_INT(NETHER_X0 + 512) + Q16_HALF;
+    } else if (back_pos[0]) {
+        kc_me.pos[0] = back_pos[0];
+        kc_me.pos[2] = back_pos[2];
+    } else {
+        kc_me.pos[0] = Q16_INT(2048) + Q16_HALF;   // walked in from the side: back to spawn x
+    }
+    kc_me.vel_y = 0;
+    landing = 1;
+}
+
+// A portal frame is obsidian around a 2 wide x 3 tall hole of air (corners optional), standing
+// along x or z. The obsidian block just placed at (x, y, z) may finish one: try every frame
+// position that has it on the rim and fill the first complete one's hole with portal.
+int32_t portal_light(int32_t x, int32_t y, int32_t z) {
+    for (int32_t along_x = 0; along_x < 2; along_x++)
+        for (int32_t oy = -4; oy <= 0; oy++)
+            for (int32_t oa = -3; oa <= 0; oa++) {
+                int32_t x0 = x + (along_x ? oa : 0), z0 = z + (along_x ? 0 : oa), y0 = y + oy;
+                int32_t ok = 1;
+                for (int32_t v = 0; v < 5 && ok; v++)
+                    for (int32_t a = 0; a < 4 && ok; a++) {
+                        int32_t rim_a = a == 0 || a == 3, rim_v = v == 0 || v == 4;
+                        if (rim_a && rim_v) continue;                       // corners
+                        uint8_t t = world_get(x0 + (along_x ? a : 0), y0 + v, z0 + (along_x ? 0 : a));
+                        ok = (rim_a || rim_v) ? t == B_OBSIDIAN : t == B_AIR;
+                    }
+                if (!ok) continue;
+                for (int32_t v = 1; v < 4; v++)
+                    for (int32_t a = 1; a < 3; a++)
+                        world_set(x0 + (along_x ? a : 0), y0 + v, z0 + (along_x ? 0 : a), B_PORTAL);
+                return 1;
+            }
+    return 0;
+}
+
+// Arriving in the Nether: stand the player in a lit portal (along x, interior x..x+1) so the
+// way home is right there. A portal already at the landing spot is reused.
+static void return_portal(void) {
+    int32_t x = qfloor(kc_me.pos[0]), y = qfloor(kc_me.pos[1]), z = qfloor(kc_me.pos[2]);
+    if (world_get(x, y, z) == B_PORTAL) return;
+    for (int32_t v = -1; v <= 3; v++)
+        for (int32_t a = -1; a <= 2; a++) {
+            int32_t rim_a = a == -1 || a == 2, rim_v = v == -1 || v == 3;
+            if (rim_a && rim_v) continue;                       // corners stay as they are
+            world_set(x + a, y + v, z, rim_a || rim_v ? B_OBSIDIAN : B_PORTAL);
+        }
+}
+
+// Lowest spot in the column (or the next ones east) with a solid non-lava block under 2 of air.
+static void land(void) {
+    int32_t x = qfloor(kc_me.pos[0]), z = qfloor(kc_me.pos[2]);
+    for (int32_t dx = 0; dx < 16; dx++)
+        for (int32_t y = 1; y + 1 < WIN_Y; y++)
+            if (solid(x + dx, y - 1, z) && world_get(x + dx, y - 1, z) != B_LAVA
+                && !solid(x + dx, y, z) && !solid(x + dx, y + 1, z)) {
+                kc_me.pos[0] += Q16_INT(dx);
+                kc_me.pos[1] = Q16_INT(y);
+                return;
+            }
+    kc_me.pos[1] = Q16_INT(WIN_Y - 3);   // no room anywhere: drop from the top
 }
 
 // ---------------------------------------------------------------- public ----------------
@@ -132,6 +254,11 @@ void game_init(void) {
     kc_me.selected = 0;
     kc_me.held = 0;
     kc_me.want_break = kc_me.want_place = 0;
+    back_pos[0] = back_pos[1] = back_pos[2] = 0;
+    landing = 0;
+    in_portal = 0;
+    pal_world = -1;
+    set_world_colors(0);
     world_update(sx, sz);                 // first call generates the whole window
     update_aim();
 }
@@ -151,6 +278,12 @@ static void game_key(uint8_t b) {
     case KEY_DOWN:  bit = H_DOWN; break;
     case KEY_BREAK: if (down) kc_me.want_break = 1; return;   // done in pick_and_edit()
     case KEY_PLACE: if (down) kc_me.want_place = 1; return;
+    case KEY_E: case KEY_Y: case KEY_N: if (down) cr6_key(b & 0x7F); return;
+    case KEY_P: if (down && !landing) travel(); return;
+    case MOUSE_LEFT:  if (down) kc_me.yaw = (kc_me.yaw - MOUSE_STEP) & (Q16_INT(ANG_FULL) - 1); return;
+    case MOUSE_RIGHT: if (down) kc_me.yaw = (kc_me.yaw + MOUSE_STEP) & (Q16_INT(ANG_FULL) - 1); return;
+    case MOUSE_UP:    if (down) kc_me.pitch = iclamp(kc_me.pitch + MOUSE_STEP, -PITCH_MAX, PITCH_MAX); return;
+    case MOUSE_DOWN:  if (down) kc_me.pitch = iclamp(kc_me.pitch - MOUSE_STEP, -PITCH_MAX, PITCH_MAX); return;
     default:
         if ((b & 0x7F) >= '1' && (b & 0x7F) <= '9' && down) kc_me.selected = (uint8_t)((b & 0x7F) - '1');
         return;
@@ -159,8 +292,11 @@ static void game_key(uint8_t b) {
 }
 
 void read_keys(void) {
-    while (hal_mmio_r(MMIO_UART_STATUS) & 1u)
-        game_key((uint8_t)hal_mmio_r(MMIO_UART_RX));
+    while (hal_mmio_r(MMIO_UART_STATUS) & 1u) {
+        uint8_t b = (uint8_t)hal_mmio_r(MMIO_UART_RX);
+        if (!cr6_byte(b)) game_key(b);
+    }
+    cr6_end_drain();   // CR6 commands ran above, before world_update / pick_and_edit
 }
 
 void move_player(q16 dt) {
@@ -172,6 +308,14 @@ void move_player(q16 dt) {
     kc_me.yaw &= Q16_INT(ANG_FULL) - 1;
     kc_me.pitch += look * (((k & H_UP) != 0) - ((k & H_DOWN) != 0));
     kc_me.pitch = iclamp(kc_me.pitch, -PITCH_MAX, PITCH_MAX);
+
+    if (landing) {                        // after travel(): wait for the window, then stand up
+        if (!world_ready() || !world_loaded(qfloor(kc_me.pos[0]), qfloor(kc_me.pos[2]))) return;
+        land();
+        landing = 0;
+        in_portal = 1;   // landed back in the portal you left by: step out before it fires
+        if (kc_me.pos[0] >= Q16_INT(NETHER_X0)) return_portal();
+    }
 
     // Walk direction from yaw only
     int32_t yaw = kc_me.yaw >> 16;
@@ -201,6 +345,13 @@ void move_player(q16 dt) {
     }
     kc_me.pos[0] = iclamp(kc_me.pos[0], Q16(17.0), Q16(4079.0));
     kc_me.pos[2] = iclamp(kc_me.pos[2], Q16(17.0), Q16(4079.0));
+
+    // Portal: travel when you walk in (feet or head), not again until you step out.
+    int32_t px = qfloor(kc_me.pos[0]), py = qfloor(kc_me.pos[1]), pz = qfloor(kc_me.pos[2]);
+    int32_t now_in = world_get(px, py, pz) == B_PORTAL || world_get(px, py + 1, pz) == B_PORTAL;
+    if (now_in && !in_portal) travel();
+    in_portal = now_in;
+    set_world_colors(kc_me.pos[0] >= Q16_INT(NETHER_X0));   // also when you walk in from the side
 }
 
 void pick_and_edit(void) {
@@ -208,6 +359,15 @@ void pick_and_edit(void) {
     if (kc_me.want_break) do_break();
     if (kc_me.want_place) do_place();
     kc_me.want_break = kc_me.want_place = 0;
+}
+
+// The hotbar's pixels, [x0, x1) x [y0, y1): 9 opaque slots of S x S drawn by
+// game_draw_overlay over every frame. write_camera hands the same rectangle to the kernel
+// (kc_rparams hud_*), which skips the blocks inside it.
+static void hotbar_rect(int32_t W, int32_t H, int32_t *x0, int32_t *x1, int32_t *y0, int32_t *y1) {
+    int32_t S = W >> 4;                               // 10 px at 160, 20 at 320
+    *x0 = (W - 9 * S) >> 1; *x1 = *x0 + 9 * S;
+    *y0 = H - S - 2;        *y1 = *y0 + S;
 }
 
 void write_camera(void) {
@@ -230,6 +390,7 @@ void write_camera(void) {
         p->up[i] = up[i];
     }
     p->focal = KC_RP->width == 160 ? FOCAL_160 : FOCAL_320;
+    hotbar_rect(p->width, p->height, &p->hud_x0, &p->hud_x1, &p->hud_y0, &p->hud_y1);
 }
 
 static void put(int32_t x, int32_t y, uint8_t v) { hal_fb_put((uint32_t)(y * FB_STRIDE + x), v); }
@@ -298,23 +459,19 @@ void game_draw_overlay(void) {
         for (int32_t d = -1; d <= 1; d++) { put(cx + i, cy + d, black); put(cx + d, cy + i, black); }
     for (int32_t i = -3; i <= 3; i++) { put(cx + i, cy, white); put(cx, cy + i, white); }
 
-    // Hotbar: 9 slots of the block's top texture
-    int32_t S = W >> 4;                               // 10 px at 160, 20 at 320
-    int32_t inner = S - 2;
-    q16 tstep = W == 160 ? Q16(2.0) : 58254;          // 16 / inner, Q16
-    int32_t x0 = (W - 9 * S) >> 1, y0 = H - S - 2;
+    // Hotbar: 9 slots, each a flat swatch of the block's top color. Every pixel of
+    // hotbar_rect is written: the kernel does not trace the blocks inside it.
+    int32_t S = W >> 4, x0, x1, y0, y1;
+    hotbar_rect(W, H, &x0, &x1, &y0, &y1);
     for (int32_t i = 0; i < 9; i++) {
-        int32_t sx = x0 + i * S;
-        uint8_t border = i == kc_me.selected ? white : black;
-        for (int32_t j = 0; j < S; j++) {
-            put(sx + j, y0, border); put(sx + j, y0 + S - 1, border);
-            put(sx, y0 + j, border); put(sx + S - 1, y0 + j, border);
-        }
-        for (int32_t v = 0; v < inner; v++)
-            for (int32_t u = 0; u < inner; u++) {
-                int32_t tu = (u * tstep) >> 16, tv = (v * tstep) >> 16;
-                uint8_t texel = hal_tex_get(TEX_INDEX(hotbar[i], 0, tu, tv)) & 15;
-                put(sx + 1 + u, y0 + 1 + v, PIX(texel, i == kc_me.selected ? 0 : 1, 0));
+        int32_t sx = x0 + i * S, sel_i = i == kc_me.selected;
+        uint8_t border = sel_i ? white : black;
+        uint8_t fill = PIX(kc_face_color[hotbar[i] * 3], sel_i ? 0 : 1, 0);
+        for (int32_t v = 0; v < S; v++)
+            for (int32_t u = 0; u < S; u++) {
+                int32_t edge = u == 0 || v == 0 || u == S - 1 || v == S - 1;
+                put(sx + u, y0 + v, edge ? border : fill);
             }
     }
+    cr6_draw_hud(W);
 }

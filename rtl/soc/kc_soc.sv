@@ -15,6 +15,8 @@
 //          game/gen/textures.hex)
 //   fb, palette, FB_SWAP, VSYNC, FRAME_COUNT, FB_MODE  ports to display (P1)
 //   0x2C..0x3C  ddr_reg_* port to the chunk engine (P2b)
+//   vt_*   HAS_RAY_UNIT = 1: the core's custom-1 port to the ray unit
+//          (rtl/vtrace/vtrace.sv in rtl/top.sv); 0 / ignored otherwise
 module kc_soc
     import kc_isa_pkg::*;
 #(
@@ -25,7 +27,10 @@ module kc_soc
     parameter string DMEM_HEX  = "kc_dmem.hex",
     parameter string TEX_HEX   = "",
     parameter bit    EXT_WORLD = 1'b0,
-    parameter bit    HAS_DIV_STACK = 1'b0   // custom-2 divergence stack in the core
+    parameter bit    HAS_DIV_STACK = 1'b0,  // custom-2 divergence stack in the core
+    parameter bit    HAS_RAY_UNIT  = 1'b0,  // custom-1 ray unit (vt_* ports)
+    parameter bit    HAS_QRCP      = 1'b0,  // QRCP in every lane (D22)
+    parameter bit    PIPELINED     = 1'b0   // 5-stage core_pipe instead of core
 ) (
     input  logic        clk,
     input  logic        rst,
@@ -41,9 +46,10 @@ module kc_soc
     // Display core-side port (P1)
     output logic        fb_we,
     output logic        fb_re,
-    output logic [16:0] fb_addr,
-    output logic [7:0]  fb_wdata,
-    input  logic [7:0]  fb_rdata,
+    output logic [3:0]  fb_be,
+    output logic [14:0] fb_addr,
+    output logic [31:0] fb_wdata,
+    input  logic [31:0] fb_rdata,
     output logic        pal_we,
     output logic [7:0]  pal_addr,
     output logic [11:0] pal_wdata,
@@ -67,12 +73,23 @@ module kc_soc
     output logic [16:0] world_addr,
     output logic [7:0]  world_wdata,
     input  logic        world_ready,
-    input  logic [7:0]  world_rdata
+    input  logic [7:0]  world_rdata,
+
+    // Ray unit (HAS_RAY_UNIT = 1)
+    output logic             vt_cfg_we,
+    output logic [2:0]       vt_cfg_field,
+    output logic [LANES-1:0] vt_lane_mask,
+    output logic [31:0]      vt_cfg_data [LANES],
+    output logic             vt_start,
+    output logic [7:0]       vt_max_steps,
+    input  logic             vt_done,
+    input  logic [15:0]      vt_result   [LANES],
+    input  logic [16:0]      vt_hit_cell [LANES],
+    input  logic [31:0]      vt_t_hit    [LANES]
 );
 
     localparam int IMEM_WORDS = IMEM_BYTES / 4;
     localparam int DMEM_WORDS = DMEM_BYTES / 4;
-    localparam int GPU_WORDS  = GPU_BYTES / 4;
 
     // ------------------------------------------------------------------
     // Core
@@ -84,12 +101,30 @@ module kc_soc
     logic [ERR_WIDTH-1:0] err_set;
     logic [31:0]          err_pc, pc;
 
-    core #(.LANES(LANES), .HAS_DIV_STACK(HAS_DIV_STACK)) u_core (
-        .clk, .rst,
-        .imem_addr, .imem_rdata,
-        .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,
-        .err_set, .err_pc, .halted(err_led), .pc
-    );
+    // Both branches are named g_core so the core sits at g_core.u_core
+    // whichever is built: PIPELINED = 1 builds the 5-stage core_pipe (P8,
+    // rtl/core_pipe), PIPELINED = 0 the multi-cycle core.
+    if (PIPELINED) begin : g_core
+        core_pipe #(.LANES(LANES), .HAS_DIV_STACK(HAS_DIV_STACK), .HAS_RAY_UNIT(HAS_RAY_UNIT),
+                    .HAS_QRCP(HAS_QRCP)) u_core (
+            .clk, .rst,
+            .imem_addr, .imem_rdata,
+            .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,
+            .err_set, .err_pc, .halted(err_led), .pc,
+            .vt_cfg_we, .vt_cfg_field, .vt_lane_mask, .vt_cfg_data, .vt_start, .vt_max_steps,
+            .vt_done, .vt_result, .vt_hit_cell, .vt_t_hit
+        );
+    end else begin : g_core
+        core #(.LANES(LANES), .HAS_DIV_STACK(HAS_DIV_STACK), .HAS_RAY_UNIT(HAS_RAY_UNIT),
+               .HAS_QRCP(HAS_QRCP)) u_core (
+            .clk, .rst,
+            .imem_addr, .imem_rdata,
+            .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,
+            .err_set, .err_pc, .halted(err_led), .pc,
+            .vt_cfg_we, .vt_cfg_field, .vt_lane_mask, .vt_cfg_data, .vt_start, .vt_max_steps,
+            .vt_done, .vt_result, .vt_hit_cell, .vt_t_hit
+        );
+    end
 
     // ------------------------------------------------------------------
     // Memories
@@ -106,32 +141,6 @@ module kc_soc
     memory_arr #(.W(32), .D(DMEM_WORDS), .INIT_FILE(DMEM_HEX)) u_dmem (
         .clk, .we(dmem_we), .addr(dmem_addr), .wdata(dmem_wdata), .rdata(dmem_rdata)
     );
-
-    // GPU memory as a 16 K-word bank (offsets 0x0_0000..0x0_FFFF) and a
-    // 1 K-word bank (0x1_0000..0x1_0FFF). One 17 K-deep array makes Vivado
-    // build 32 K x 1 slices (32 BRAM36); the split maps to 16 + 1. The decoder
-    // only enables writes inside the 68 KB, so gpu_addr[13:10] is 0 whenever
-    // the 1 K bank is written. The bank select is registered with the read.
-    localparam int GPU_LO_WORDS = 16 * 1024;
-    localparam int GPU_HI_WORDS = GPU_WORDS - GPU_LO_WORDS;
-
-    logic [3:0]  gpu_we;
-    logic [14:0] gpu_addr;
-    logic [31:0] gpu_wdata, gpu_rdata, gpu_lo_rdata, gpu_hi_rdata;
-    logic        gpu_hi_q;
-
-    memory_arr #(.W(32), .D(GPU_LO_WORDS)) u_gpu_lo (
-        .clk, .we(gpu_addr[14] ? 4'b0 : gpu_we), .addr(gpu_addr[13:0]),
-        .wdata(gpu_wdata), .rdata(gpu_lo_rdata)
-    );
-
-    memory_arr #(.W(32), .D(GPU_HI_WORDS)) u_gpu_hi (
-        .clk, .we(gpu_addr[14] ? gpu_we : 4'b0), .addr(gpu_addr[9:0]),
-        .wdata(gpu_wdata), .rdata(gpu_hi_rdata)
-    );
-
-    always_ff @(posedge clk) gpu_hi_q <= gpu_addr[14];
-    assign gpu_rdata = gpu_hi_q ? gpu_hi_rdata : gpu_lo_rdata;
 
     // ------------------------------------------------------------------
     // Address decoder
@@ -151,11 +160,10 @@ module kc_soc
         .req(bus_req), .we(bus_we), .addr(bus_addr), .be(bus_be), .wdata(bus_wdata),
         .ready(bus_ready), .rdata(bus_rdata),
         .dmem_we, .dmem_addr, .dmem_wdata, .dmem_rdata,
-        .gpu_we, .gpu_addr, .gpu_wdata, .gpu_rdata,
         .world_req(w_req), .world_we(w_we), .world_addr(w_addr), .world_wdata(w_wdata),
         .world_ready(w_ready), .world_rdata(w_rdata),
         .tex_req, .tex_we, .tex_addr, .tex_wdata, .tex_ready, .tex_rdata,
-        .fb_we, .fb_re, .fb_addr, .fb_wdata, .fb_rdata,
+        .fb_we, .fb_re, .fb_be, .fb_addr, .fb_wdata, .fb_rdata,
         .mmio_req, .mmio_we, .mmio_addr, .mmio_wdata, .mmio_ready, .mmio_rdata,
         .pal_we, .pal_addr, .pal_wdata
     );

@@ -44,6 +44,12 @@ static inline void mask_set(uint32_t m) {
 static inline void mask_all(void) {
     __asm__ volatile(".insn r 0x0B, 7, 0, x0, x0, x0" ::: "memory");
 }
+// QRCP rd, rs1 (custom-0 funct3 010, D22): rd = qrcp(rs1) in each active lane, bit-exact
+// with fixed.c. Needs a core built with HAS_QRCP = 1 (the Stage 2 top); fixed.h uses it
+// for qrcp() when built with KC_QRCP=1.
+static inline int32_t qrcp_hw(int32_t x) {
+    int32_t r; __asm__ volatile(".insn r 0x0B, 2, 0, %0, %1, x0" : "=r"(r) : "r"(x)); return r;
+}
 #else
 #error "KC_LANES must be 1 or 8"
 #endif

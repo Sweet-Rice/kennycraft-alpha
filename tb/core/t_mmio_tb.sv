@@ -1,8 +1,8 @@
 // t_mmio: runs sw/t_mmio.S against the harness's display and chunk-engine
 // models and checks every MMIO register (LEDS, FB_MODE, FB_SWAP, FRAME_COUNT,
 // VSYNC, CYCLES, UART_STATUS/RX/TX, DDR register forwarding with a CHUNK_CMD
-// stall), the framebuffer, palette, world and texture byte regions and the
-// GPU memory region (word BRAM, byte enables, no aliasing past 68 KB).
+// stall), the framebuffer, palette, world and texture byte regions, and that
+// 0x7000_0000 (the removed GPU memory) is unmapped.
 module t_mmio_tb;
     parameter string IMEM_HEX = "";
     parameter string DMEM_HEX = "";
@@ -56,37 +56,34 @@ module t_mmio_tb;
         end
         expect32("FRAME_COUNT", dmem_rd(RES + 16), 32'h1234_5678);
         expect32("VSYNC", dmem_rd(RES + 20), 32'h1);
-        expect32("CYCLES delta (one LW)", dmem_rd(RES + 24), 32'd5);
+        expect32("CYCLES delta (one LW)", dmem_rd(RES + 24), 32'd4);   // ID EX MEM WB (fetch overlap)
         expect32("UART_STATUS idle", dmem_rd(RES + 28), 32'h0);
         expect32("UART_RX empty", dmem_rd(RES + 32), 32'h0);
         expect32("UART_STATUS TX busy", dmem_rd(RES + 36), 32'h2);
         expect32("SLOT_VALID via ddr port", dmem_rd(RES + 40), 32'hBEEF);
         expect32("DDR_STATUS via ddr port", dmem_rd(RES + 44), 32'h1);
         expect32("CHUNK_CMD stall cycles", ddr_stalled_cycles, STALL + 1);
-        expect32("CHUNK_CMD time (LW + SW + stall)", dmem_rd(RES + 48), 32'(5 + 4 + STALL + 1));
+        expect32("CHUNK_CMD time (LW + SW + stall)", dmem_rd(RES + 48), 32'(4 + 3 + STALL + 1));   // LW 4, SW 3 (fetch overlap)
         expect32("CHUNK_CMD value", ddr_regs[1], 32'h0000_0302);
         expect32("WIN_ORIGIN value", ddr_regs[4], 32'h0000_1020);
         expect32("fb LW after SW+SB", dmem_rd(RES + 52), 32'h7733_2211);
         expect32("fb LHU", dmem_rd(RES + 56), 32'h7733);
-        expect32("fb model bytes 16..19", {fb_mem[19], fb_mem[18], fb_mem[17], fb_mem[16]}, 32'h7733_2211);
+        expect32("fb model bytes 16..19", {fb_mem[19], fb_mem[18], fb_mem[17], fb_mem[16]}, 32'hBEEF_5A11);
         expect32("fb last pixel", dmem_rd(RES + 60), 32'h9C);
+        expect32("fb LW after SH", dmem_rd(RES + 96), 32'hBEEF_2211);
+        expect32("fb LB sign extended", dmem_rd(RES + 100), 32'hFFFF_FFBE);
+        expect32("fb LH sign extended", dmem_rd(RES + 104), 32'hFFFF_BEEF);
+        expect32("fb LW after SB at an alias", dmem_rd(RES + 108), 32'hBEEF_5A11);
         expect32("palette read (write only)", dmem_rd(RES + 64), 32'h0);
         expect32("palette entry 5", {20'b0, pal_mem[5]}, 32'hABC);
         expect32("world LW (4-bit stub)", dmem_rd(RES + 68), 32'h0F0E_0F0C);
         expect32("texture LBU (4-bit stub)", dmem_rd(RES + 72), 32'h0A);
         expect32("world LH", dmem_rd(RES + 76), 32'h0F0C);
-        expect32("gpu LW at GPU_BASE", dmem_rd(RES + 80), 32'h1234_5678);
-        expect32("gpu LW last word", dmem_rd(RES + 84), 32'hCAFE_F00D);
-        expect32("gpu backdoor last word", dut.u_gpu_hi.mem[1023], 32'hCAFE_F00D);
-        expect32("gpu LW after SB+SH", dmem_rd(RES + 88), 32'h8001_8044);
-        expect32("gpu LBU", dmem_rd(RES + 92), 32'h0000_0080);
-        expect32("gpu LB sign extends", dmem_rd(RES + 96), 32'hFFFF_FF80);
-        expect32("gpu LHU", dmem_rd(RES + 100), 32'h0000_8001);
-        expect32("gpu LH sign extends", dmem_rd(RES + 104), 32'hFFFF_8001);
-        expect32("gpu +0x11000 load (unmapped)", dmem_rd(RES + 108), 32'h0);
-        expect32("gpu +0x20000 load (unmapped)", dmem_rd(RES + 112), 32'h0);
-        expect32("gpu offset 0 not aliased", dmem_rd(RES + 116), 32'h1234_5678);
-        expect32("ERR after gpu accesses", {29'b0, dut.u_mmio.err}, 32'd0);
+        expect32("0x7 LW after SW (unmapped)", dmem_rd(RES + 80), 32'h0);
+        expect32("0x7 LW +0x10FFC (unmapped)", dmem_rd(RES + 84), 32'h0);
+        expect32("0x7 LBU after SB (unmapped)", dmem_rd(RES + 88), 32'h0);
+        expect32("0x7 LH after SH (unmapped)", dmem_rd(RES + 92), 32'h0);
+        expect32("ERR after 0x7 accesses", {29'b0, dut.u_mmio.err}, 32'd0);
 
         if (errors != 0) $fatal(1, "FAIL: t_mmio, %0d mismatches", errors);
         $display("PASS: t_mmio");

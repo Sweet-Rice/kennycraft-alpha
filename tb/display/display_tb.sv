@@ -12,7 +12,8 @@
 //     the old buffer, shows the new buffer from the next frame, flips the
 //     front select exactly at the first pixel clock of vblank, and keeps
 //     swap_pending at 1 until then.
-//   - Core-side reads of the back buffer return what was written, 1 cycle later.
+//   - Core-side reads of the back buffer return what was written, 1 cycle later,
+//     and byte enables write only their bytes (word port, fb_be).
 // Any failure ends the run with $fatal (nonzero exit).
 
 module display_tb;
@@ -33,9 +34,10 @@ module display_tb;
 
     logic        rst_core = 1'b1, rst_pix = 1'b1;
     logic        fb_we = 1'b0, fb_re = 1'b0;
-    logic [16:0] fb_addr = '0;
-    logic [7:0]  fb_wdata = '0;
-    logic [7:0]  fb_rdata;
+    logic [3:0]  fb_be = '0;
+    logic [14:0] fb_addr = '0;
+    logic [31:0] fb_wdata = '0;
+    logic [31:0] fb_rdata;
     logic        pal_we = 1'b0;
     logic [7:0]  pal_addr = '0;
     logic [11:0] pal_wdata = '0;
@@ -132,17 +134,17 @@ module display_tb;
         vs_q = vga_vs;
     end
 
-    // The front select may only change at the first pixel clock of vblank.
-    logic fs_q = 1'b0;
+    // The front buffer may only change at the first pixel clock of vblank.
+    logic [1:0] fs_q = 2'd0;
     logic [9:0] hx_q = '0, vy_q = '0;
     int flips = 0;
     always @(posedge clk_pix) begin
-        if (dut.front_sel != fs_q) begin
+        if (dut.front != fs_q) begin
             flips++;
             if (!(hx_q == 10'd0 && vy_q == 10'd480))
-                $fatal(1, "front_sel flipped at hx=%0d vy=%0d, not at the start of vblank", hx_q, vy_q);
+                $fatal(1, "front buffer changed at hx=%0d vy=%0d, not at the start of vblank", hx_q, vy_q);
         end
-        fs_q = dut.front_sel;
+        fs_q = dut.front;
         hx_q = dut.hx;
         vy_q = dut.vy;
     end
@@ -150,19 +152,36 @@ module display_tb;
     // ------------------------------------------------------------------
     // Core-side helpers (drive on the falling edge, DUT samples on the rising)
     // ------------------------------------------------------------------
-    task automatic fb_write(input int addr, input logic [7:0] data);
-        @(negedge clk_core);
-        fb_we = 1'b1; fb_addr = 17'(addr); fb_wdata = data;
+    // One byte at byte index addr: only its byte enable, junk in the other
+    // byte lanes of fb_wdata.
+    task automatic fb_write_byte(input int addr, input logic [7:0] data);
+        fb_we = 1'b1; fb_addr = 15'(addr / 4); fb_be = 4'b0001 << (addr % 4);
+        fb_wdata = {4{8'h5A}};
+        fb_wdata[(addr % 4) * 8 +: 8] = data;
         @(negedge clk_core);
         fb_we = 1'b0;
     endtask
 
+    task automatic fb_read_word(input int waddr, output logic [31:0] data);
+        @(negedge clk_core);
+        fb_re = 1'b1; fb_addr = 15'(waddr);
+        @(negedge clk_core);
+        fb_re = 1'b0;
+        data = fb_rdata;
+    endtask
+
+    // Odd rows go in byte by byte, even rows a word (four pixels) at a time.
     task automatic fb_fill(input int id);
         @(negedge clk_core);
         for (int r = 0; r < 240; r++) begin
-            for (int c = 0; c < 320; c++) begin
-                fb_we = 1'b1; fb_addr = 17'(r * 320 + c); fb_wdata = pattern(id, c, r);
-                @(negedge clk_core);
+            for (int c = 0; c < 320; c += 4) begin
+                if (r % 2 == 1) begin
+                    for (int k = 0; k < 4; k++) fb_write_byte(r * 320 + c + k, pattern(id, c + k, r));
+                end else begin
+                    fb_we = 1'b1; fb_be = 4'b1111; fb_addr = 15'((r * 320 + c) / 4);
+                    fb_wdata = {pattern(id, c + 3, r), pattern(id, c + 2, r), pattern(id, c + 1, r), pattern(id, c, r)};
+                    @(negedge clk_core);
+                end
             end
         end
         fb_we = 1'b0;
@@ -170,15 +189,32 @@ module display_tb;
 
     task automatic fb_check_readback(input int id);
         int addr;
+        logic [31:0] w;
         for (int k = 0; k < 2000; k++) begin
             addr = (k * 7919 + 13) % FB_BYTES;
-            @(negedge clk_core);
-            fb_re = 1'b1; fb_addr = 17'(addr);
-            @(negedge clk_core);
-            fb_re = 1'b0;
-            if (fb_rdata !== pattern(id, addr % 320, addr / 320))
-                $fatal(1, "fb read addr %0d = %02h, expected %02h", addr, fb_rdata, pattern(id, addr % 320, addr / 320));
+            fb_read_word(addr / 4, w);
+            if (w[(addr % 4) * 8 +: 8] !== pattern(id, addr % 320, addr / 320))
+                $fatal(1, "fb read addr %0d = %02h, expected %02h", addr, w[(addr % 4) * 8 +: 8],
+                       pattern(id, addr % 320, addr / 320));
         end
+    endtask
+
+    // Byte enables: a word, then single bytes and a halfword over it.
+    task automatic fb_check_be();
+        logic [31:0] w;
+        @(negedge clk_core);
+        fb_we = 1'b1; fb_be = 4'b1111; fb_addr = 15'd100; fb_wdata = 32'hA1B2_C3D4;
+        @(negedge clk_core);
+        fb_write_byte(401, 8'h11);
+        fb_write_byte(403, 8'h33);
+        fb_read_word(100, w);
+        if (w !== 32'h33B2_11D4) $fatal(1, "fb byte enables: word %08h, expected 33b211d4", w);
+        @(negedge clk_core);
+        fb_we = 1'b1; fb_be = 4'b0011; fb_addr = 15'd100; fb_wdata = 32'hFFFF_7766;
+        @(negedge clk_core);
+        fb_we = 1'b0;
+        fb_read_word(100, w);
+        if (w !== 32'h33B2_7766) $fatal(1, "fb halfword enable: word %08h, expected 33b27766", w);
     endtask
 
     task automatic pal_fill();
@@ -255,12 +291,13 @@ module display_tb;
 
         // Palette, then pattern 0 into the back buffer (buffer 1) and show it.
         pal_fill();
+        fb_check_be();
         fb_fill(0);
         fb_check_readback(0);
-        if (dut.front_sel !== 1'b0) $fatal(1, "front buffer should start as buffer 0");
+        if (dut.front !== 2'd0) $fatal(1, "front buffer should start as buffer 0");
         request_swap();
         wait_swap_done();
-        if (dut.front_sel !== 1'b1) $fatal(1, "swap did not select buffer 1");
+        if (dut.front !== 2'd1) $fatal(1, "swap did not select buffer 1");
 
         // FB_MODE 0: two consecutive frames.
         wait_frames(1); check_frame("mode0_frame1", 0, 1'b0);
@@ -289,7 +326,7 @@ module display_tb;
             $fatal(1, "frame_count advanced by %0d across one vblank", frame_count - fc0);
         check_frame("swap_frame_after", 1, 1'b0);
 
-        if (flips != 2) $fatal(1, "front_sel flipped %0d times, expected 2", flips);
+        if (flips != 2) $fatal(1, "front buffer changed %0d times, expected 2", flips);
         if (frame_count < 32'd8) $fatal(1, "frame_count %0d too low", frame_count);
         $display("display_tb: PASS (%0d frames, frame_count %0d)", frames_done, frame_count);
         $finish;

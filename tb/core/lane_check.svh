@@ -64,12 +64,12 @@ endtask
 // After a halt: ERR = err, ERR_PC = pc, the PC stays put, nothing more runs.
 task automatic expect_halt(input string what, input logic [2:0] err, input logic [31:0] pc);
     logic [31:0] pc_halt;
-    pc_halt = dut.u_core.pc;
+    pc_halt = `KC_CORE.pc;
     repeat (50) @(posedge clk);
     expect32({what, ": error LED"}, {31'b0, err_led}, 32'd1);
     expect32({what, ": ERR"}, {29'b0, dut.u_mmio.err}, {29'b0, err});
     expect32({what, ": ERR_PC"}, dut.u_mmio.err_pc, pc);
-    expect32({what, ": PC frozen"}, dut.u_core.pc, pc_halt);
+    expect32({what, ": PC frozen"}, `KC_CORE.pc, pc_halt);
     expect32({what, ": nothing after it ran"}, dmem_rd(TB_MARK_ADDR), 32'd0);
 endtask
 
@@ -84,8 +84,8 @@ logic [31:0] watch_lo = 32'hFFFF_FFFF, watch_hi = 32'hFFFF_FFFF;
 int          watch_hits = 0;
 
 always @(posedge clk)
-    if (!rst && dut.u_core.bus_req && dut.u_core.bus_ready &&
-        dut.u_core.bus_addr >= watch_lo && dut.u_core.bus_addr < watch_hi)
+    if (!rst && `KC_CORE.bus_req && `KC_CORE.bus_ready &&
+        `KC_CORE.bus_addr >= watch_lo && `KC_CORE.bus_addr < watch_hi)
         watch_hits <= watch_hits + 1;
 
 task automatic finish_test(input string name);

@@ -55,6 +55,7 @@ int32_t idiv(int64_t num, int32_t den) {
     return (int32_t)((num * r) >> (32 + s));
 }
 
+#if !KC_QRCP_HW   // else fixed.h maps qrcp() onto the QRCP instruction
 // For x >= 4, s is in [-14, 14]: shift right by s or left by -s, saturating at Q16_BIG.
 q16 qrcp(q16 x) {
     int32_t s;
@@ -64,6 +65,7 @@ q16 qrcp(q16 x) {
     res = sel(res > Q16_BIG, Q16_BIG, res);
     return sel(x < 4, Q16_BIG, res);
 }
+#endif
 
 // Quarter-wave sine as an odd degree-9 polynomial in Q29, rounded to Q16. Matches
 // round(65536 * sin(i * 2pi / 1024)) exactly for i = 0..256. Lane 0 only (game code).

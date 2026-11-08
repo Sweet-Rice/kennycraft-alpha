@@ -1,24 +1,46 @@
-// Lane-serial load/store unit (Tai page, GPU Core, Lane-serial LSU; Tai_2
-// section 2, Loads / Stores / MMIO rows).
+// Load/store unit with word coalescing (Tai page, GPU Core, Lane-serial LSU;
+// Tai_2 section 2, Loads / Stores / MMIO rows).
 //
 // start (the EX cycle of a load or store with at least one active lane and no
 // misaligned active lane) loads the pending set with the active mask. While go
 // is high (the core's MEM state) a priority encoder picks the lowest pending
-// lane and drives its address, byte enables and store data on the bus; each
-// bus_req && bus_ready retires that lane. Lanes go out in ascending order, so
-// on equal store addresses the highest active lane wins, and inactive lanes
-// make no access. done marks the accepting cycle of the last pending lane.
+// lane, cur, and the bus access serves the group of pending lanes that goes
+// with it; each bus_req && bus_ready retires that group. done marks the
+// accepting cycle of the last group. Inactive lanes make no access.
 //
-// The bus returns read data the cycle after an access is accepted, which is
-// the cycle the next lane's address goes out, so N active lanes take N bus
-// cycles plus one for the last lane's data (the core's WB): N + 1 when every
-// slave is ready at once. ld_cap is a one-hot of the lane whose word is in
-// bus_rdata this cycle and ld_value is that word, byte/halfword extended.
+// Coalescing. When cur targets dmem or the framebuffer (word ports without
+// side effects) and no pending lane targets MMIO, the group is every pending
+// lane in the same physical word as cur: same region, same word index
+// (addr[14:2] in dmem, which aliases every 32 KB; addr[16:2] in the
+// framebuffer). Otherwise the group is cur alone, so MMIO, world, textures,
+// imem, palette and unmapped addresses stay lane-serial, lowest lane first,
+// one access per lane. Groups go out in ascending order of their lowest lane.
+// That is architecturally the same as one access per lane in ascending order:
+// two groups never share a physical word, and no access moves across an MMIO
+// access (an FB_SWAP store changes which buffer later framebuffer stores
+// reach).
 //
-// Store side: byte enables and data replicated across the word (SB repeats the
-// byte four times, SH the halfword twice), so a byte-wide slave or an MMIO
-// register can take wdata[7:0] for any byte address. World stores reach both
-// world copies through the SoC (world_remap, D17); the LSU issues one access.
+// Stores. A group's byte enables are the OR of its lanes' and each byte's
+// data comes from the highest lane in the group that writes it, so on equal
+// bytes the highest active lane wins, as in lane order. A lane's own byte
+// enables and data are replicated across the word (SB repeats the byte four
+// times, SH the halfword twice), so a lone lane's access looks as it always
+// did and a byte-wide slave or an MMIO register can take wdata[7:0] for any
+// byte address. World stores reach both world copies through the SoC
+// (world_remap, D17); the LSU issues one access.
+//
+// Loads. The bus returns read data the cycle after an access is accepted, which
+// is the cycle the next group's address goes out, so G groups take G bus
+// cycles plus one for the last group's data (the core's WB): G + 1 when every
+// slave is ready at once. ld_cap marks the lanes whose word is in bus_rdata
+// this cycle; ld_value[i] is lane i's byte, halfword or word of it at that
+// lane's own address, extended per funct3.
+//
+// Timing. The group needs only registered state: pending and the addresses
+// (the cores' MEM-stage address registers, stable while go is high). The
+// pairwise word compare (eq) depends on the addresses alone, so it settles in
+// parallel with the priority encoder; bus_ready reaches only pending and the
+// load-capture registers.
 module lsu
     import kc_isa_pkg::*;
 #(
@@ -50,7 +72,7 @@ module lsu
     input  logic [31:0]       bus_rdata,
 
     output logic [LANES-1:0]  ld_cap,
-    output logic [31:0]       ld_value
+    output logic [31:0]       ld_value [LANES]
 );
 
     localparam int LW = (LANES > 1) ? $clog2(LANES) : 1;
@@ -60,11 +82,61 @@ module lsu
     end
 
     // ------------------------------------------------------------------
+    // Per lane: region class, byte enables and replicated store data
+    // ------------------------------------------------------------------
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic [LANES-1:0] coal;     // unused with LANES = 1: nothing to coalesce
+    /* verilator lint_on UNUSEDSIGNAL */
+    logic [LANES-1:0] mmio;
+    logic [3:0]       be_l [LANES];
+    logic [31:0]      wd_l [LANES];
+
+    for (genvar i = 0; i < LANES; i++) begin : g_lane
+        assign coal[i] = (addr[i][31:28] == REG_DMEM) || (addr[i][31:28] == REG_FB);
+        assign mmio[i] = (addr[i][31:28] == REG_MMIO);
+
+        always_comb begin
+            unique case (funct3[1:0])
+                2'b00: begin
+                    be_l[i] = 4'b0001 << addr[i][1:0];
+                    wd_l[i] = {4{rs2[i][7:0]}};
+                end
+                2'b01: begin
+                    be_l[i] = addr[i][1] ? 4'b1100 : 4'b0011;
+                    wd_l[i] = {2{rs2[i][15:0]}};
+                end
+                default: begin
+                    be_l[i] = 4'b1111;
+                    wd_l[i] = rs2[i];
+                end
+            endcase
+        end
+    end
+
+    // eq[c][j]: lane j's access can ride on lane c's. Lane c itself always;
+    // another lane when c is in a coalescable region and j is in the same
+    // physical word of it (same region, so j is coalescable too).
+    logic [LANES-1:0] eq [LANES];
+
+    for (genvar c = 0; c < LANES; c++) begin : g_eq_c
+        for (genvar j = 0; j < LANES; j++) begin : g_eq_j
+            if (c == j) begin : g_self
+                assign eq[c][j] = 1'b1;
+            end else begin : g_pair
+                assign eq[c][j] = coal[c] &&
+                                  (addr[c][31:28] == addr[j][31:28]) &&
+                                  (addr[c][14:2] == addr[j][14:2]) &&
+                                  ((addr[c][31:28] == REG_DMEM) || (addr[c][16:15] == addr[j][16:15]));
+            end
+        end
+    end
+
+    // ------------------------------------------------------------------
     // Sequencer
     // ------------------------------------------------------------------
-    logic [LANES-1:0] pending, cur_bit;
+    logic [LANES-1:0] pending, cur_bit, group;
     logic [LW-1:0]    cur;
-    logic             accept;
+    logic             merge, accept;
 
     always_comb begin
         cur = '0;
@@ -73,76 +145,68 @@ module lsu
     end
 
     assign cur_bit = LANES'(1) << cur;
+    assign merge   = (pending & mmio) == '0;
+    assign group   = merge ? (pending & eq[cur]) : cur_bit;
     assign accept  = bus_req && bus_ready;
-    assign done    = accept && ((pending & ~cur_bit) == '0);
+    assign done    = accept && ((pending & ~group) == '0);
 
     always_ff @(posedge clk) begin
         if (rst)          pending <= '0;
         else if (start)   pending <= active;
-        else if (accept)  pending <= pending & ~cur_bit;
+        else if (accept)  pending <= pending & ~group;
     end
 
     // ------------------------------------------------------------------
-    // Bus side
+    // Bus side: cur's address, the group's merged byte enables and data
     // ------------------------------------------------------------------
-    logic [31:0] a, d;
+    assign bus_req  = go;
+    assign bus_we   = is_store;
+    assign bus_addr = addr[cur];
 
-    assign a = addr[cur];
-    assign d = rs2[cur];
-
-    assign bus_req   = go;
-    assign bus_we    = is_store;
-    assign bus_addr  = a;
-
+    // Ascending lane order: a higher lane's byte overwrites a lower one's.
     always_comb begin
-        unique case (funct3[1:0])
-            2'b00: begin
-                bus_be    = 4'b0001 << a[1:0];
-                bus_wdata = {4{d[7:0]}};
+        bus_be    = '0;
+        bus_wdata = wd_l[cur];
+        for (int i = 0; i < LANES; i++)
+            if (group[i]) begin
+                bus_be = bus_be | be_l[i];
+                for (int k = 0; k < 4; k++)
+                    if (be_l[i][k]) bus_wdata[k*8 +: 8] = wd_l[i][k*8 +: 8];
             end
-            2'b01: begin
-                bus_be    = a[1] ? 4'b1100 : 4'b0011;
-                bus_wdata = {2{d[15:0]}};
-            end
-            default: begin
-                bus_be    = 4'b1111;
-                bus_wdata = d;
-            end
-        endcase
     end
 
     // ------------------------------------------------------------------
-    // Load return: capture lane and address bits of the access in flight
+    // Load return: the group and every lane's address bits of the access
+    // in flight
     // ------------------------------------------------------------------
-    logic          cap_q;
-    logic [LW-1:0] cap_lane_q;
-    logic [1:0]    cap_lo_q;
+    logic [LANES-1:0] cap_q;
+    logic [1:0]       cap_lo_q [LANES];
 
     always_ff @(posedge clk) begin
-        if (rst) cap_q <= 1'b0;
-        else     cap_q <= accept && !is_store;
-        if (accept) begin
-            cap_lane_q <= cur;
-            cap_lo_q   <= a[1:0];
-        end
+        if (rst) cap_q <= '0;
+        else     cap_q <= (accept && !is_store) ? group : '0;
+        if (accept)
+            for (int i = 0; i < LANES; i++) cap_lo_q[i] <= addr[i][1:0];
     end
 
-    assign ld_cap = cap_q ? (LANES'(1) << cap_lane_q) : '0;
+    assign ld_cap = cap_q;
 
-    logic [7:0]  byte_v;
-    logic [15:0] half_v;
+    for (genvar i = 0; i < LANES; i++) begin : g_ld
+        logic [7:0]  byte_v;
+        logic [15:0] half_v;
 
-    assign byte_v = bus_rdata[cap_lo_q*8 +: 8];
-    assign half_v = cap_lo_q[1] ? bus_rdata[31:16] : bus_rdata[15:0];
+        assign byte_v = bus_rdata[cap_lo_q[i]*8 +: 8];
+        assign half_v = cap_lo_q[i][1] ? bus_rdata[31:16] : bus_rdata[15:0];
 
-    always_comb begin
-        unique case (funct3)
-            F3_LB:   ld_value = {{24{byte_v[7]}}, byte_v};
-            F3_LBU:  ld_value = {24'b0, byte_v};
-            F3_LH:   ld_value = {{16{half_v[15]}}, half_v};
-            F3_LHU:  ld_value = {16'b0, half_v};
-            default: ld_value = bus_rdata;   // LW
-        endcase
+        always_comb begin
+            unique case (funct3)
+                F3_LB:   ld_value[i] = {{24{byte_v[7]}}, byte_v};
+                F3_LBU:  ld_value[i] = {24'b0, byte_v};
+                F3_LH:   ld_value[i] = {{16{half_v[15]}}, half_v};
+                F3_LHU:  ld_value[i] = {16'b0, half_v};
+                default: ld_value[i] = bus_rdata;   // LW
+            endcase
+        end
     end
 
 endmodule

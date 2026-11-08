@@ -50,7 +50,7 @@ module t_div_halts_tb;
         expect_masked(A1, body, xreg(T4), 32'h51, "JALR links in the body");
         expect_masked(A2, body, 32'd1, 32'h52, "JALR target of the body");
         expect_uniform(A0, 32'(FULL), "MASKGET after DENDIF");
-        expect32("case 0: stack empty", 32'(dut.u_core.g_divstack.u_divstack.sp), 32'd0);
+        expect32("case 0: stack empty", 32'(`KC_CORE.g_divstack.u_divstack.sp), 32'd0);
         $display("  case  0  control: branch and JALR disagree outside body %02h only", body);
 
         for (int k = 1; k <= NCASES; k++) begin
@@ -58,12 +58,12 @@ module t_div_halts_tb;
             run_case(k, 2000);
             expect_halt(case_name(k), case_err(k), case_pc(k));
             expect32({case_name(k), ": stack pointer"},
-                     32'(dut.u_core.g_divstack.u_divstack.sp), 32'(case_sp(k)));
-            expect32({case_name(k), ": mask"}, 32'(dut.u_core.mask),
+                     32'(`KC_CORE.g_divstack.u_divstack.sp), 32'(case_sp(k)));
+            expect32({case_name(k), ": mask"}, 32'(`KC_CORE.mask),
                      32'((k <= 3) ? body : FULL));
             if (k == 2) expect_kept(RA, 32'h77, "case 2: ra not linked");
             $display("  case %2d  %-38s ERR=%0d ERR_PC=%08h sp=%0d", k, case_name(k),
-                     dut.u_mmio.err, dut.u_mmio.err_pc, dut.u_core.g_divstack.u_divstack.sp);
+                     dut.u_mmio.err, dut.u_mmio.err_pc, `KC_CORE.g_divstack.u_divstack.sp);
         end
         finish_test("t_div_halts");
     end

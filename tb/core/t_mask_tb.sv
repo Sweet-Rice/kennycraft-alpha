@@ -32,7 +32,7 @@ module t_mask_tb;
         expect_uniform(T3, 32'd0, "MASKGET after LMASK(x0)");
         expect_uniform(T4, 32'd0, "MASKGET, LMASK cannot wake");
         expect_uniform(T5, 32'(FULL), "MASKGET after MASKALL");
-        expect32("mask at the end", 32'(dut.u_core.mask), 32'd1);
+        expect32("mask at the end", 32'(`KC_CORE.mask), 32'd1);
         $display("  M: %02h -> %02h -> %02h -> 0 -> 0 -> %02h", m1, m2, m3, FULL);
         finish_test("t_mask");
     end
