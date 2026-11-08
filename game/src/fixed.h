@@ -33,8 +33,15 @@ static inline int32_t sel(int32_t c, int32_t a, int32_t b) {
 }
 
 // 1/x for x in Q16.16 (x > 0). Computed seed + one Newton step, no divide, no table.
-// Returns Q16_BIG for x too small. Defined in fixed.c.
+// Returns Q16_BIG for x too small. Defined in fixed.c, or with KC_QRCP=1 on an 8-lane chip
+// build the QRCP instruction (D22), which is bit-exact with fixed.c's qrcp().
+#if KC_QRCP && defined(KC_CHIP) && KC_LANES == 8
+#define KC_QRCP_HW 1
+#include "kc_lanes.h"
+static inline q16 qrcp(q16 x) { return qrcp_hw(x); }
+#else
 q16 qrcp(q16 x);
+#endif
 
 // num / den for den >= 1 without a divide instruction (~16 significant bits). Branch-free.
 // den MUST be positive: a negative den is read as a huge unsigned value.
