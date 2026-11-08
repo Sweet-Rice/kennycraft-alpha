@@ -8,14 +8,15 @@
 //   0x1  dmem    32 KB, word port with byte enables (dmem_*), aliases every 32 KB
 //   0x2  world   byte port (world_*), split by byte_bridge, 17-bit index
 //   0x3  tex     byte port (tex_*), split by byte_bridge, 14-bit index
-//   0x4  fb      byte port to the back framebuffer (fb_*), 17-bit index
+//   0x4  fb      word port with byte enables to the back framebuffer (fb_*),
+//                15-bit word index addr[16:2], always ready
 //   0x5  mmio    register port (mmio_*), byte offset addr[7:0]
 //   0x6  palette write only, one entry per word: pal_addr = addr[9:2], low 12 bits
 //   0x7..0xF     unmapped: loads read 0, stores are dropped, no error (0x7
 //                held the rasterizer's GPU memory, removed with it)
 //
-// Byte-wide regions take every enabled byte lane in turn, so LW/SW work there
-// too (four accesses) and LB/SB take one.
+// Byte-wide regions (world, tex) take every enabled byte lane in turn, so
+// LW/SW work there too (four accesses) and LB/SB take one.
 module decoder
     import kc_isa_pkg::*;
 (
@@ -60,9 +61,10 @@ module decoder
     // Back framebuffer (P1 display core-side port, 1-cycle read latency)
     output logic        fb_we,
     output logic        fb_re,
-    output logic [16:0] fb_addr,
-    output logic [7:0]  fb_wdata,
-    input  logic [7:0]  fb_rdata,
+    output logic [3:0]  fb_be,
+    output logic [14:0] fb_addr,
+    output logic [31:0] fb_wdata,
+    input  logic [31:0] fb_rdata,
 
     // MMIO
     output logic        mmio_req,
@@ -102,6 +104,13 @@ module decoder
     assign dmem_addr  = addr[14:2];
     assign dmem_wdata = wdata;
 
+    // The framebuffer port is strobe based and always ready.
+    assign fb_we      = req && we && (sel == R_FB);
+    assign fb_re      = req && !we && (sel == R_FB);
+    assign fb_be      = be;
+    assign fb_addr    = addr[16:2];
+    assign fb_wdata   = wdata;
+
     assign mmio_req   = req && (sel == R_MMIO);
     assign mmio_we    = we;
     assign mmio_addr  = addr[7:0];
@@ -114,9 +123,8 @@ module decoder
     // ------------------------------------------------------------------
     // Byte regions
     // ------------------------------------------------------------------
-    logic        world_bus_ready, tex_bus_ready, fb_bus_ready;
-    logic [31:0] world_bus_rdata, tex_bus_rdata, fb_bus_rdata;
-    logic        fb_breq, fb_bwe;
+    logic        world_bus_ready, tex_bus_ready;
+    logic [31:0] world_bus_rdata, tex_bus_rdata;
 
     byte_bridge #(.AW(17)) u_world_bridge (
         .clk, .rst,
@@ -134,17 +142,6 @@ module decoder
         .b_ready(tex_ready), .b_rdata(tex_rdata)
     );
 
-    // The framebuffer port is strobe based and always ready.
-    byte_bridge #(.AW(17)) u_fb_bridge (
-        .clk, .rst,
-        .req(req && sel == R_FB), .we, .addr(addr[16:2]), .be, .wdata,
-        .ready(fb_bus_ready), .rdata(fb_bus_rdata),
-        .b_req(fb_breq), .b_we(fb_bwe), .b_addr(fb_addr), .b_wdata(fb_wdata),
-        .b_ready(1'b1), .b_rdata(fb_rdata)
-    );
-    assign fb_we = fb_breq && fb_bwe;
-    assign fb_re = fb_breq && !fb_bwe;
-
     // ------------------------------------------------------------------
     // Handshake and read mux
     // ------------------------------------------------------------------
@@ -152,7 +149,6 @@ module decoder
         unique case (sel)
             R_WORLD: ready = world_bus_ready;
             R_TEX:   ready = tex_bus_ready;
-            R_FB:    ready = fb_bus_ready;
             R_MMIO:  ready = mmio_ready;
             default: ready = req;
         endcase
@@ -168,7 +164,7 @@ module decoder
             R_DMEM:  rdata = dmem_rdata;
             R_WORLD: rdata = world_bus_rdata;
             R_TEX:   rdata = tex_bus_rdata;
-            R_FB:    rdata = fb_bus_rdata;
+            R_FB:    rdata = fb_rdata;
             R_MMIO:  rdata = mmio_rdata;
             default: rdata = '0;
         endcase
