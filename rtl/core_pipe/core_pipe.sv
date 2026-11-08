@@ -79,10 +79,11 @@
 //
 // Halts. EX detects them (an ID fault: ILLEGAL; else DIVERGE, DIVSTACK,
 // ILLEGAL, as in core.sv), runs no side effect, flushes EX, ID and IF the
-// next cycle and stops fetching (pc_f freezes). The halt marker pulses
-// err_set in MEM, after every older instruction has retired. err_pc is
-// pc, as in core.sv: then the faulting instruction's PC, and it stays
-// there while halted.
+// next cycle and stops fetching (pc_f freezes). A JALR's DIVERGE is found
+// in MEM, from registers (m_jd): a JALR always redirects, so the same flush
+// covers it. The halt marker pulses err_set in MEM, after every older
+// instruction has retired. err_pc is pc, as in core.sv: then the faulting
+// instruction's PC, and it stays there while halted.
 //
 // state is an observation for the testbenches only: 4 (the multi-cycle
 // S_MEM code) while MEM walks the LSU, 6 (S_HALT) after a halt,
@@ -199,7 +200,7 @@ module core_pipe
         end else if (flush) begin
             d_valid  <= 1'b0;
             d_hold_v <= 1'b0;
-            if (m_halt) stop <= 1'b1;
+            if (m_hlt) stop <= 1'b1;
         end else if (d_ready) begin
             d_pc     <= pc_f;
             d_hit    <= f_hit;
@@ -304,13 +305,13 @@ module core_pipe
     // MEM / WB registers that the lanes' forwarding needs
     // ------------------------------------------------------------------
     logic [LANES-1:0] mask;
-    logic             m_halt, m_r_we, m_nowr, m_uniform_wr, m_wr;
+    logic             m_halt, m_jchk, m_hlt, m_r_we, m_nowr, m_uniform_wr, m_wr;
     logic [4:0]       m_rd, w_rd;
     logic [LANES-1:0] m_we, w_we;
 
     // MEM writes rd in lane i when the lane is active after the
     // instruction's own EX (the mask register now) or the write is uniform.
-    assign m_wr = m_valid && !m_halt && m_r_we && !m_nowr;
+    assign m_wr = m_valid && !m_hlt && m_r_we && !m_nowr;
     for (genvar i = 0; i < LANES; i++) begin : g_m_we
         assign m_we[i] = m_wr && (mask[i] || m_uniform_wr);
     end
@@ -375,19 +376,14 @@ module core_pipe
             .ex_go(e_go), .alu_ctrl(e_alu_ctrl), .alu_a_pc(e_alu_a_pc),
             .alu_b_sel(e_alu_b_sel), .funct3(e_funct3), .pc(e_pc), .imm(e_imm),
             .res_imm(e_res_imm), .is_lane(e_is_lane), .lane_y, .ray_en(e_vget),
-            .ray_y(ray_y[i]), .stash(e_stash),
-            .rs1(l_rs1[i]), .cmp(l_cmp[i]),
+            .ray_y(ray_y[i]), .stash(e_stash), .is_jalr(e_is_jalr),
+            .rs1(l_rs1[i]), .ea(l_ea[i]), .cmp(l_cmp[i]),
             .mul_op(m_funct3[1:0]), .m_is_load, .m_mul, .qr_s0, .m_qr,
             .vt_wr, .vt_y(vt_y[i]), .ld_cap(l_cap[i]), .ld_value(l_ldv[i]),
             .res(l_res[i]), .m_rs2(l_mrs2[i]), .wdata(l_wdata[i]),
             .w_we(w_we[i]), .w_rd
         );
 
-        // The load/store address (the ALU's rs1 + imm, which res latches)
-        // from its own adder on the forwarded rs1, without the ALU's operand
-        // and result muxes: the misaligned check, the dmem window and the
-        // bus coalescing compares read it.
-        assign l_ea[i]    = l_rs1[i] + e_imm;
         assign nonzero[i] = (l_rs1[i] != 32'd0);
         assign mis[i]     = is_misaligned(e_funct3, l_ea[i][1:0]);
         assign l_cap[i]   = ld_cap[i] || (win_srv[i] && m_is_load);
@@ -402,7 +398,6 @@ module core_pipe
     logic             take;
     logic [LANES-1:0] l_taken;
     logic [31:0]      l_jt [LANES];
-    logic [LANES-1:0] jt_diff;
     logic             e_diverge, e_divstack, e_illegal, e_mem;
     logic             ds_err, ds_jump;
     logic [LANES-1:0] ds_mask, mask_d;
@@ -418,11 +413,13 @@ module core_pipe
     for (genvar i = 0; i < LANES; i++) begin : g_uniform
         assign l_taken[i] = l_cmp[i] ^ e_funct3[0];
         assign l_jt[i]    = l_ea[i] & ~32'd1;
-        assign jt_diff[i] = (l_jt[i] != l_jt[sl]);
     end
 
-    assign e_diverge = (e_is_branch && ((l_taken & mask) != '0) && ((l_taken & mask) != mask)) ||
-                       (e_is_jalr && ((jt_diff & mask) != '0));
+    // A JALR's uniform-target check (DIVERGE) is MEM's (m_jdiv below): a
+    // JALR always redirects, so flush kills everything younger whether or
+    // not it halts, and the check reads registers (each lane's rs1 + imm in
+    // m_rs2, the scalar lane's target in m_next) instead of the adders.
+    assign e_diverge = e_is_branch && ((l_taken & mask) != '0) && ((l_taken & mask) != mask);
 
     // A DIF/DELSE/DENDIF halts only on e_fault, DIVSTACK, or a jump to a
     // target with bit 1 set (no DIVERGE, no load/store): e_div_halt is
@@ -625,6 +622,7 @@ module core_pipe
     always_ff @(posedge clk) begin
         if (m_ready) begin
             m_halt       <= e_halt;
+            m_jchk       <= e_is_jalr && !e_fault;
             m_err        <= e_err;
             m_pc         <= e_pc;
             m_inst       <= e_inst;
@@ -647,6 +645,31 @@ module core_pipe
             if (m_cnt != 3'd7) m_cnt <= m_cnt + 3'd1;
             if (retire_valid)  m_sret <= 1'b1;
             if (vt_wr)         m_vt_tail <= 1'b1;
+        end
+    end
+
+    // A JALR's uniform-target check (DIVERGE), the cycle after its EX: each
+    // active lane's rs1 + imm (m_rs2) against the scalar lane's target
+    // (m_next, bit 0 clear), as the multi-cycle core's jt_diff. The JALR
+    // redirected, so flush kills the instruction behind it and ID this
+    // cycle and the halt stays precise. m_hlt is m_halt with it; m_err_x
+    // puts DIVERGE ahead of the target's ILLEGAL (an ID fault, ILLEGAL
+    // only, has m_jchk low). The mask is the JALR's: nothing behind it ran.
+    logic [LANES-1:0] m_jdiff;
+    logic             m_jd;
+    logic [ERR_WIDTH-1:0] m_err_x;
+
+    for (genvar i = 0; i < LANES; i++) begin : g_jdiff
+        assign m_jdiff[i] = mask[i] && (l_mrs2[i][31:1] != m_next[31:1]);
+    end
+    assign m_jd  = m_valid && m_jchk && (m_jdiff != '0);
+    assign m_hlt = m_halt || m_jd;
+
+    always_comb begin
+        m_err_x = m_err;
+        if (m_jd) begin
+            m_err_x               = '0;
+            m_err_x[ERR_DIVERGE] = 1'b1;
         end
     end
 
@@ -775,7 +798,7 @@ module core_pipe
         else if (err_set != '0)   halted <= 1'b1;
     end
 
-    assign err_set = (m_valid && m_halt) ? m_err : '0;
+    assign err_set = (m_valid && m_hlt) ? m_err_x : '0;
     assign err_pc  = pc;
 
     /* verilator lint_off UNUSEDSIGNAL */
@@ -802,7 +825,7 @@ module core_pipe
     logic st_ret;
     assign st_ret = !m_sret && (lsu_done || lsu_idle) && win_fin;
 
-    assign retire_valid      = m_valid && !m_halt &&
+    assign retire_valid      = m_valid && !m_hlt &&
                                ((m_mem && m_is_store) ? st_ret : m_done);
     assign retire_pc         = m_pc;
     assign retire_inst       = m_inst;

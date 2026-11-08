@@ -60,8 +60,10 @@ module lane_pipe
     input  logic        ray_en,       // VGET: res = ray_y
     input  logic [31:0] ray_y,        // this lane's VGET field
     input  logic        stash,        // MUL, QRCP: res = rs1 for MEM
+    input  logic        is_jalr,      // JALR: m_rs2 = ea for MEM's target check
 
     output logic [31:0] rs1,          // forwarded EX operand rs1
+    output logic [31:0] ea,           // rs1 + imm: load/store address, JALR sum
     output logic        cmp,
 
     // MEM
@@ -76,7 +78,7 @@ module lane_pipe
     input  logic [31:0] ld_value,
 
     output logic [31:0] res,          // MEM: result, or the address for loads and stores
-    output logic [31:0] m_rs2,        // MEM: store data
+    output logic [31:0] m_rs2,        // MEM: store data (a JALR's ea)
     output logic [31:0] wdata,        // MEM: value to write back
 
     // WB
@@ -121,6 +123,12 @@ module lane_pipe
 
     alu #(.W(32)) u_alu (.a(alu_a), .b(alu_b), .op(alu_ctrl), .result(alu_y));
 
+    // The load/store address (the ALU's rs1 + imm, which res latches) and
+    // the JALR sum, from an adder of its own without the ALU's operand and
+    // result muxes: core_pipe's misaligned check, dmem window, coalescing
+    // compares and JALR target read it.
+    assign ea = rs1 + imm;
+
     // Branch compare on the forwarded operands, beside the ALU (same result
     // as the ALU's XOR / SLT / SLTU that the multi-cycle core tests):
     // BEQ/BNE equal, BLT/BGE signed less, BLTU/BGEU unsigned less.
@@ -140,7 +148,7 @@ module lane_pipe
             else if (is_lane && funct3 == F3_LANEID) res <= 32'(ID);
             else if (is_lane)                        res <= lane_y;
             else                                     res <= alu_y;
-            m_rs2 <= rs2;
+            m_rs2 <= is_jalr ? ea : rs2;
         end else if (vt_wr) begin
             res <= vt_y;
         end
