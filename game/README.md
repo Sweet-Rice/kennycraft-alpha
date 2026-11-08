@@ -238,7 +238,7 @@ This differs from ordinary floor-following movement under an awning.
 
 ## Memory budget (data memory, 32 KB)
 
-Measured on `build/kc_chip.elf` with LLVM 23.1.5 clang/lld at upstream `7315b19`
+Measured on `build/kc_chip.elf` with LLVM 18 clang/lld at main `12faff7`
 (default build options), using `llvm-nm -S` and `llvm-readelf -S -l`; layout from
 `chip/bench/kc.ld` and `crt0.S`. Compiler versions and build options change the
 footprint; these are not measurements of the Stage 2 build.
@@ -250,10 +250,10 @@ footprint; these are not measurements of the Stage 2 build.
 | Per-frame arena (.bss) | 8,192 |
 | Entity boxes, records, row bins, spans, bitmasks and state (.bss) | 14,288 |
 | Chunk slot tables, dirty mask, tag key (.bss) | 118 |
-| Everything else (.rodata + .data + .bss) | 1,647 |
+| Everything else (.rodata + .data + .bss) | 1,659 |
 | Section padding and warm-reset `.data` load copy | 23 |
 | Lane stacks, 8 x 1 KB (0x1000_6000–0x1000_7FFF) | 8,192 |
-| **Total** | **32,716 of 32,768 bytes (52 bytes spare)** |
+| **Total** | **32,728 of 32,768 bytes (40 bytes spare)** |
 
 The `.data` load copy lives after `.bss` and is restored on every chip reset;
 the linker asserts that it ends before the lane stacks at 0x1000_6000.
