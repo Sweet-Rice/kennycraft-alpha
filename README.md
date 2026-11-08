@@ -413,6 +413,15 @@ The Stage 2 bitstream on the pipelined core is `KC_TARGET=top_s2p`
 (`fpga/top_s2p/`), which is `top_s2` with `PIPELINED=1`, at 50 MHz, and
 `KC_TARGET=top_s2p100` (`fpga/top_s2p100/`) at 100 MHz.
 
+## Team
+
+| Who | Built |
+| --- | --- |
+| Tai | The hardware: the multi-cycle and pipelined cores, the SoC, VTRACE ray unit, display, DDR3 chunk store, testbenches and the Vivado builds up to 100 MHz on the board |
+| Kenny (Kennedy Nguyen) | The game: the ray-traced renderer, terrain and chunk streaming, entities, the Nether and the demo village, the CR6 link, and the laptop side (bank companion, KCN ledger, Nemotron agents) |
+| Bennett (Bennett Marceaux) | The bench: the Verilator harness, the self-checking tests for every stage, `kc.ld`, `crt0` and the arena, the golden and trace-diff scripts, the entity models, and the READMEs |
+
 ## Credits
+
 
 The Stage 0 CPU core is inspired by Tai's [RISC-V-Core-progression](https://github.com/Sweet-Rice/RISC-V-Core-progression) multicycle RV32I core (D11).
