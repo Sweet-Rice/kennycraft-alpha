@@ -5,7 +5,7 @@
 // Per class (bus = bus cycles of one access, as in the multi-cycle core:
 // 1 for dmem, MMIO and byte accesses, 4 for words through the byte bridge):
 //   ALU, LUI, AUIPC, not-taken branch, FENCE, MASKGET    CPI_ALU
-//   MUL, MULHU (independent: no mul-use stall)          CPI_MUL
+//   MUL, MULHU (independent: no mul-use stall; MEM 2)  CPI_MUL
 //   taken branch, JAL, JALR (flush 4: registered redirect) CPI_TAKEN
 //   MASKALL (mask writers flush like taken branches)    CPI_MASK
 //   load                                                LD_BASE + bus
@@ -30,7 +30,7 @@ module t_cpi_pipe_tb;
     parameter string IMEM_HEX = "";
     parameter string DMEM_HEX = "";
     parameter int    CPI_ALU   = 1;
-    parameter int    CPI_MUL   = 1;
+    parameter int    CPI_MUL   = 2;
     parameter int    CPI_TAKEN = 5;
     parameter int    CPI_PRED  = 1;   // predicted taken branch or JAL (BTB hit)
     parameter int    CPI_MASK  = 5;

@@ -19,7 +19,7 @@
    QRCP into an ALU op, a branch, store data, another QRCP and a JALR
    target, back-to-back QRCPs (independent and two apart), and QRCP plus a
    dependent op under a partial mask;
-   mul-use (MUL leaves MEM in one cycle and is forwarded only from WB): a
+   mul-use (MUL spends two cycles in MEM and is forwarded only from WB): a
    MUL right before a dependent ALU op (rs1 and rs2), branch (taken and not),
    JALR target, store data, store address, load address, QRCP and VSET;
    MUL -> MULH -> MULHSU -> MULHU chains; MULH/MULHSU/MULHU into ALU ops;

@@ -14,8 +14,9 @@
 //        (or this lane's address for loads and stores), LUI immediate,
 //        LANEID, BALLOT / MASKGET, VGET field, or rs1 for MUL and QRCP,
 //        which run in MEM on registered operands
-//   MEM  res and the store data / multiplier operand rs2. MUL (the product
-//        of res and m_rs2, combinational, in MEM's one cycle), QRCP
+//   MEM  res and the store data / multiplier operand rs2. MUL (mul_pipe:
+//        the partial products of res and m_rs2 registered in MEM's first
+//        cycle, summed in its second), QRCP
 //        (qrcp_pipe: seven register stages, y valid in the eighth cycle),
 //        the VTRACE result at the ray unit's done, and the LSU's load data
 //        (ld_cap / ld_value, held in ld_hold). fwd is MEM's result for
@@ -184,7 +185,7 @@ module lane_pipe
         if (ld_cap) ld_hold <= ld_value;
     end
 
-    mul_pipe u_mul (.op(mul_op), .a(res), .b(m_rs2), .result(mul_y));
+    mul_pipe u_mul (.clk, .op(mul_op), .a(res), .b(m_rs2), .result(mul_y));
 
     if (HAS_QRCP) begin : g_qrcp
         qrcp_pipe u_qrcp (.clk, .s0(qr_s0), .x(res), .y(qr_y));

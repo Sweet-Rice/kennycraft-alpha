@@ -3,8 +3,8 @@
 // parameters and retired-instruction trace as the multi-cycle rtl/core/core.sv,
 // in five stages. rtl/core_pipe/lane_pipe.sv is one lane's datapath; the
 // leaf modules (alu, reg_module, divstack, inst_decoder, immgen) are
-// rtl/core's, unchanged; QRCP is rtl/core_pipe/qrcp_pipe.sv, the one-cycle
-// multiplier rtl/core_pipe/mul_pipe.sv and the LSU, rtl/core/lsu.sv with a
+// rtl/core's, unchanged; QRCP is rtl/core_pipe/qrcp_pipe.sv, the
+// two-cycle multiplier rtl/core_pipe/mul_pipe.sv and the LSU, rtl/core/lsu.sv with a
 // registered bus request, rtl/core_pipe/lsu_pipe.sv.
 //
 //   IF   imem_addr = pc_f, a register (a redirect writes it: flush 4), and
@@ -29,7 +29,7 @@
 //        (rtl/core_pipe/lsu_pipe.sv), one per LSU bus access (one per group
 //        of coalesced lanes), plus one (a store's tail) or two (a load's
 //        read data, registered in the LSU), except a store whose bus lanes
-//        all go to dmem or the framebuffer (no extra cycle); MUL and
+//        all go to dmem or the framebuffer (no extra cycle); MUL 2;
 //        everything else 1.
 //        Retirement happens here
 //   WB   every lane writes rd
@@ -325,8 +325,8 @@ module core_pipe
         end
     end
 
-    // The product is computed in MEM's cycle and written to w_res, too late
-    // for the MEM -> EX forward, so a MUL's reader waits like a load's.
+    // The product is ready in MEM's second cycle and written to w_res, too
+    // late for the MEM -> EX forward, so a MUL's reader waits like a load's.
     assign lu = d_valid && e_valid && (e_is_load || e_is_mul) && e_r_we &&
                 ((d_uses1 && (d_rs1 == e_rd)) || (d_uses2 && (d_rs2 == e_rd)));
 
@@ -768,6 +768,7 @@ module core_pipe
         if (m_halt)          m_done = 1'b1;
         else if (m_mem)      m_done = (m_bidle || m_bfast) && win_fin;
         else if (m_qr)       m_done = (m_cnt == 3'd7);
+        else if (m_mul)      m_done = (m_cnt == 3'd1);
         else if (m_vt)       m_done = m_vt_tail;
         else                 m_done = 1'b1;
     end
