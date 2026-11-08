@@ -14,10 +14,11 @@
 //        LANEID, BALLOT / MASKGET, VGET field, or rs1 for MUL and QRCP,
 //        which run in MEM on registered operands
 //   MEM  res and the store data / multiplier operand rs2. MUL (en in MEM's
-//        first cycle, product the cycle after), QRCP (load, then three
-//        steps), the VTRACE result at the ray unit's done, and the LSU's
-//        load data (ld_cap / ld_value, held in ld_hold). fwd is MEM's result
-//        for forwarding (never a load's: the core stalls load-use instead);
+//        first cycle, product the cycle after), QRCP (qrcp_pipe: two steps,
+//        y valid in the third cycle), the VTRACE result at the ray unit's
+//        done, and the LSU's load data (ld_cap / ld_value, held in
+//        ld_hold). fwd is MEM's result for forwarding (never a load's: the
+//        core stalls load-use instead);
 //        wdata is the value written back (the last load lane's data arrives
 //        directly in MEM's last cycle)
 //   WB   the register file write of the previous MEM's wdata
@@ -66,9 +67,8 @@ module lane_pipe
     input  logic        m_is_load,
     input  logic        mul_en,       // MEM, first MUL cycle
     input  logic        m_mul,        // MEM holds a MUL
-    input  logic        qr_load,      // MEM, first QRCP cycle
-    input  logic        qr_en,
-    input  logic [2:0]  qr_ph,
+    input  logic        qr_s0,        // MEM, QRCP cycle 0 (x = res)
+    input  logic        qr_s1,        // MEM, QRCP cycle 1
     input  logic        m_qr,         // MEM holds a QRCP
     input  logic        vt_wr,        // MEM, VTRACE done: res = vt_y
     input  logic [31:0] vt_y,
@@ -153,12 +153,12 @@ module lane_pipe
     );
 
     if (HAS_QRCP) begin : g_qrcp
-        qrcp u_qrcp (.clk, .load(qr_load), .en(qr_en), .ph(qr_ph), .x(res), .y(qr_y));
+        qrcp_pipe u_qrcp (.clk, .s0(qr_s0), .s1(qr_s1), .x(res), .y(qr_y));
     end else begin : g_no_qrcp
         assign qr_y = 32'd0;
         /* verilator lint_off UNUSEDSIGNAL */
         logic unused_qr;
-        assign unused_qr = qr_load ^ qr_en ^ (^qr_ph);
+        assign unused_qr = qr_s0 ^ qr_s1;
         /* verilator lint_on UNUSEDSIGNAL */
     end
 

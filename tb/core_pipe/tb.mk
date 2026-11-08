@@ -13,9 +13,9 @@
 #                           multi-cycle state machine
 #   tb-core-pipe-t_qrcp(-l8)
 #                           tb/core_pipe/t_qrcp_pipe_tb.sv: t_qrcp.S with
-#                           core_pipe's QRCP latency (6 cycles after the
-#                           previous retirement, 8 after a flush) instead
-#                           of the multi-cycle 9
+#                           core_pipe's QRCP latency (3 cycles after the
+#                           previous retirement, 5 after a flush) instead
+#                           of the multi-cycle 7
 #   tb-core-pipe-t_mmio     tb/core_pipe/t_mmio_pipe_tb.sv: t_mmio.S with its
 #                           two CYCLES checks at the pipelined MMIO LW and SW
 #                           CPI (2 and 2: deltas 2 and 42 instead of 5 and 47)

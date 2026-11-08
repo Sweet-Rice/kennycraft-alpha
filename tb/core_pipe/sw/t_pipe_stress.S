@@ -15,7 +15,10 @@
    VSET from just-computed values, VTRACE with a forwarded cap, VGET right
    after, VTRACE with cap 0 (no write) and under a partial mask, BALLOT,
    LMASK, MASKGET and MASKSET from forwarded values, DIF/DELSE/DENDIF on a
-   loaded condition, JALR through a loaded target and use of its link. */
+   loaded condition, JALR through a loaded target and use of its link,
+   QRCP into an ALU op, a branch, store data, another QRCP and a JALR
+   target, back-to-back QRCPs (independent and two apart), and QRCP plus a
+   dependent op under a partial mask. */
 #include "kc_test.h"
 #include "kc_lanes.h"
 #define VSET(f, rs)    .insn r 0x2B, 0, f, x0, rs, x0
@@ -142,6 +145,46 @@ fast_link:
     li    s11, 0xbad
 5:  add   s9, s9, ra
     sw    s9, RES(14)(s2)
+    /* QRCP into an ALU op, a branch, store data, another QRCP and a JALR
+       target; back-to-back QRCPs; QRCP and a dependent op under a partial
+       mask */
+    lw    t0, 0(s2)
+    slli  t0, t0, 12              /* (lane + 7) << 12 */
+    QRCP(t1, t0)
+    addi  t2, t1, 3               /* QRCP -> ALU */
+    QRCP(t3, t0)
+    beq   t3, t1, qr_br           /* QRCP -> branch, taken in every lane */
+    li    s11, 0xbad
+qr_br:
+    QRCP(t4, t2)
+    sw    t4, RES(16)(s2)         /* QRCP -> store data */
+    QRCP(t5, t4)                  /* QRCP -> QRCP */
+    QRCP(a1, t0)                  /* back to back, independent */
+    QRCP(a0, t5)                  /* QRCP two back */
+    sw    t2, RES(15)(s2)
+    sw    t5, RES(17)(s2)
+    sw    a1, RES(18)(s2)
+    sw    a0, RES(19)(s2)
+    lui   a5, 0x40000             /* qrcp(0x40000000) = 3 (t_qrcp.S qr_exp) */
+    QRCP(a2, a5)
+    .option push
+    .option norelax               /* else ld relaxes the base to x0 (< 2 KB) */
+    jalr  ra, %lo(qr_jt - 3)(a2)  /* QRCP -> JALR, to qr_jt (below 2 KB) */
+    .option pop
+qr_link:
+    li    s11, 0xbad
+qr_jt:
+    sw    ra, RES(20)(s2)
+    lui   a3, 0x5A5A0
+    or    a3, a3, s0              /* preset, kept by the inactive lanes */
+    mv    a4, a3
+    li    a6, 0x5A
+    MASKSET(a6)
+    QRCP(a3, t0)                  /* lanes 1, 3, 4, 6 */
+    add   a4, a3, a3              /* QRCP -> ALU under the mask */
+    MASKALL
+    sw    a3, RES(21)(s2)
+    sw    a4, RES(22)(s2)
 
     /* ---------------- slow pass ---------------- */
     li    s9, 0
@@ -275,6 +318,46 @@ fast_link:
     add   s9, s9, t0
     SLOW
     CHECK(14, s9)
+
+    lw    t0, 0(s2)
+    SLOW
+    slli  t0, t0, 12
+    SLOW
+    QRCP(t1, t0)
+    SLOW
+    addi  t2, t1, 3
+    SLOW
+    CHECK(15, t2)
+    QRCP(t4, t2)
+    SLOW
+    CHECK(16, t4)
+    QRCP(t5, t4)
+    SLOW
+    CHECK(17, t5)
+    QRCP(a1, t0)
+    SLOW
+    CHECK(18, a1)
+    QRCP(a0, t5)
+    SLOW
+    CHECK(19, a0)
+    la    t1, qr_link
+    SLOW
+    CHECK(20, t1)
+    lui   a3, 0x5A5A0
+    SLOW
+    or    a3, a3, s0
+    SLOW
+    mv    a4, a3
+    li    a6, 0x5A
+    SLOW
+    MASKSET(a6)
+    QRCP(a3, t0)
+    SLOW
+    add   a4, a3, a3
+    SLOW
+    MASKALL
+    CHECK(21, a3)
+    CHECK(22, a4)
 
     li    t1, 1
     MASKSET(t1)
