@@ -9,6 +9,7 @@
 #   make chip8      same with KC_LANES=8 (Stage 1 kernel)
 #   make chip-raster  tile rasterizer builds (1 and 8 lanes) + lane lint + stack check
 #   make compare    ray tracer vs rasterizer on the golden poses (out/cmp)
+#   make models     static entity checks and review shots (out/models)
 SRC      := src/kc_libc.c src/arena.c src/fixed.c src/trace.c src/render.c src/entity.c src/terrain.c src/chunks.c src/game.c src/kc_main.c
 RASTER   := src/mesh.c src/raster.c
 HOST_SRC := host/hal_host.c host/png.c host/main_host.c
@@ -30,7 +31,7 @@ GAME_OPT   := -Os
 GAME_FILES := arena.c terrain.c chunks.c game.c kc_main.c mesh.c
 chip_opt    = $(if $(filter $(GAME_FILES),$(notdir $(1))),$(GAME_OPT),$(KERNEL_OPT))
 
-.PHONY: all shots play vectors contract compare bench chip chip8 chip-raster clean
+.PHONY: all shots play vectors contract compare models bench chip chip8 chip-raster clean
 all: build/kc_host
 
 $(GEN): tools/gen_assets.py $(wildcard assets/textures.png)
@@ -53,6 +54,8 @@ contract: build/kc_host
 	./build/kc_host contract
 compare: build/kc_host
 	mkdir -p out/cmp && ./build/kc_host compare out/cmp
+models: build/kc_host
+	mkdir -p out/models && ./build/kc_host models out/models
 bench: build/kc_host
 	./build/kc_host bench
 
