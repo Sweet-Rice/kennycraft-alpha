@@ -36,6 +36,17 @@ STOCK = {"brick": 200, "planks": 300, "cobble": 300, "stone": 200, "log": 100, "
 OPEN = ("SURVEY", "PLANNED", "FUNDED", "BUILT", "VERIFIED")
 HUD_STATE = {"FUNDED": 1, "BUILT": 2, "VERIFIED": 2, "PAID": 3}   # 2-bit state on the chip
 SITE = (6, 8, 6)        # x, y, z: east of the player, inside the chip's 16^3 zone around them
+# Demo village (KC_DEMO=1, with the game built `make KC_DEMO=1`): the same numbers as
+# game/src/blocks.h. Villagers stand behind their stall counters, chickens are in the pen, and
+# every build goes on the plot (the chip makes the plot the zone when you talk to anyone).
+DEMO = os.environ.get("KC_DEMO") == "1"
+DEMO_X0, DEMO_Z0, DEMO_H, DEMO_PLOT_X0, DEMO_PLOT_Z0, DEMO_PLOT_W = 2048, 2048, 14, -7, 20, 14
+DEMO_SITE = (DEMO_PLOT_W - 2, 10, DEMO_PLOT_W - 2)           # inside the plot's cobble border
+DEMO_MOBS = [("banker", 0, -6.5, 9.5, 1), ("builder", 1, 0.5, 16.5, 1), ("trader", 0, 7.5, 9.5, 1),
+             ("chicken", 2, -7.5, 2.5, 1.5), ("chicken", 2, -6.5, 3.5, 1.5), ("chicken", 2, -7.5, 4.5, 1.5)]
+TALKERS = ("banker", "builder", "trader")
+DEMO_START = 300        # KCN the player has when kc-host starts in the demo (topped up from the treasury)
+DEMO_CAP = 400          # price cap for builds on the 12x12 plot (200 elsewhere)
 RETRY = ("RATE", "BUSY")
 EXPLORER = "https://explorer.solana.com/tx/{}?cluster=devnet"
 
@@ -121,6 +132,10 @@ class Job:
 
     def move(self, eid, tx, tz):
         res, _ = self.sync(self.orch.send(cr6.MOVE, struct.pack("<BHH", eid, round(tx * 16), round(tz * 16))))
+        return res == "OK"
+
+    def teleport(self, eid, x, z):          # MOVE with bit 7 of the id: there at once (cr6.c)
+        res, _ = self.sync(self.orch.send(cr6.MOVE, struct.pack("<BHH", eid | 0x80, round(x * 16), round(z * 16))))
         return res == "OK"
 
     # -- bank -----------------------------------------------------------------------------
@@ -316,6 +331,7 @@ class Orchestrator:
         self.loop, self.hud_kcn = None, None
         self.homes, self.speech, self.mobs = {}, {}, None       # villager brains (villagers())
         self.recent = []                                        # what happened lately, for their context
+        self.player_at = None                                   # (x, z) blocks, refreshed with the brains
 
     def say(self, text):
         self._say(text)
@@ -362,13 +378,21 @@ class Orchestrator:
         return x // 16, z // 16, y // 8
 
     async def spawn_villagers(self):
+        if DEMO:                        # fixed spots in the village, not around the player
+            for i, (role, kind, dx, dz, leash) in enumerate(DEMO_MOBS):
+                x, z = DEMO_X0 + dx, DEMO_Z0 + dz
+                await self.send(cr6.SPAWN, struct.pack("<BHHB", i | kind << 4, round(x * 16), round(z * 16),
+                                                       (DEMO_H + 1) * 8))
+                self.roles[i] = role
+                self.homes[i] = (kind, x, z, leash)
+            return
         _, p = await self.send(cr6.Q_PLAYER)
         x, z, y = struct.unpack("<HHB", p)
         for i, (role, kind, dx, dz) in enumerate(VILLAGERS):
             # BAD_ENTITY here means the chip already has them (kc-host restarted, chip didn't).
             await self.send(cr6.SPAWN, struct.pack("<BHHB", i | kind << 4, x + dx * 16, z + dz * 16, y))
             self.roles[i] = role
-            self.homes[i] = (kind, x / 16 + dx, z / 16 + dz)
+            self.homes[i] = (kind, x / 16 + dx, z / 16 + dz, None)
 
     async def resync(self):
         """After HELLO_ACK: a rebooted chip kept nothing, so send everything again."""
@@ -384,13 +408,16 @@ class Orchestrator:
 
     async def mark_zone(self):
         """The chip marks its 16^3 contract zone around the player when E is pressed (cr6.c)."""
+        if DEMO:
+            self.zone = (DEMO_X0 + DEMO_PLOT_X0 - 1, DEMO_H + 1, DEMO_Z0 + DEMO_PLOT_Z0 - 1)
+            return
         px, pz, py = await self.player()
         self.zone = (px - 8, max(1, py - 4), pz - 8)
 
     async def events(self):
         while True:
             code, arg = await self.bridge.events.get()
-            if code == cr6.EV_INTERACT and arg in self.roles:
+            if code == cr6.EV_INTERACT and self.roles.get(arg) in TALKERS:
                 self.prompt = self.roles[arg]
                 await self.mark_zone()
                 self.on_change()
@@ -427,6 +454,8 @@ class Orchestrator:
     async def run(self, job):
         x0, y0, z0 = job.zone
         site = (x0 + 10, z0 + 8 - SITE[2] // 2)    # 2 blocks east of where the player stood at E
+        if DEMO:                                    # inside the plot's border
+            site = (DEMO_X0 + DEMO_PLOT_X0 + 1, DEMO_Z0 + DEMO_PLOT_Z0 + 1)
         worker = next((i for i, r in self.roles.items() if r == job.kind), None)
         try:
             await asyncio.to_thread(self._agent, job, site, worker, y0)
@@ -443,9 +472,11 @@ class Orchestrator:
         job.over = True
 
     def _agent(self, job, site, worker, y0):
-        job.scan(site[0], site[1], SITE[0], SITE[2], y0, 16)
-        job.contract = builder.Contract(job.id, job, job, job.ask, origin=site, zone=SITE, worker=worker)
-        reply = builder.run(job.text, job.contract, self.chat(),
+        size = DEMO_SITE if DEMO else SITE
+        job.scan(site[0], site[1], size[0], size[2], y0 - 1, 17)   # from the ground layer up: plans must rest on it
+        job.contract = builder.Contract(job.id, job, job, job.ask, origin=site, zone=size, worker=worker,
+                                        cap=DEMO_CAP if DEMO else 200)
+        reply = builder.run(job.text, job.contract, self.chat(), autopilot=True,
                             log=lambda t: print(time.strftime("%H:%M:%S"), f"#{job.id}", t, file=sys.stderr, flush=True))
         job.note = job.note or reply or ""      # "quote expired" beats the agent's sign-off
 
@@ -457,9 +488,9 @@ class Orchestrator:
         self.mobs = MobManager(MobChip(self), chat_json, log=lambda t: None)
         while True:
             await asyncio.sleep(0.5)
-            for i, (kind, hx, hz) in self.homes.items():
+            for i, (kind, hx, hz, leash) in self.homes.items():
                 if i not in self.mobs.mobs:
-                    self.mobs.mobs[i] = Mob(i, kind, (hx, hz))
+                    self.mobs.mobs[i] = Mob(i, kind, (hx, hz), leash)
             if not self.mobs.mobs:
                 continue
             busy = {i for i, r in self.roles.items() if r == self.prompt}
@@ -472,6 +503,7 @@ class Orchestrator:
                                  f"{'; '.join(self.recent[-3:]) or 'nothing yet'}. Each villager speaks only for itself; react in 'say'.")
             try:
                 px, pz, _ = await self.player()
+                self.player_at = (px, pz)
                 done = await asyncio.to_thread(self.mobs.step, time.monotonic(), (px + 0.5, pz + 0.5))
             except Exception as x:          # chip stall or a villager gone: try again next tick
                 print(time.strftime("%H:%M:%S"), "villagers:", type(x).__name__, x, file=sys.stderr, flush=True)

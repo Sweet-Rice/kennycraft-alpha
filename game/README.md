@@ -33,6 +33,7 @@ Makefile variables (any target; changing a `KC_*` one rebuilds through `build/de
 | `KC_TAG_PERSIST=1` | Chunk tags without the boot nonce: stored chunks survive a reset |
 | `KC_QRCP=1` | 8-lane chip builds use the QRCP instruction for `qrcp()` (D22, Stage 2 core); other builds keep `fixed.c` |
 | `KC_FIXED_DT=1` | Fixed per-frame dt (`KC_DT_FIXED`, Q16 0.08 s) and frame-synchronous chunk loads, so replays retire the same instructions on any core speed; use with `KC_TAG_PERSIST=1` |
+| `KC_DEMO=1` | The demo village (`src/terrain.c`, numbers in `src/blocks.h`): flat grass, banker / trader / contractor stalls around a plaza and well, a chicken pen, houses, a 14x14 build plot and a ruined obsidian portal missing one block. You spawn facing it. Talking to any villager makes the plot the CR6 contract zone. Run kc-host with `KC_DEMO=1` too |
 | `ARENA_SIZE=n` | Per-frame arena size for laptop and chip (default 8 KB, `src/arena.h`); `make clean` after changing |
 
 Source defines without a Makefile variable (pass through `CC`/`CHIP_CC`):

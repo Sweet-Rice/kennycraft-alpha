@@ -123,9 +123,11 @@ static int32_t run(uint8_t seq, uint8_t op, const uint8_t *p, int32_t n) {
     }
     case MOVE: {
         if (n != 5) break;
-        uint32_t x = u16(p + 1), z = u16(p + 3);
-        if (p[0] >= entity_count() || !near_player(x, z)) return R_BAD_ENTITY;
-        entity_move(p[0], (q16)(x << 12), (q16)(z << 12));
+        // id byte: bit 7 set = teleport there at once instead of walking
+        uint32_t x = u16(p + 1), z = u16(p + 3), id = p[0] & 0x7Fu;
+        if (id >= (uint32_t)entity_count() || !near_player(x, z)) return R_BAD_ENTITY;
+        if (p[0] & 0x80u) entity_teleport((int32_t)id, (q16)(x << 12), (q16)(z << 12));
+        else entity_move((int32_t)id, (q16)(x << 12), (q16)(z << 12));
         return R_OK;
     }
     case Q_PLAYER: {
@@ -242,9 +244,15 @@ void cr6_key(uint8_t code) {
         if (d <= best_d && iabs(e[1] - kc_me.pos[1]) < Q16(2.0)) { best = i; best_d = d; }
     }
     if (best < 0) return;
+#if KC_DEMO     // the demo village's plot plus a block around it: wherever you talk, builds go there
+    zone[0] = (int16_t)(DEMO_X0 + DEMO_PLOT_X0 - 1);
+    zone[1] = (int16_t)(DEMO_H + 1);
+    zone[2] = (int16_t)(DEMO_Z0 + DEMO_PLOT_Z0 - 1);
+#else
     zone[0] = (int16_t)(qfloor(kc_me.pos[0]) - ZONE / 2);
     zone[1] = (int16_t)imax(1, qfloor(kc_me.pos[1]) - 4);
     zone[2] = (int16_t)(qfloor(kc_me.pos[2]) - ZONE / 2);
+#endif
     zone_set = 1;
     event(EV_INTERACT, (uint32_t)best);
 }

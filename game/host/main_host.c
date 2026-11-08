@@ -764,6 +764,19 @@ static int cmd_cr6(void) {
     o = cr6_step();
     check(o.ev == 3 && o.ev_arg == 0, "E next to the contractor: EVENT INTERACT entity 0");
 
+    {   // MOVE with bit 7 of the id set: the contractor is there at once, no walking
+        q16 at[3];
+        int32_t facing;
+        p[0] = 0x80; le16(p + 1, (uint32_t)(px + 5) * 16 + 8); le16(p + 3, (uint32_t)(pz + 1) * 16 + 8);
+        cr6_push(200, 0x21, p, 5, 0);
+        int ok = cr6_step().status == OK;
+        entity_get(0, at, &facing);
+        check(ok && qfloor(at[0]) == px + 5 && qfloor(at[2]) == pz + 1, "MOVE with the teleport bit: there at once");
+        p[0] = 0x80; le16(p + 1, (uint32_t)(px + 2) * 16 + 8); le16(p + 3, (uint32_t)pz * 16 + 8);
+        cr6_push(201, 0x21, p, 5, 0);
+        cr6_step();
+    }
+
     le16(p, (uint32_t)px + 3); le16(p + 2, (uint32_t)pz); p[4] = (uint8_t)ty; p[5] = B_PLANKS;
     cr6_push(6, 0x10, p, 6, 0);
     o = cr6_step();

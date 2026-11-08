@@ -174,6 +174,7 @@ class FakeChip:
                 return self.fill(x, z, y, (a & 15) + 1, (c & 15) + 1, (a >> 4) + 1, c >> 4)
             if op == MOVE:
                 eid, x, z = struct.unpack("<BHH", p)
+                eid &= 0x7F                                  # bit 7: teleport; the fake chip has no walking
                 if eid >= len(self.entities):
                     return 9
                 k, _, _, y = self.entities[eid]
