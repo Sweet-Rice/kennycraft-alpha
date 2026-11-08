@@ -86,8 +86,8 @@ if (HAS_RAY_UNIT) begin : g_vtrace
         .cfg_data(vt_cfg_data), .start(vt_start), .max_steps(vt_max_steps),
         .busy(vt_busy), .done(vt_done),
         .result(vt_result), .hit_cell(vt_hit_cell), .t_hit(vt_t_hit),
-        .world_addr(vt_world_addr), .world_data(vt_world_data)
-    );
+        .world_addr(vt_world_addr), .world_phase(), .world_data(vt_world_data)
+    );   // world_data is all air here, so world_phase needs no model
 end else begin : g_no_vtrace
     assign vt_done = 1'b0;
     always_comb for (int l = 0; l < LANES; l++) begin
