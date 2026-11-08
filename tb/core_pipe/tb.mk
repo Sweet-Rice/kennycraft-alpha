@@ -23,6 +23,12 @@
 #                           of the same test with +trace, retire traces
 #                           compared without cycle numbers
 #                           (tb/core_pipe/tracediff_pipe.py), every test
+#   tb-core-pipe-t_pipe_stress(-ref), tracediff-core-pipe-t_pipe_stress
+#                           tb/core_pipe/sw/t_pipe_stress.S: back-to-back
+#                           hazards (forwarding, load-use, MUL, QRCP,
+#                           VSET/VTRACE/VGET, mask writers, DIF/DELSE, JALR)
+#                           on the Stage 2 core with QRCP, self-checking, on
+#                           both cores, traces compared
 #   lint-core-pipe          verilator -Wall over kc_soc with PIPELINED = 1 at
 #                           LANES = 1, 3 and 8 and every HAS_DIV_STACK,
 #                           HAS_RAY_UNIT, HAS_QRCP combination, one target
@@ -108,6 +114,45 @@ $(eval $(call CORE_PIPE_RULES,t_cpi,t_cpi_tb,,,$(call core_hex_deps,t_cpi),t_cpi
 # t_mmio with its two CYCLES checks at the pipelined LW/SW CPI (t_mmio_pipe_tb.sv)
 $(eval $(call CORE_PIPE_RULES,t_mmio,t_mmio_tb,,,$(call core_hex_deps,t_mmio),t_mmio_pipe_tb))
 
+# Hazard stress on the Stage 2 core with QRCP (tb/core_pipe/sw/t_pipe_stress.S,
+# t_pipe_stress_tb.sv): tb-core-pipe-t_pipe_stress-ref runs it on the
+# multi-cycle core, tb-core-pipe-t_pipe_stress on core_pipe, and
+# tracediff-core-pipe-t_pipe_stress compares the two traces.
+CORE_PIPE_SW_OBJ := $(OBJ)/core_pipe_sw
+CORE_PIPE_STRESS_HEX := $(CORE_PIPE_SW_OBJ)/t_pipe_stress_imem.hex \
+                        $(CORE_PIPE_SW_OBJ)/t_pipe_stress_dmem.hex
+CORE_HEX_t_pipe_stress_tb := -GIMEM_HEX='"$(CURDIR)/$(CORE_PIPE_SW_OBJ)/t_pipe_stress_imem.hex"' \
+                             -GDMEM_HEX='"$(CURDIR)/$(CORE_PIPE_SW_OBJ)/t_pipe_stress_dmem.hex"'
+
+$(CORE_PIPE_SW_OBJ)/%.elf: tb/core_pipe/sw/%.S tb/core/sw/kc_test.h tb/core/sw/kc_lanes.h \
+                           tb/core/sw/test.ld
+	@mkdir -p $(CORE_PIPE_SW_OBJ)
+	$(RISCV_PREFIX)gcc $(CORE_SW_FLAGS) -Itb/core/sw $< -o $@
+
+$(CORE_PIPE_SW_OBJ)/%_imem.hex $(CORE_PIPE_SW_OBJ)/%_dmem.hex: $(CORE_PIPE_SW_OBJ)/%.elf \
+                                                               tb/core/sw/bin2hex.py
+	$(RISCV_PREFIX)objcopy -O binary -j .text $< $(CORE_PIPE_SW_OBJ)/$*_imem.bin
+	$(RISCV_PREFIX)objcopy -O binary -j .data $< $(CORE_PIPE_SW_OBJ)/$*_dmem.bin
+	python3 tb/core/sw/bin2hex.py $(CORE_PIPE_SW_OBJ)/$*_imem.bin $(CORE_PIPE_SW_OBJ)/$*_imem.hex 8192
+	python3 tb/core/sw/bin2hex.py $(CORE_PIPE_SW_OBJ)/$*_dmem.bin $(CORE_PIPE_SW_OBJ)/$*_dmem.hex \
+	    8192 0x100
+
+.PRECIOUS: $(CORE_PIPE_SW_OBJ)/%.elf $(CORE_PIPE_SW_OBJ)/%_imem.hex $(CORE_PIPE_SW_OBJ)/%_dmem.hex
+
+tb-core-pipe-t_pipe_stress-ref: $(CORE_PIPE_STRESS_HEX)
+	@mkdir -p $(OBJ)
+	$(call CORE_PIPE_VL,t_pipe_stress_tb,,t_pipe_stress_tb,$(CORE_S2Q))
+	$(call core_bin,t_pipe_stress_tb) $(PLUSARGS)
+
+tb-core-pipe-t_pipe_stress: $(CORE_PIPE_STRESS_HEX)
+	@mkdir -p $(OBJ)
+	$(call CORE_PIPE_VL,t_pipe_stress_tb,_pipe,t_pipe_stress_tb,$(CORE_S2Q) $(CORE_PIPE_TB))
+	$(call core_bin,t_pipe_stress_tb,_pipe) $(PLUSARGS)
+
+tracediff-core-pipe-t_pipe_stress: tb-core-pipe-t_pipe_stress-ref tb-core-pipe-t_pipe_stress
+	python3 tb/core_pipe/tracediff_pipe.py --tail $(CORE_PIPE_TAIL) t_pipe_stress@pipe \
+	    $(call core_bin,t_pipe_stress_tb) $(call core_bin,t_pipe_stress_tb,_pipe)
+
 # Lint matrix: LANES x HAS_DIV_STACK x HAS_RAY_UNIT x HAS_QRCP
 define CORE_PIPE_LINT_RULE
 CORE_PIPE_LINT += lint-core-pipe-l$(1)-d$(2)r$(3)q$(4)
@@ -122,6 +167,8 @@ $(foreach l,1 3 8,$(foreach d,0 1,$(foreach r,0 1,$(foreach q,0 1, \
 lint-core-pipe: $(CORE_PIPE_LINT)
 
 TB_TARGETS += $(addprefix tb-core-pipe-,$(CORE_PIPE_NAMES)) lint-core-pipe \
-              $(addprefix tracediff-core-pipe-,$(CORE_PIPE_NAMES))
+              $(addprefix tracediff-core-pipe-,$(CORE_PIPE_NAMES)) \
+              tb-core-pipe-t_pipe_stress-ref tb-core-pipe-t_pipe_stress \
+              tracediff-core-pipe-t_pipe_stress
 
 .PHONY: $(CORE_PIPE_LINT)

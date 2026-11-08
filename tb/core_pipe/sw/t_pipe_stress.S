@@ -1,0 +1,287 @@
+/* t_pipe_stress: back-to-back hazards for the pipelined core (P8), on the
+   Stage 2 core (LANES = 8, divergence stack, ray unit, QRCP).
+
+   The fast pass runs every sequence with no gap between producer and
+   consumer, so core_pipe forwards (MEM -> EX, WB -> EX, WB -> ID), stalls
+   (load-use, MUL, QRCP, VTRACE, the lane-serial LSU) and flushes (branches,
+   JALR, mask writers, DIF/DELSE/DENDIF), and stores each result per lane
+   to res[k]. The slow pass recomputes every result with SLOW (three NOPs:
+   the producer has left WB before the consumer reads the register file)
+   between dependent instructions and ORs (fast ^ slow) into s11 in every
+   lane; s11 = 0 at the end in every lane. Wrong-path markers also set s11.
+
+   Covered: load-use chains, a store of a just-loaded value, MUL into use,
+   into store data and into a branch, QRCP after load-use and chained,
+   VSET from just-computed values, VTRACE with a forwarded cap, VGET right
+   after, VTRACE with cap 0 (no write) and under a partial mask, BALLOT,
+   LMASK, MASKGET and MASKSET from forwarded values, DIF/DELSE/DENDIF on a
+   loaded condition, JALR through a loaded target and use of its link. */
+#include "kc_test.h"
+#include "kc_lanes.h"
+#define VSET(f, rs)    .insn r 0x2B, 0, f, x0, rs, x0
+#define VTRACE(rd, rs) .insn r 0x2B, 1, 0, rd, rs, x0
+#define VGET(rd, f)    .insn r 0x2B, 2, f, rd, x0, x0
+#define SLOW           nop; nop; nop
+#define RES(k)         (256 + 32 * (k))
+/* s11 |= res[k] ^ reg (t6 scratch) */
+#define CHECK(k, reg)  lw t6, RES(k)(s2); SLOW; xor t6, t6, reg; SLOW; or s11, s11, t6
+
+    .section .text.start
+    .globl _start
+_start:
+    MASKALL
+    LANEID(s0)
+    slli  s1, s0, 2
+    li    s2, 0x10001000
+    add   s2, s2, s1            /* per-lane scratch: s2 = 0x10001000 + 4 * lane */
+    li    s9, 0
+    li    s11, 0
+
+    /* ---------------- fast pass ---------------- */
+    /* load-use chains, store of a just-loaded value */
+    addi  t0, s0, 7
+    sw    t0, 0(s2)
+    lw    t1, 0(s2)
+    addi  t2, t1, 1
+    lw    t3, 0(s2)
+    sw    t3, 32(s2)
+    lw    t4, 32(s2)
+    add   t5, t4, t3
+    lw    a0, 0(s2)
+    beq   a0, t0, 1f
+    li    s11, 0xbad
+1:  sw    t2, RES(0)(s2)
+    sw    t5, RES(1)(s2)
+    /* MUL into use, MUL into store data, MUL into branch */
+    mul   a1, t5, t5
+    add   a2, a1, s0
+    mulh  a3, a2, t0
+    sw    a3, 64(s2)
+    mulhu a4, a1, a1
+    mul   a5, a4, a2
+    bne   a5, a5, 2f
+    lw    a6, 64(s2)
+    mul   a7, a6, a6
+2:  sw    a5, RES(2)(s2)
+    sw    a7, RES(3)(s2)
+    sw    a3, RES(4)(s2)
+    /* QRCP after load-use and into use, chained */
+    lw    s3, 0(s2)
+    slli  s3, s3, 16
+    sw    s3, 96(s2)
+    lw    s4, 96(s2)
+    QRCP(s5, s4)
+    add   s6, s5, s4
+    QRCP(s7, s6)
+    QRCP(s8, s7)
+    sw    s5, RES(5)(s2)
+    sw    s6, RES(6)(s2)
+    sw    s8, RES(7)(s2)
+    /* ray unit: VSET from just-computed per-lane values, VTRACE with a cap
+       from the previous instruction, VGET right after, use right after */
+    slli  t0, s0, 3
+    addi  t0, t0, 3
+    VSET(0, t0)
+    li    t1, 0x8000
+    add   t1, t1, s1
+    VSET(1, t1)
+    li    t1, 0x9000
+    VSET(2, t1)
+    li    t1, 0xA000
+    VSET(3, t1)
+    li    t1, 0x10000
+    VSET(4, t1)
+    VSET(5, t1)
+    VSET(6, t1)
+    andi  t1, s0, 7
+    VSET(7, t1)
+    li    t2, 12
+    VTRACE(a0, t2)
+    VGET(a1, 0)
+    VGET(a2, 1)
+    add   a3, a0, a1
+    xor   a3, a3, a2
+    sw    a3, RES(8)(s2)
+    lw    t2, RES(8)(s2)
+    andi  t2, t2, 0
+    VTRACE(a4, t2)              /* cap 0: no write, a4 keeps the MULHU value */
+    li    t3, 0x5A
+    MASKSET(t3)
+    li    t2, 40
+    VTRACE(a5, t2)
+    VGET(a6, 1)
+    add   a7, a5, a6
+    MASKALL
+    sw    a4, RES(9)(s2)
+    sw    a7, RES(10)(s2)
+    /* mask ops from forwarded values */
+    andi  t0, s0, 1
+    BALLOT(t1, t0)
+    LMASK(t0)
+    MASKGET(t2)
+    addi  t3, t2, 1
+    MASKALL
+    sw    t1, RES(11)(s2)
+    sw    t3, RES(12)(s2)
+    /* DIF/DELSE/DENDIF on a loaded condition */
+    lw    t4, 0(s2)
+    andi  t4, t4, 2
+    DIF(t4, 3f)
+    addi  s9, s9, 5
+    lw    s10, 0(s2)
+    DELSE(4f)
+3:  addi  s9, s9, 9
+4:  DENDIF
+    sw    s9, RES(13)(s2)
+    /* JALR through a loaded target, link used right after */
+    la    t0, 5f
+    sw    t0, 192(s2)
+    lw    t1, 192(s2)
+    jalr  ra, 0(t1)
+fast_link:
+    li    s11, 0xbad
+5:  add   s9, s9, ra
+    sw    s9, RES(14)(s2)
+
+    /* ---------------- slow pass ---------------- */
+    li    s9, 0
+    SLOW
+    addi  t0, s0, 7
+    SLOW
+    sw    t0, 0(s2)
+    SLOW
+    lw    t1, 0(s2)
+    SLOW
+    addi  t2, t1, 1
+    SLOW
+    CHECK(0, t2)
+    lw    t3, 0(s2)
+    SLOW
+    add   t5, t3, t3
+    SLOW
+    CHECK(1, t5)
+
+    mul   a1, t5, t5
+    SLOW
+    add   a2, a1, s0
+    SLOW
+    mulh  a3, a2, t0
+    SLOW
+    CHECK(4, a3)
+    mulhu a4, a1, a1
+    SLOW
+    mul   a5, a4, a2
+    SLOW
+    CHECK(2, a5)
+    mul   a7, a3, a3
+    SLOW
+    CHECK(3, a7)
+
+    lw    s3, 0(s2)
+    SLOW
+    slli  s3, s3, 16
+    SLOW
+    QRCP(s5, s3)
+    SLOW
+    CHECK(5, s5)
+    add   s6, s5, s3
+    SLOW
+    CHECK(6, s6)
+    QRCP(s7, s6)
+    SLOW
+    QRCP(s8, s7)
+    SLOW
+    CHECK(7, s8)
+
+    slli  t0, s0, 3
+    SLOW
+    addi  t0, t0, 3
+    SLOW
+    VSET(0, t0)
+    li    t1, 0x8000
+    SLOW
+    add   t1, t1, s1
+    SLOW
+    VSET(1, t1)
+    li    t1, 0x9000
+    SLOW
+    VSET(2, t1)
+    li    t1, 0xA000
+    SLOW
+    VSET(3, t1)
+    li    t1, 0x10000
+    SLOW
+    VSET(4, t1)
+    VSET(5, t1)
+    VSET(6, t1)
+    andi  t1, s0, 7
+    SLOW
+    VSET(7, t1)
+    li    t2, 12
+    SLOW
+    VTRACE(a0, t2)
+    SLOW
+    VGET(a1, 0)
+    VGET(a2, 1)
+    SLOW
+    add   a3, a0, a1
+    SLOW
+    xor   a3, a3, a2
+    SLOW
+    CHECK(8, a3)
+    li    t2, 0
+    SLOW
+    VTRACE(a4, t2)              /* cap 0: a4 keeps the slow MULHU value */
+    SLOW
+    CHECK(9, a4)
+    li    t3, 0x5A
+    SLOW
+    MASKSET(t3)
+    li    t2, 40
+    SLOW
+    VTRACE(a5, t2)
+    SLOW
+    VGET(a6, 1)
+    SLOW
+    add   a7, a5, a6
+    SLOW
+    MASKALL
+    CHECK(10, a7)
+
+    andi  t0, s0, 1
+    SLOW
+    BALLOT(t1, t0)
+    SLOW
+    LMASK(t0)
+    MASKGET(t2)
+    SLOW
+    addi  t3, t2, 1
+    MASKALL
+    CHECK(11, t1)
+    CHECK(12, t3)
+
+    lw    t4, 0(s2)
+    SLOW
+    andi  t4, t4, 2
+    SLOW
+    DIF(t4, 6f)
+    addi  s9, s9, 5
+    DELSE(7f)
+6:  addi  s9, s9, 9
+7:  DENDIF
+    CHECK(13, s9)
+    la    t0, fast_link
+    SLOW
+    add   s9, s9, t0
+    SLOW
+    CHECK(14, s9)
+
+    li    t1, 1
+    MASKSET(t1)
+    li    t6, 1
+    li    t5, TB_DONE
+    sw    t6, 0(t5)
+8:  j     8b
+
+    .data
+    .word 0
