@@ -1,7 +1,9 @@
 #include "Vkc.h"
 #include "Vkc___024root.h"
 #include "verilated.h"
+#if VM_TRACE
 #include "verilated_vcd_c.h"
+#endif
 #ifdef KC_FIXTURE
 #include "fixture/ports.h"
 #include "fixture/probes.h"
@@ -90,6 +92,9 @@ Options parse(int argc, char** argv) {
 #if !KC_HAS_RETIRE
     if (!o.trace.empty()) throw std::runtime_error("--trace needs retire probes (see tb/harness/probes.h)");
 #endif
+#if !VM_TRACE
+    if (!o.vcd.empty()) throw std::runtime_error("--vcd needs kcvl built with --trace (TRACE=1)");
+#endif
     return o;
 }
 }
@@ -101,12 +106,14 @@ int main(int argc, char** argv) {
         context.commandArgs(argc, argv);
         context.traceEverOn(!o.vcd.empty());
         Vkc dut{&context};
+#if VM_TRACE
         VerilatedVcdC waveform;
         if (!o.vcd.empty()) {
             dut.trace(&waveform, 99);
             waveform.open(o.vcd.c_str());
             if (!waveform.isOpen()) throw std::runtime_error("cannot open VCD: " + o.vcd);
         }
+#endif
         std::ofstream trace;
         if (!o.trace.empty()) {
             trace.open(o.trace);
@@ -138,8 +145,10 @@ int main(int argc, char** argv) {
             KC_UART_RX(dut) = io.rx();
             KC_CLK(dut) = 0;
             dut.eval();
+#if VM_TRACE
             const bool dump = !o.vcd.empty() && cycle >= o.vcd_start && cycle <= o.vcd_end;
             if (dump) waveform.dump(context.time());
+#endif
             context.timeInc(1);
             // A swap the RTL accepts this edge presents the back buffer as it stands now.
             const DisplaySignals signals{
@@ -198,7 +207,9 @@ int main(int argc, char** argv) {
 #endif
             KC_CLK(dut) = 1;
             dut.eval();
+#if VM_TRACE
             if (dump) waveform.dump(context.time());
+#endif
             context.timeInc(1);
             if (o.expect_pass && io.verdict() != -1) { result = io.verdict(); break; }
             if (io.quit()) break;
@@ -206,7 +217,9 @@ int main(int argc, char** argv) {
             if (context.gotFinish()) break;
         }
         dut.final();
+#if VM_TRACE
         if (waveform.isOpen()) waveform.close();
+#endif
         if (trace.is_open()) { trace.flush(); if (!trace) throw std::runtime_error("trace write failed"); }
         return result;
     } catch (const std::exception& e) {

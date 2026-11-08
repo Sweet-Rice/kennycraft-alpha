@@ -1,7 +1,15 @@
 // Behavioral Verilator models of the Xilinx pieces under fpga/ddr_test and
 // rtl/ddr/ddr_clk.sv: MMCME2_BASE (CLKOUT0/1 and LOCKED only), BUFG, and
 // mig_ddr3 (the generated MIG, modeled as rtl/ddr/ddr_model.sv behind the same
-// ports with its own 83.33 MHz ui_clk). Used by lint-ddr and tb-ddr-ddr_test.
+// ports with its own 83.33 MHz ui_clk). Used by lint-ddr, tb-ddr-ddr_test and
+// tb/top.
+//
+// With KC_EXT_CLOCKS defined (tb/top/t_top_frame, built without --timing) no
+// model makes its own clock: the MIG's ui_clk and the MMCM's LOCKED come from
+// t_top_frame's ddr_ui_clk and ddr_mmcm_locked ports, which its C++ main
+// drives, and CLKOUT0/CLKOUT1 stay low. That MMCM is only ddr_clk's, whose
+// outputs reach nothing but the MIG model's unused sys_clk_i and clk_ref_i;
+// any other configuration is a fatal error.
 
 /* verilator lint_off DECLFILENAME */
 /* verilator lint_off UNUSEDPARAM */
@@ -30,9 +38,17 @@ module MMCME2_BASE #(
   localparam real VCO = CLKIN1_PERIOD * DIVCLK_DIVIDE / CLKFBOUT_MULT_F;  // ns
   localparam real H0  = VCO * CLKOUT0_DIVIDE_F / 2.0;
   localparam real H1  = VCO * CLKOUT1_DIVIDE / 2.0;
+`ifdef KC_EXT_CLOCKS
+  initial if (CLKOUT0_DIVIDE_F != 6.0 || CLKOUT1_DIVIDE != 5)
+    $fatal(1, "unisim_sim: KC_EXT_CLOCKS does not model MMCM %m");
+  assign CLKOUT0 = 1'b0;
+  assign CLKOUT1 = 1'b0;
+  assign LOCKED  = t_top_frame.ddr_mmcm_locked;
+`else
   initial begin CLKOUT0 = 1'b0; CLKOUT1 = 1'b0; LOCKED = 1'b0; #500 LOCKED = 1'b1; end
   always #(H0) CLKOUT0 = ~CLKOUT0;
   always #(H1) CLKOUT1 = ~CLKOUT1;
+`endif
   assign CLKFBOUT = CLKIN1;
 endmodule
 
@@ -81,8 +97,12 @@ module mig_ddr3 (
   input  logic         clk_ref_i,
   input  logic         sys_rst
 );
+`ifdef KC_EXT_CLOCKS
+  assign ui_clk = t_top_frame.ddr_ui_clk;
+`else
   initial ui_clk = 1'b0;
   always #6 ui_clk = ~ui_clk;
+`endif
 
   logic [3:0] rs = '1;
   always_ff @(posedge ui_clk) rs <= {rs[2:0], ~sys_rst};
