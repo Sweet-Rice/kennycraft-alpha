@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 
 int main(int argc, char** argv) {
@@ -21,6 +22,11 @@ int main(int argc, char** argv) {
     const std::unique_ptr<VerilatedContext> context{new VerilatedContext};
     context->commandArgs(argc, argv);
     const std::unique_ptr<Vt_top_frame> top{new Vt_top_frame{context.get()}};
+    if (context->timeprecision() != -12) {
+        std::fprintf(stderr, "t_top_frame: time precision is 1e%d s, the clocks need 1 ps "
+                             "(build with --timescale 1ns/1ps)\n", context->timeprecision());
+        return 1;
+    }
 
     top->clk = 0;
     top->ck_rst = 0;
