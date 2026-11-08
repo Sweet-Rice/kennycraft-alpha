@@ -31,6 +31,17 @@ if [ -f "$hex/palette.hex" ] && ! cmp -s "$hex/palette.hex" "$build/palette.hex"
     exit 1
 fi
 
+# dmem 0x6000..0x7FFF (words 0x1800..0x1FFF, lines 6145..8192) is distributed
+# RAM on the pipelined core (rtl/mem/dmem_win.sv), initialized at build time:
+# updatemem patches only the dmem BRAM, so new contents there need a rebuild.
+# The game's images keep it empty (the per-lane stacks).
+if [ -f "$build/kc_dmem.hex" ] && \
+   [ "$(sed -n '6145,8192p' "$hex/kc_dmem.hex")" != "$(sed -n '6145,8192p' "$build/kc_dmem.hex")" ]; then
+    echo "patch_bit.sh: $hex/kc_dmem.hex changes dmem 0x6000..0x7FFF, which is distributed" >&2
+    echo "  RAM on the pipelined core and cannot be patched with updatemem, rebuild instead" >&2
+    exit 1
+fi
+
 mkdir -p "$out"
 python3 "$root/fpga/hex2mem.py" "$hex/kc_imem.hex"  "$out/kc_imem.mem"  32
 python3 "$root/fpga/hex2mem.py" "$hex/kc_dmem.hex"  "$out/kc_dmem.mem"  32
