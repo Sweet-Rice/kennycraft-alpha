@@ -7,6 +7,7 @@
 #include "render.h"
 #include "cr6.h"
 #include "kc_hal.h"
+#include "kc_tables.h"
 
 kc_player kc_me;
 _Static_assert(WORLD_CHUNKS * CHUNK_W < 32767, "aim / place are int16");
@@ -38,6 +39,20 @@ static int32_t landing;   // just travelled: hold still until the new window is 
 static int32_t in_portal; // standing in a portal: it fires again only after you step out
 
 // Slot 6 is obsidian for portals (leaves were there; trees still grow them).
+// Sky and fog colors per world (generated, tools/gen_assets.py): rewritten on the way in and
+// out, and once at boot (palette RAM keeps the last world's colors across a reset).
+static const uint16_t pal_overworld[KC_PAL_SWAP_N] = KC_PAL_OVERWORLD;
+static const uint16_t pal_nether[KC_PAL_SWAP_N] = KC_PAL_NETHER;
+static int32_t pal_world = -1;   // which set is in palette RAM
+
+static void set_world_colors(int32_t nether) {
+    if (nether == pal_world) return;
+    const uint16_t *src = nether ? pal_nether : pal_overworld;
+    for (int32_t b = 0, k = 0; b < 256; b++)
+        if ((b >> 4) == 15 || (b & 3)) hal_pal_set((uint32_t)b, src[k++]);
+    pal_world = nether;
+}
+
 static const uint8_t hotbar[9] = { B_GRASS, B_DIRT, B_STONE, B_COBBLE, B_LOG, B_OBSIDIAN, B_PLANKS, B_SAND, B_BRICK };
 
 // ---------------------------------------------------------------- collision -------------
@@ -208,6 +223,8 @@ void game_init(void) {
     back_pos[0] = back_pos[1] = back_pos[2] = 0;
     landing = 0;
     in_portal = 0;
+    pal_world = -1;
+    set_world_colors(0);
     world_update(sx, sz);                 // first call generates the whole window
     update_aim();
 }
@@ -299,6 +316,7 @@ void move_player(q16 dt) {
     int32_t now_in = world_get(px, py, pz) == B_PORTAL || world_get(px, py + 1, pz) == B_PORTAL;
     if (now_in && !in_portal) travel();
     in_portal = now_in;
+    set_world_colors(kc_me.pos[0] >= Q16_INT(NETHER_X0));   // also when you walk in from the side
 }
 
 void pick_and_edit(void) {

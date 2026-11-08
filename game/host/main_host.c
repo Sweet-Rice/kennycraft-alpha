@@ -19,6 +19,7 @@
 #include <time.h>
 #include "kc_hal.h"
 #include "hal_host.h"
+#include "kc_assets.h"   // kc_palette, for the Nether color checks
 #include "kc_main.h"
 #include "game.h"
 #include "chunks.h"
@@ -419,12 +420,16 @@ static int cmd_play(void) {
         check(nx >= NETHER_X0 && kc_me.pos[2] == oz, "P takes you into the Nether strip, same z");
         check(kc_me.on_ground && (under == B_NETHERRACK || under == B_LAVA), "you stand on netherrack or lava");
         check(world_get(nx, WIN_Y - 1, nz) == B_BEDROCK, "the Nether has a bedrock roof");
+        const uint16_t *pal = host_palette();
+        check((pal[0xF8] >> 8) > (pal[0xF8] & 15) && pal[0x50] == kc_palette[0x50],
+              "the Nether sky is red, unfogged block colors are unchanged");
         save_frame("p9_nether");
         key(KEY_P, 1); key(KEY_P, 0);
         step_frames(150);
         q16 dx = kc_me.pos[0] - ox;
         check(dx >= 0 && dx < Q16_INT(16) && kc_me.pos[2] == oz && kc_me.on_ground,
               "P again brings you back to where you left, standing");
+        check(!memcmp(host_palette(), kc_palette, sizeof kc_palette), "back home: the whole palette is palette.hex again");
 
         // Portal: an obsidian frame 3 blocks ahead in z, standing along x, built on the ground.
         int32_t px = qfloor(kc_me.pos[0]), py = qfloor(kc_me.pos[1]), pz = qfloor(kc_me.pos[2]) + 3;
