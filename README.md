@@ -102,10 +102,10 @@ register writes as the multi-cycle core. Only CPI changes:
 | ALU, LUI, AUIPC, FENCE, MASKGET, BALLOT, LANEID, not-taken branch | 1 |
 | MUL family | 2 |
 | Taken branch, JAL, JALR, LMASK, MASKSET, MASKALL, DIF, DELSE, DENDIF (flush 2) | 3 |
-| Load or store, N active lanes | N + 1 (+3 per lane for world LW/SW and texture LW) |
+| Load or store, N active lanes | N + 1 (+3 per lane for world LW/SW and texture LW); framebuffer stores to one word from several lanes are one access |
 | QRCP | 5 after the previous retirement (7 after a flush) |
 | Load-use | +1 bubble |
-| VTRACE | start until done, plus 1 |
+| VTRACE | start until done, plus 1; with rd = x0 1 (asynchronous: VGET waits for the walk) |
 
 Branches, JALR and the uniform check (ERR.DIVERGE) resolve in EX. The mask
 and divergence stack are written in EX, and every mask writer flushes behind
