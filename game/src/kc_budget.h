@@ -17,7 +17,7 @@
 #define BUDGET_PALETTE       (256 * 2)
 #define BUDGET_MESH          (MESH_PAGES * 1024)
 #define BUDGET_CMDLISTS      (RASTER_VIS_CAP * 8 + RASTER_BIN_CAP * 2 + (300 + 1) * 2 + 300 * 2)
-#define BUDGET_TILE          ((TILE * TILE + 1) * 4)                // 32-bit word: color 12, depth 12, stencil 8
+#define BUDGET_TILE          ((TILE * TILE + 1) * 4)                // 32-bit word: color 8, depth 24
 #define BUDGET_MESHER        (18 * 18 * 4 + 32 * 16)                // column bitmasks + slice mask
 #define BUDGET_CHUNKS        (16 * 2 + 16 + 16 * 4 + 2 + 4)        // slot tables + tag key (KC_GEN_BITMAP: +8 KB in data memory)
 #define BUDGET_FB_160        (2 * 160 * 120)

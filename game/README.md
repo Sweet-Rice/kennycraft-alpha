@@ -24,7 +24,7 @@ Every chip target also runs `tools/stack_check.sh`: the worst-case stack depth o
 | `src/trace.[ch]` | `ray_setup` + `kc_trace` with the exact VTRACE contract. `vtrace_ref` = C reference for one ray |
 | `src/render.[ch]` | Ray-tracing kernel. 8x8 tiles, 4x2 block per lane pass (D15). Pixel byte per spec |
 | `src/mesh.[ch]` | Greedy mesher: per-chunk vertex + index buffers in a pool of 4 KB pages |
-| `src/raster.[ch]` | Tile rasterizer (Josh's design): binning into per-tile command lists, 16x16 tile of 2-byte color + 2-byte depth, one framebuffer write per pixel |
+| `src/raster.[ch]` | Tile rasterizer (Josh's design): binning into per-tile command lists, 16x16 tile of 32-bit words (8-bit color + 24-bit 1/z depth), one framebuffer write per pixel |
 | `src/kc_libc.c` | memcpy/memset for the freestanding chip build |
 | `src/kc_lanes.h` | LANEID/LMASK/BALLOT/MASKGET/MASKSET/MASKALL: software for 1 lane, `.insn` for 8 |
 | `src/terrain.[ch]` | Deterministic terrain + trees from absolute coordinates |
@@ -33,12 +33,13 @@ Every chip target also runs `tools/stack_check.sh`: the worst-case stack depth o
 | `chip/bench/` | Bennett's kc.ld, crt0.S, gpu.h, arena (copied from bench/kc-bench) |
 | `src/game.[ch]` | Keys, physics, picking, place/break, camera, crosshair, selection box + hotbar |
 | `src/kc_main.c` | Frame loop; `main()` for the chip |
-| `tools/gen_assets.py` | textures.hex, palette.hex, kc_tables.h, atlas.png |
+| `tools/gen_assets.py` | palette.hex, kc_tables.h (math tables + the face color table), textures.hex, atlas.png |
 | `host/` | Memory-map emulation, PNG writer, headless front-end |
 | `chip/stub_*` | **Stand-ins only** so the chip build links. Bennett's kc.ld / crt0 replace them |
 
 ## For Tai
 
+- **Vertex colors (Josh's rule: no textures).** Both renderers and the hotbar color each block face from `kc_face_color` (one 4-bit color per block type and face, generated into `gen/kc_tables.h` from the block art). The game never reads texture memory. `textures.hex` is still generated, so the RTL's `$readmemh` keeps working; the texture BRAM could be dropped later through a CR.
 - `gen/textures.hex`: 12,288 lines, **one byte per line**, index `((type*3+face)<<8)|(v<<4)|u`, face 0 top / 1 side / 2 bottom. Values 0–14.
 - `gen/palette.hex`: 256 lines, **3 hex digits** RGB444 (11:8 R, 7:4 G, 3:0 B).
 - Palette convention (palette-only, no interface change): color index 15 is sky, and its 16 bytes are a top-to-bottom gradient rather than shade/fog variants.
@@ -89,26 +90,27 @@ No malloc anywhere: every structure is a fixed-size static array, sized at compi
 Per frame:
 1. **Mesh** (only when chunks change). Greedy meshing turns each chunk into quads. A quad uses 4 vertices (uint16, chunk-local x5 y6 z5), 6 indices (uint16) and 1 material byte. Quads go into a pool of 4 KB pages, 192 quads per page, chained per chunk. Moving the window doesn't remesh anything, because vertices are chunk-local.
 2. **Bin** (lane 0):
+   - Skip whole chunks outside the view frustum (the chunk's box against the 5 planes): 7–10 of 16 on the golden shots.
    - Cull back faces from the face direction alone, without transforming anything.
    - Transform and clip each remaining quad against the near, left, right, bottom and top planes.
    - Append the quad to the command list of every 16×16 tile it touches.
 3. **Tiles** (all lanes): for each tile:
-   - Clear a 1 KB tile buffer (2-byte color + 2-byte linear depth, no stencil).
-   - Rasterize the tile's quads with edge functions. Textures are perspective-correct, and depth is tested inside the tile.
+   - Clear a 1 KB tile buffer (one 32-bit word per pixel: 8-bit color, 24-bit depth).
+   - Rasterize the tile's quads with edge functions. Each face has one flat color (vertex colors, no textures). Depth is 1/z, interpolated linearly in screen space, so no reciprocal per pixel. A group whose 8 lanes all fail the depth test skips the color half (BALLOT).
    - Write the tile to the framebuffer once.
 
 Rules that keep it working on 8 lanes:
 - Per-pixel work is branch-free. Writes go through LMASK, so only the winning lanes store.
 - An 8-pixel group that no lane covers is skipped with BALLOT, which is a uniform branch.
 
-| Golden shot (160×120) | Ray tracer (64 steps) | Rasterizer |
-|---|---|---|
-| spawn | 19.5 M instr | 12.3 M instr |
-| horizon | 31.5 M | 11.7 M |
-| looking down | 7.1 M | 7.7 M |
-| from higher up | 35.1 M | 12.4 M |
+| Golden shot (160×120) | Ray tracer (64 steps) | Rasterizer | Rasterizer, 8-lane est. |
+|---|---|---|---|
+| spawn | 19.5 M instr | 7.6 M instr | 2.37 M cycles |
+| horizon | 31.5 M | 7.2 M | 2.60 M |
+| looking down | 7.1 M | 4.4 M | 0.94 M |
+| from higher up | 35.1 M | 7.9 M | 2.77 M |
 
-Estimates come from rv32 instruction counts × the host's work counters (`make compare`). Geometry matches the ray tracer on 99% of pixels. Texel rounding differs on about 20%, which is invisible.
+Estimates come from rv32 instruction counts × the host's work counters (`make compare`). The 8-lane column also charges lane-0 binning serially. Geometry matches the ray tracer on 98–100% of pixels, and with flat face colors the two renderers agree on 98–100% of pixel bytes. Measured on the 8-lane RTL (kcvl, standing at spawn): 21.0 M cycles per frame, 2.4 fps at 50 MHz.
 
 Each edge is grown by 2 subpixels (1/8 px) to close the hairline T-junction cracks that greedy meshing creates. Without that, 93 sky pixels show through across the golden shots; with it, 0 do.
 

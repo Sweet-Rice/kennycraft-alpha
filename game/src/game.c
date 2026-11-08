@@ -298,23 +298,17 @@ void game_draw_overlay(void) {
         for (int32_t d = -1; d <= 1; d++) { put(cx + i, cy + d, black); put(cx + d, cy + i, black); }
     for (int32_t i = -3; i <= 3; i++) { put(cx + i, cy, white); put(cx, cy + i, white); }
 
-    // Hotbar: 9 slots of the block's top texture
+    // Hotbar: 9 slots, each a flat swatch of the block's top color
     int32_t S = W >> 4;                               // 10 px at 160, 20 at 320
-    int32_t inner = S - 2;
-    q16 tstep = W == 160 ? Q16(2.0) : 58254;          // 16 / inner, Q16
     int32_t x0 = (W - 9 * S) >> 1, y0 = H - S - 2;
     for (int32_t i = 0; i < 9; i++) {
-        int32_t sx = x0 + i * S;
-        uint8_t border = i == kc_me.selected ? white : black;
-        for (int32_t j = 0; j < S; j++) {
-            put(sx + j, y0, border); put(sx + j, y0 + S - 1, border);
-            put(sx, y0 + j, border); put(sx + S - 1, y0 + j, border);
-        }
-        for (int32_t v = 0; v < inner; v++)
-            for (int32_t u = 0; u < inner; u++) {
-                int32_t tu = (u * tstep) >> 16, tv = (v * tstep) >> 16;
-                uint8_t texel = hal_tex_get(TEX_INDEX(hotbar[i], 0, tu, tv)) & 15;
-                put(sx + 1 + u, y0 + 1 + v, PIX(texel, i == kc_me.selected ? 0 : 1, 0));
+        int32_t sx = x0 + i * S, sel_i = i == kc_me.selected;
+        uint8_t border = sel_i ? white : black;
+        uint8_t fill = PIX(kc_face_color[hotbar[i] * 3], sel_i ? 0 : 1, 0);
+        for (int32_t v = 0; v < S; v++)
+            for (int32_t u = 0; u < S; u++) {
+                int32_t edge = u == 0 || v == 0 || u == S - 1 || v == S - 1;
+                put(sx + u, y0 + v, edge ? border : fill);
             }
     }
 }
