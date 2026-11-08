@@ -11,6 +11,11 @@
 #   tb-core-pipe-t_cpi      tb/core_pipe/t_cpi_pipe_tb.sv: t_cpi.S checked
 #                           against the pipelined stall model instead of the
 #                           multi-cycle state machine
+#   tb-core-pipe-t_qrcp(-l8)
+#                           tb/core_pipe/t_qrcp_pipe_tb.sv: t_qrcp.S with
+#                           core_pipe's QRCP latency (6 cycles after the
+#                           previous retirement, 8 after a flush) instead
+#                           of the multi-cycle 9
 #   tracediff-core-pipe-<t> the multi-cycle (tb-core-<t>) and pipelined builds
 #                           of the same test with +trace, retire traces
 #                           compared without cycle numbers
@@ -72,8 +77,9 @@ $(eval $(call CORE_PIPE_RULES,t_illegal-ray,t_illegal_tb,_ray, \
     -GLANES=8 -GHAS_DIV_STACK="1'b1" -GHAS_RAY_UNIT="1'b1",$(call core_hex_deps,t_illegal)))
 $(eval $(call CORE_PIPE_RULES,t_illegal-qrcp,t_illegal_tb,_qrcp,$(CORE_S2Q), \
     $(call core_hex_deps,t_illegal)))
-$(eval $(call CORE_PIPE_RULES,t_qrcp,t_qrcp_tb,,-GHAS_QRCP="1'b1",$(CORE_QRCP_HEX)))
-$(eval $(call CORE_PIPE_RULES,t_qrcp-l8,t_qrcp_tb,_l8,$(CORE_S2Q),$(CORE_QRCP_HEX)))
+# t_qrcp with core_pipe's QRCP latency (t_qrcp_pipe_tb.sv)
+$(eval $(call CORE_PIPE_RULES,t_qrcp,t_qrcp_tb,,-GHAS_QRCP="1'b1",$(CORE_QRCP_HEX),t_qrcp_pipe_tb))
+$(eval $(call CORE_PIPE_RULES,t_qrcp-l8,t_qrcp_tb,_l8,$(CORE_S2Q),$(CORE_QRCP_HEX),t_qrcp_pipe_tb))
 # t_cpi with the pipelined stall model (t_cpi_pipe_tb.sv)
 $(eval $(call CORE_PIPE_RULES,t_cpi,t_cpi_tb,,,$(call core_hex_deps,t_cpi),t_cpi_pipe_tb))
 

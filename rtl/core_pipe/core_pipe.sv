@@ -14,10 +14,9 @@
 //        lane, uniform checks, divergence stack, mask, lane control, ray
 //        unit configuration and start, misaligned check
 //   MEM  the only stage that takes more than one cycle; EX, ID and IF wait
-//        for it. MUL 2 cycles, QRCP until 9 cycles after the previous
-//        retirement (the multi-cycle fixed latency), VTRACE until done plus
-//        one, loads and stores with an active lane: one cycle per lane-serial
-//        bus access plus one. Retirement happens here
+//        for it. MUL 2 cycles, QRCP 6 (load, four steps, result), VTRACE
+//        until done plus one, loads and stores with an active lane: one
+//        cycle per lane-serial bus access plus one. Retirement happens here
 //   WB   every lane writes rd
 //
 // Hazards. Forwarding MEM -> EX and WB -> EX for every lane, gated by that
@@ -437,7 +436,6 @@ module core_pipe
     logic [ERR_WIDTH-1:0] m_err;
     logic [31:0]          m_pc, m_inst, m_next;
     logic                 m_walk, m_tail, m_vt_tail, m_mem, lsu_done;
-    logic [3:0]           since_ret;   // cycles since the last retirement, saturating
     logic                 retire_valid;
 
     always_ff @(posedge clk) begin
@@ -481,8 +479,7 @@ module core_pipe
     end
 
     // MUL: the product of MEM's registered operands, ready the cycle after.
-    // QRCP: load, four steps, then the result; it retires 9 cycles after the
-    // previous retirement, the multi-cycle core's fixed latency.
+    // QRCP: load, four steps, then the result in the sixth cycle.
     assign mul_en  = m_valid && m_mul && (m_cnt == 3'd0);
     assign qr_load = m_valid && m_qr && (m_cnt == 3'd0);
     assign qr_en   = m_valid && m_qr && (m_cnt != 3'd0) && (m_cnt <= 3'd4);
@@ -492,7 +489,7 @@ module core_pipe
         if (m_halt)          m_done = 1'b1;
         else if (m_mem)      m_done = m_tail;
         else if (m_mul)      m_done = (m_cnt == 3'd1);
-        else if (m_qr)       m_done = (m_cnt >= 3'd5) && (since_ret >= 4'd8);
+        else if (m_qr)       m_done = (m_cnt == 3'd5);
         else if (m_vt)       m_done = m_vt_tail;
         else                 m_done = 1'b1;
     end
@@ -514,12 +511,6 @@ module core_pipe
         .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,
         .ld_cap, .ld_value
     );
-
-    always_ff @(posedge clk) begin
-        if (rst)                    since_ret <= '1;
-        else if (retire_valid)      since_ret <= '0;
-        else if (since_ret != '1)   since_ret <= since_ret + 4'd1;
-    end
 
     // ------------------------------------------------------------------
     // WB
