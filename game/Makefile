@@ -15,7 +15,7 @@
 # KC_DEMO=1: the demo world: flat grass, no trees near spawn (src/terrain.c).
 # KC_FIXED_DT=1: fixed per-frame dt and frame-synchronous chunk loads, so replays retire the
 #   same instructions on any core speed (trace comparison; use with KC_TAG_PERSIST=1).
-SRC      := src/kc_libc.c src/arena.c src/fixed.c src/trace.c src/render.c src/entity.c src/terrain.c src/chunks.c src/game.c src/kc_main.c src/cr6.c
+SRC      := src/kc_libc.c src/arena.c src/fixed.c src/trace.c src/render.c src/entity.c src/terrain.c src/chunks.c src/game.c src/kc_main.c src/cr6.c src/hud.c
 HOST_SRC := host/hal_host.c host/png.c host/main_host.c
 GEN      := gen/kc_tables.h gen/kc_assets.h gen/textures.hex gen/palette.hex
 KC_DEFS  := $(if $(KC_GEN_BITMAP),-DKC_GEN_BITMAP=$(KC_GEN_BITMAP)) $(if $(KC_TAG_PERSIST),-DKC_TAG_PERSIST=$(KC_TAG_PERSIST)) \
@@ -34,7 +34,7 @@ CHIP_LDFLAGS := -Wl,--gc-sections,--entry=_start
 # triangle) stay at -O2; lane-0 game code is built for size: IMEM is 32 KB.
 KERNEL_OPT := -O2
 GAME_OPT   := -Os
-GAME_FILES := arena.c terrain.c chunks.c game.c kc_main.c cr6.c
+GAME_FILES := arena.c terrain.c chunks.c game.c kc_main.c cr6.c hud.c
 chip_opt    = $(if $(filter $(GAME_FILES),$(notdir $(1))),$(GAME_OPT),$(KERNEL_OPT))
 
 # Per-frame arena size override, applied to the laptop AND chip builds alike (default 8 KB in
