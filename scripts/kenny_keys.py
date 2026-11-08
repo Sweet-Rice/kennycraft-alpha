@@ -42,6 +42,8 @@ CLICKS = {1: 0x6A, 3: 0x6B}   # left button breaks (J), right button places (K)
 HELP = ('Click to capture the mouse, Esc frees it, Esc again quits',
         'WASD Space / mouse or arrows / click or J K / 1-9 wheel',
         'E talk  Y/N quote  P Nether  F overlay')
+TALKERS = ('banker', 'builder', 'trader')    # host/orchestrator.py
+YES, NO = {'y', 'yes', 'yeah', 'yep', 'sure', 'ok', 'deal'}, {'n', 'no', 'nope', 'nah'}
 
 
 def look_bytes(acc, sens):
@@ -113,30 +115,59 @@ def main():
 
     pygame.display.init()
     pygame.font.init()
-    screen = pygame.display.set_mode((640, 260) if args.kchost else (520, 120))
+    screen = pygame.display.set_mode((640, 330) if args.kchost else (520, 120))
     pygame.display.set_caption(f'Kenny keys ({args.port})')
     pygame.key.start_text_input()
     font = pygame.font.Font(None, 24)
     held, acc = set(), [0.0, 0.0]
     grabbed = False
     slot = 0
-    talk = None             # villager being talked to (E in game opens it, via kc-host)
-    typed, err, closed, shown = '', '', None, None
+    talk = None             # villager whose chat is open: the last one you pressed E on
+    typed, closed, shown = '', None, None
+    chats, seen = {}, None  # villager -> [(who, text)]; job (id, state, note) already shown
+
+    def say(role, who, text):
+        chats.setdefault(role, []).append((who, text))
+
+    def follow(state):
+        """Put the villagers' answers in their chats: notes as they change, quotes to answer."""
+        nonlocal seen
+        if not state:
+            return
+        new = {(j['id'], j['state'], j['note']): j for j in state.get('contracts', [])}
+        if seen is not None:
+            for key, j in new.items():
+                if key not in seen and j['kind'] in TALKERS:
+                    if j['state'] == 'QUOTED':
+                        say(j['kind'], j['kind'], f"{j['note'] or 'Quote'}: {j['price']} KCN. Answer yes or no.")
+                    elif j['note']:
+                        say(j['kind'], j['kind'], j['note'])
+        seen = set(new) | (seen or set())
+
+    def send_chat(text):
+        say(talk, 'you', text)
+        jobs = [j for j in getattr(uart, 'state', {}).get('contracts', []) if j['kind'] == talk]
+        if jobs and jobs[0]['state'] == 'QUOTED':       # a quote waits: yes/no answers it, like Y/N in game
+            answer = text.lower().strip(' .!')
+            if answer in YES or answer in NO:
+                problem = uart.post('/api/confirm', {'yes': answer in YES})
+            else:
+                problem = 'answer the quote first: yes or no'
+        else:
+            problem = uart.post('/api/request', {'kind': talk, 'text': text})
+        if problem:
+            say(talk, '!', problem)
 
     def draw():
         nonlocal shown
         lines = [(line, (220, 220, 220)) for line in HELP]
         lines.append((f'{args.port}  {"mouse captured" if grabbed else "mouse free"}  slot {slot + 1}', (120, 200, 120)))
-        state = getattr(uart, 'state', {})
         if talk:
-            lines += [(f'Talking to the {talk}: type, Enter sends, Esc closes', (240, 210, 120)),
-                      ('> ' + typed[-70:] + '_', (255, 255, 255))]
-        elif state.get('contracts'):    # the newest answer: the villager's reply and how the job stands
-            j = state['contracts'][0]
-            reply = f"{j['kind']} #{j['id']} {j['state']}: {j['note'] or j['text']}"
-            lines += [(line, (240, 210, 120)) for line in textwrap.wrap(reply, 66)[:5]]
-        if err:
-            lines.append((err[:80], (240, 120, 120)))
+            colors = {'you': (160, 200, 255), '!': (240, 120, 120)}
+            chat = [(line, colors.get(who, (240, 210, 120)))
+                    for who, text in chats.get(talk, []) for line in textwrap.wrap(f'{who}: {text}', 66)]
+            lines += [(f'Chat with the {talk}: Enter sends, Esc closes', (150, 150, 150))] + chat[-7:]
+            lines.append(('> ' + typed[-70:] + '_', (255, 255, 255)))
         if lines == shown:
             return
         shown = lines
@@ -167,11 +198,13 @@ def main():
     try:
         clock = pygame.time.Clock()
         while True:
-            prompt = getattr(uart, 'state', {}).get('prompt')
+            state = getattr(uart, 'state', {})
+            follow(state)
+            prompt = state.get('prompt')
             if prompt is None:
                 closed = None
-            elif prompt != closed and not talk:     # E on a villager: type here, not into the game
-                talk, typed, err = prompt, '', ''
+            elif prompt not in (closed, talk):      # E on a villager: its chat, typed here, not into the game
+                talk, typed = prompt, ''
                 release_all()
                 if grabbed:
                     grab(False)
@@ -183,9 +216,10 @@ def main():
                         typed = (typed + ev.text)[:200]
                     elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_BACKSPACE:
                         typed = typed[:-1]
-                    elif ev.type == pygame.KEYDOWN and ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_ESCAPE):
-                        if ev.key != pygame.K_ESCAPE:
-                            err = uart.post('/api/request', {'kind': talk, 'text': typed.strip() or 'hello'})
+                    elif ev.type == pygame.KEYDOWN and ev.key in (pygame.K_RETURN, pygame.K_KP_ENTER) and typed.strip():
+                        send_chat(typed.strip())
+                        typed = ''
+                    elif ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
                         uart.post('/api/close', {})
                         closed, talk = talk, None
                     continue
