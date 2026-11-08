@@ -26,7 +26,8 @@ per test, and everything it hides is printed:
     both values and B - A;
   * --tail N: A may end with up to N lines that B lacks (instructions still
     in B's pipeline when the testbench calls $finish). They are printed,
-    and a halt line is never excused.
+    and a halt line is never excused. B may end with the testbench's final
+    spin when A had not reached it yet (B is faster); it is printed.
 
 Anything else is a mismatch: a poll loop, a masked value or a spin may hide
 nothing but its own timing.
@@ -186,14 +187,19 @@ def compare(name, a, b, tail, labels):
             ctx = "".join(f"    {a[j][0]}\n" for j in range(max(0, i - 3), i))
             return False, (f"tracediff {name}: first difference at trace line {i + 1}\n"
                            f"{ctx}  A {la[0]}\n  B {lb[0]}")
-    if len(b) > len(a):
+    # B may also end with the testbench's spin (jal x0, 0) that A had not
+    # reached yet when the testbench called $finish: B is faster.
+    spin = f"inst={SPIN:08x} "
+    if len(b) > len(a) and not all(spin in l[0] for l in b[len(a):]):
         return False, (f"tracediff {name}: B retires {len(b) - len(a)} more line(s), "
                        f"first: {b[len(a)][0]}")
     extra = a[len(b):]
     if len(extra) > tail or any(" halt " in l[0] for l in extra):
         return False, (f"tracediff {name}: lengths differ, {len(a)} vs {len(b)} lines, "
                        f"first missing in B: {extra[0][0]}")
-    msg = [f"tracediff {name}: PASS, {len(b)} trace lines identical (cycles ignored)"]
+    msg = [f"tracediff {name}: PASS, {min(len(a), len(b))} trace lines identical (cycles ignored)"]
+    for l in b[len(a):]:
+        msg.append(f"  B only, the final spin (A had not reached it): {l[0]}")
 
     visits = {}
     for la, lb in zip(a, b):
