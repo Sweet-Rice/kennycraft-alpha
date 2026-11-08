@@ -10,6 +10,7 @@
 #
 #   DOOM_ARGS   extra Doom command-line arguments baked into the image,
 #               e.g. make doom DOOM_ARGS="-warp 1 1"
+#   KC_PROF=1   per-frame cycle profile on the UART (doom/kc_prof.c)
 #   KC_VCLOCK=1 virtual clock, one tic per frame: frames depend on the frame
 #               number only, for frame-for-frame comparisons across builds
 
@@ -21,6 +22,7 @@ DOOM_NM      := $(DOOM_CROSS)nm
 DOOM_SIZE    := $(DOOM_CROSS)size
 PYTHON       ?= python3
 DOOM_ARGS    ?=
+KC_PROF      ?= 0
 KC_VCLOCK    ?= 0
 
 DOOM_OUT    := out/doom
@@ -40,17 +42,19 @@ DOOM_ENGINE := dummy am_map doomdef doomstat dstrings d_event d_items d_iwad d_l
     r_plane r_segs r_sky r_things sha1 statdump st_lib st_stuff tables v_video \
     wi_stuff w_checksum w_file w_main w_wad z_zone w_file_stdc i_input i_video \
     doomgeneric
-DOOM_PLAT   := doomgeneric_kc kc_nosound syscalls
+DOOM_PLAT   := doomgeneric_kc kc_nosound syscalls $(if $(filter 1,$(KC_PROF)),kc_prof)
 
 DOOM_ARCH   := -march=rv32i_zmmul -mabi=ilp32
 DOOM_CFLAGS := $(DOOM_ARCH) -O2 -mstrict-align -ffunction-sections -fdata-sections \
     -fno-asynchronous-unwind-tables -fno-unwind-tables \
     -DCMAP256 -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 -I$(DOOM_DG)
 DOOM_ARGS_DEF := -D'KC_DOOM_ARGS=$(foreach a,$(DOOM_ARGS),"$(a)",)'
-DOOM_OPTS   := -DKC_VCLOCK=$(KC_VCLOCK)
+DOOM_OPTS   := -DKC_PROF=$(KC_PROF) -DKC_VCLOCK=$(KC_VCLOCK)
 # The screen buffer goes to SCRATCH BRAM without editing doomgeneric
 # (doom/doomgeneric_kc.c).
-DOOM_WRAPS  := I_InitGraphics I_FinishUpdate
+DOOM_WRAPS  := I_InitGraphics I_FinishUpdate R_ExecuteSetViewSize \
+    $(if $(filter 1,$(KC_PROF)),R_RenderPlayerView R_RenderBSPNode R_DrawPlanes R_DrawMasked TryRunTics G_Ticker ST_Drawer HU_Drawer \
+        V_DrawPatch V_DrawPatchDirect V_CopyRect V_DrawBlock)
 DOOM_COMMA  := ,
 DOOM_LDFLAGS := $(DOOM_ARCH) -nostartfiles -T doom/kc_doom.ld -Wl,--gc-sections \
     -Wl,--no-warn-rwx-segments -Wl,--build-id=none -Wl,-Map,$(DOOM_OUT)/doom.map \

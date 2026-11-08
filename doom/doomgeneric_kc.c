@@ -21,7 +21,12 @@
 #include "doomgeneric.h"
 #include "doomkeys.h"
 #include "i_video.h"
+#include "r_main.h"
 #include "z_zone.h"
+
+#if KC_PROF
+#include "kc_prof.h"
+#endif
 
 #define MMIO ((volatile uint32_t *)0x50000000u)
 #define MMIO_FB_SWAP     0x00
@@ -101,7 +106,18 @@ void __wrap_I_InitGraphics(void) {
     I_VideoBuffer = SCRATCH;
 }
 
+void __real_R_ExecuteSetViewSize(void);
+void __wrap_R_ExecuteSetViewSize(void) {
+    __real_R_ExecuteSetViewSize();
+#if KC_PROF
+    kc_prof_hook_draw();
+#endif
+}
+
 void DG_DrawFrame(void) {
+#if KC_PROF
+    uint32_t t0 = mmio_r(MMIO_CYCLES);
+#endif
     while (mmio_r(MMIO_FB_SWAP)) {}
 
     if (palette_changed) {
@@ -122,6 +138,9 @@ void DG_DrawFrame(void) {
 
     printf("kc: frame %lu at %lu ms\n", (unsigned long)frames, (unsigned long)DG_GetTicksMs());
     frames++;
+#if KC_PROF
+    kc_prof_frame(mmio_r(MMIO_CYCLES) - t0);
+#endif
 }
 
 void __wrap_I_FinishUpdate(void) {

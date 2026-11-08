@@ -16,7 +16,18 @@ Build options (`make doom VAR=value`; each one rebuilds the platform objects and
 
 | Option | Default | Effect |
 | --- | --- | --- |
+| `KC_PROF=1` | 0 | per-frame cycle profile on the UART, one `kcprof` line per frame (below) |
 | `KC_VCLOCK=1` | 0 | virtual clock: time moves only on `DG_SleepMs` and by one tic (1000/35 ms) per frame, so each frame depends on the frame number alone; for frame-for-frame comparisons of builds that run at different speeds |
+
+`KC_PROF=1` reads CYCLES (core cycles in the simulation, where CORE_MHZ is 50) around the main per-frame calls and
+prints, from `DG_DrawFrame`, `kcprof N total T` and `name calls/cycles` for each counter, then clears them. `total` is
+the time since the previous report (the report's own UART time is left out). Counters nest: `rpv`
+(R_RenderPlayerView) holds `bsp` (R_RenderBSPNode, walls), `planes` (R_DrawPlanes) and `masked` (R_DrawMasked); `col`
+(calls through colfunc/basecolfunc: R_DrawColumn, walls, sky and sprites) runs inside `bsp` and `masked`, `span`
+(spanfunc: R_DrawSpan) inside `planes`; `tics` (TryRunTics) holds `gtick` (G_Ticker); `st` (ST_Drawer), `hu`
+(HU_Drawer) and `v` (V_DrawPatch, V_DrawPatchDirect, V_CopyRect, V_DrawBlock, mostly inside `st`); `dgdraw` is
+DG_DrawFrame (wait for the swap, palette, copy to the framebuffer). The cross-object calls are linker wraps; colfunc
+and spanfunc are pointed at timing shims after every R_ExecuteSetViewSize.
 
 `make doom` outputs, in `out/doom/`:
 
