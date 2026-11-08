@@ -17,7 +17,7 @@ GEN      := gen/kc_tables.h gen/kc_assets.h gen/textures.hex gen/palette.hex
 CC       ?= cc
 CFLAGS   := -std=c11 -O2 -Wall -Wextra -Wno-unused-parameter -Isrc -Igen -Ihost
 CHIP_CC  ?= clang
-CHIP_FLAGS := --target=riscv32-unknown-elf -march=rv32i_zmmul -mabi=ilp32 -ffreestanding \
+CHIP_FLAGS := --target=riscv32-unknown-elf -march=rv32i_zmmul -mabi=ilp32 -O2 -ffreestanding \
               -nostdlib -fno-builtin -fno-jump-tables -Wall -Isrc -Igen -mno-relax \
               -DKC_CHIP -msmall-data-limit=0 -ffunction-sections -fdata-sections
 CHIP_LDFLAGS := -Wl,--gc-sections,--entry=_start
