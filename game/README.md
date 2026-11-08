@@ -113,8 +113,8 @@ screen rectangle per entity. `kc_render_frame` tests each 4x2 block against thos
 rectangles and ray traces the boxes only where one overlaps; with no entities it runs
 the plain world kernel.
 
-Colors reuse the existing palette: villagers have light-dirt skin and dark-grass
-eyes; trader robes are brick, contractor robes light wood. The pig is sand with
+Colors reuse the existing palette: villagers (five boxes) have light-dirt skin with a
+dark-dirt nose and black eyes painted flush on the face; trader robes are brick, contractor robes light wood. The pig is sand with
 a brick snout and black eyes. The zombie has light-grass skin, a dark-stone shirt
 and near-black pants/eyes.
 

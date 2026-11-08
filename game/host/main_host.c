@@ -158,7 +158,7 @@ static int cmd_models(void) {
     }
     models_render("m0_models",model);
     int changed = 0, bad = 0, brick = 0, wood = 0;
-    const uint32_t colors = (1u<<0)|(1u<<1)|(1u<<2)|(1u<<3)|(1u<<6)|(1u<<9)|(1u<<11)|(1u<<13);
+    const uint32_t colors = (1u<<0)|(1u<<1)|(1u<<2)|(1u<<3)|(1u<<4)|(1u<<6)|(1u<<9)|(1u<<11)|(1u<<13);
     for (int32_t y = 0; y < KC_RP->height; y++)
         for (int32_t x = 0; x < KC_RP->width; x++) {
             int32_t i = y*FB_STRIDE+x;
