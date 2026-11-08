@@ -29,7 +29,7 @@ module t_vtrace_async_tb;
     localparam logic [31:0] MB_OVL_E = 32'h1000_00D4;
     localparam logic [31:0] MB_HALT  = 32'h1000_00D8;
     localparam logic [31:0] TB_MARK  = 32'h1000_00F4;
-    localparam int          NWORK    = 82;   // WORK: two LI and 80 ALU
+    localparam int          NWORK    = 38;   // WORK: two LI and 36 ALU
 
     function automatic logic [31:0] res(input int k, input int l);
         return dmem_rd(RES_BASE + 32'(32 * k + 4 * l));

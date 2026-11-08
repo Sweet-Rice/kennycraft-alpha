@@ -7,7 +7,7 @@
    async-against-sync mismatch into s11, which must end 0 in every lane.
 
      A  reference: VTRACE rd, VGET 0 and 1 (RES 0..2)
-     B  overlap: CYCLES, VTRACE x0, WORK (80 independent ALU instructions),
+     B  overlap: CYCLES, VTRACE x0, WORK (36 independent ALU instructions),
         VGET 3, 0, 1, CYCLES (RES 3..6); then the same with VTRACE rd before
         WORK (RES 7..10). VGET 3 = VTRACE rd, and the async run is faster
      C  VSET (tDelta x) right after VTRACE x0 waits: VGET 3, 0, 1 match A
@@ -60,11 +60,13 @@
     VSET(7, x0)
 .endm
 
-/* 80 ALU instructions that never touch the ray unit or memory */
+/* 36 ALU instructions that never touch the ray unit or memory. Sized so the
+   multi-cycle core (4 cycles each) finishes them inside the 100-step walk at
+   2 cycles per step (about 200 cycles). */
 .macro WORK
     li    s5, 0
     li    s6, 0
-    .rept 20
+    .rept 9
     addi  s5, s5, 3
     xor   s6, s6, s5
     slli  s7, s5, 1
