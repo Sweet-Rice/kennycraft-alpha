@@ -107,8 +107,13 @@ def main():
     ap.add_argument('--sens', type=float, default=4.0, help='mouse pixels per look step (default %(default)s)')
     ap.add_argument('--lock', default=default_lock(), help='MCP hardware lock (default %(default)s)')
     ap.add_argument('--no-lock', action='store_true', help="don't take the hardware lock")
+    ap.add_argument('--doom', action='store_true',
+                    help='Doom keys (doom/README.md): Enter, Ctrl fires, Tab is the Doom menu (Esc stays local); '
+                         'no mouse look, since its codes are Doom keys')
     args = ap.parse_args()
     size = tuple(int(v) for v in args.size.split('x'))
+    if args.doom:
+        KEYMAP.update({pygame.K_RETURN: 0x0D, pygame.K_LCTRL: 0x14, pygame.K_RCTRL: 0x14, pygame.K_TAB: 0x1B})
 
     lock = None
     if not args.no_lock:
@@ -197,7 +202,7 @@ def main():
                 steps = int(acc[axis] / args.sens)
                 acc[axis] -= steps * args.sens
                 look += bytes([(pos if steps > 0 else neg) | DOWN]) * abs(steps)
-            if look:
+            if look and not args.doom:
                 send(look)
             rx = uart.read(4096)
             if rx:   # board text (kc: boot, ...); CR6 frames and other bytes as hex
