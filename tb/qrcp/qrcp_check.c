@@ -59,9 +59,11 @@ static uint32_t rnd(void) {           /* xorshift32 */
 }
 
 int main(int argc, char **argv) {
-    for (uint32_t i = 0; i < 256; i++)  /* the ROM equals the 1/x table it replaced */
+    /* Every seed fits the 16-bit ROM word with its top bit set (0x8000..0xFFFF);
+       game/tools/gen_assets.py asserts equality with the old 1/x table. */
+    for (uint32_t i = 0; i < 256; i++)
         if (qrcp_model_seed(i) > 0xFFFFu || qrcp_model_seed(i) < 0x8000u) {
-            fprintf(stderr, "FAIL: seed %" PRIu32 " = %" PRIu32 " outside 16 bits\n", i,
+            fprintf(stderr, "FAIL: seed %" PRIu32 " = %" PRIu32 " outside 0x8000..0xFFFF\n", i,
                     qrcp_model_seed(i));
             return 1;
         }
