@@ -316,11 +316,17 @@ module core_pipe
     assign e_diverge = (e_is_branch && ((l_taken & mask) != '0) && ((l_taken & mask) != mask)) ||
                        (e_is_jalr && ((jt_diff & mask) != '0));
 
+    // A DIF/DELSE/DENDIF halts only on e_fault, DIVSTACK, or a jump to a
+    // target with bit 1 set (no DIVERGE, no load/store): e_div_halt is
+    // e_halt for them without the lane ALU / uniform-check cone.
+    logic [31:0] b_target;    // e_pc + e_imm: branch, JAL, DIF/DELSE target
+    logic        e_div_halt;
+
     if (HAS_DIV_STACK) begin : g_divstack
         divstack #(.LANES(LANES)) u_divstack (
             .clk, .rst,
             .op(e_funct3), .mask, .cond(nonzero),
-            .step(e_go && e_is_div && !e_halt),
+            .step(e_go && e_is_div && !e_div_halt),
             .err(ds_err), .mask_d(ds_mask), .jump(ds_jump)
         );
     end else begin : g_no_divstack
@@ -330,10 +336,12 @@ module core_pipe
     end
 
     assign e_divstack = e_is_div && ds_err;
+    assign b_target   = e_pc + e_imm;
+    assign e_div_halt = e_fault || ds_err || (ds_jump && b_target[1]);
 
     assign take   = e_is_jal || e_is_jalr || (e_is_branch && l_taken[sl]) ||
                     (e_is_div && ds_jump);
-    assign target = e_is_jalr ? l_jt[sl] : (e_pc + e_imm);
+    assign target = e_is_jalr ? l_jt[sl] : b_target;
     assign e_next = take ? target : e_pc + 32'd4;
 
     always_comb begin
@@ -387,9 +395,11 @@ module core_pipe
 
     assign e_redirect = take || mask_we;
 
+    // Mask writers are lane control (halts only on e_fault) and custom-2
+    // (e_div_halt), so the write skips the lane ALU / uniform-check cone.
     always_ff @(posedge clk) begin
-        if (rst)                             mask <= LANES'(1);
-        else if (e_go && !e_halt && mask_we) mask <= mask_d;
+        if (rst) mask <= LANES'(1);
+        else if (e_go && mask_we && !e_fault && !(e_is_div && e_div_halt)) mask <= mask_d;
     end
 
     // ------------------------------------------------------------------
