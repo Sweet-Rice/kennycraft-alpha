@@ -50,6 +50,9 @@ are unchanged.
 Top-level targets require GNU Make 4.3+ for grouped targets (`&:`); macOS's
 system Make 3.81 is too old. Use `gmake` there when installed. Set `JOBS`
 explicitly if `nproc` is unavailable.
+Use `LC_ALL=C` for top-level invocations (for example, `LC_ALL=C gmake check`):
+fragment ordering must load `tb/core/tb.mk` before `tb/core_pipe/tb.mk`, and
+locale-dependent ordering can otherwise trip the include-order check.
 
 ```sh
 make check                                     # every target registered by a tb/*/tb.mk, JOBS (default nproc) at a time
@@ -174,8 +177,8 @@ the same ports and parameters as `rtl/core/core.sv`, built from its leaf
 modules. `PIPELINED = 1` (the last parameter of `rtl/top.sv` and
 `rtl/soc/kc_soc.sv`) selects it, and the core sits at `g_core.u_core`
 whichever core is built. It retires the same instructions, masks and
-register writes as the multi-cycle core. Unstalled retirement spacing with a full
-pipeline is below; dependencies, prediction misses and peripheral waits add stalls.
+register writes as the multi-cycle core. Back-to-back instruction costs are
+below; dependencies, prediction misses and peripheral waits add stalls.
 
 | Class | Cycles |
 | --- | --- |
@@ -185,7 +188,7 @@ pipeline is below; dependencies, prediction misses and peripheral waits add stal
 | Mispredicted branch/JAL, JALR, LMASK, MASKSET, MASKALL, DIF, DELSE, DENDIF (flush 2) | 3 |
 | Bus-only loads and stores without the dmem/framebuffer store fast path | G + 1 |
 | Bus-only stores whose last group targets dmem or framebuffer | G |
-| QRCP | 3 after the previous retirement (5 after a flush) |
+| QRCP | 3 after the previous retirement; 4 after a store with an extra MEM tail; 5 after a flush |
 | Load-use or MUL-use | +1 bubble |
 | VTRACE rd (rd != x0) | start until done, plus 1 |
 | VTRACE x0 | 1; the walk runs on |
@@ -195,6 +198,10 @@ cycles: one per coalesced dmem/framebuffer word group, otherwise one per active
 lane, with three extra cycles per world LW/SW or texture LW. Slave wait states
 add to these counts. The dedicated dmem window below bypasses this bus path;
 mixed window/bus operations wait for both paths to finish.
+
+The table's instruction costs are not every individual retirement gap: a
+flush's bubbles and a non-fast bus store's extra MEM cycle delay the following
+retirement. The QRCP row explicitly reports gaps from the previous retirement.
 
 Branches, JALR and the uniform check (ERR.DIVERGE) resolve in EX. The mask
 and divergence stack are written in EX, and every mask writer flushes behind

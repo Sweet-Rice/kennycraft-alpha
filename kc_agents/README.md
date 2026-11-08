@@ -22,11 +22,14 @@ Builder quotes are clamped to 0.5x-1.5x of the plan's rule price after the
 player's material discount, at most 200 KCN and the player's balance.
 Successful release charges a 10% treasury fee (`bank.py`).
 
-Cancellation in `FUNDED` or `BUILT` counts matching target cells through local
-`get()`, pays the builder that proportion of the price rounded down, and refunds
-the rest without a treasury fee. Cancellation in `VERIFIED` changes the state
-to `CANCELLED` without moving money: escrow stays held. When its tool loop ends
-normally in `FUNDED`, `BUILT` or `VERIFIED`, `run()` invokes this cancellation.
+`Contract.cancel()` in `FUNDED` or `BUILT` counts matching target cells through
+local `get()`, pays the builder that proportion of the price rounded down, and
+refunds the rest without a treasury fee. In `VERIFIED`, that method changes the
+state to `CANCELLED` without moving money: escrow stays held. When its tool loop
+ends normally in `FUNDED`, `BUILT` or `VERIFIED`, `run()` invokes this method.
+
+The host's interrupt/error cleanup is separate: `Orchestrator.stop()` also
+handles `VERIFIED`, using the same pro-rata split and setting `REFUNDED`.
 
 ## Files
 | File | What |
