@@ -209,7 +209,7 @@ module core
     logic [2:0]       qr_ph;                  // QRCP step in QR
     logic             qr_wr;                  // QR, last step: latch the result
 
-    assign qr_wr = (state == S_QR) && (qr_ph == 3'd4);
+    assign qr_wr = HAS_QRCP && (state == S_QR) && (qr_ph == 3'd4);
 
     assign wb_en = (state == S_WB) && ex_r_we && !vt_nowr;
 
@@ -324,10 +324,14 @@ module core
         if (state == S_EX) next_pc <= take ? target : pc + 32'd4;
     end
 
-    // QRCP step counter: 0 from EX, counts through QR
-    always_ff @(posedge clk) begin
-        if (state == S_EX)      qr_ph <= 3'd0;
-        else if (state == S_QR) qr_ph <= qr_ph + 3'd1;
+    // QRCP step counter: 0 from EX, counts through QR (constant 0 without QRCP)
+    if (HAS_QRCP) begin : g_qr_ph
+        always_ff @(posedge clk) begin
+            if (state == S_EX)      qr_ph <= 3'd0;
+            else if (state == S_QR) qr_ph <= qr_ph + 3'd1;
+        end
+    end else begin : g_no_qr_ph
+        assign qr_ph = 3'd0;
     end
 
     // ------------------------------------------------------------------
@@ -423,7 +427,7 @@ module core
                     else if (ex_is_mul)                  state <= S_MUL;
                     else if (ex_mem)                     state <= S_MEM;
                     else if (ex_vtrace)                  state <= S_VT;
-                    else if (ex_is_qrcp)                 state <= S_QR;
+                    else if (HAS_QRCP && ex_is_qrcp)     state <= S_QR;
                     else                                 state <= S_WB;
                 end
                 S_MUL: state <= S_WB;
