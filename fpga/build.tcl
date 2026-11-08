@@ -50,6 +50,8 @@ if {[info exists ::env(FPGA_ILA_PROBES_JSON)] && $::env(FPGA_ILA_PROBES_JSON) ni
     error "ILA probes are not supported by fpga/build.tcl yet"
 }
 
+# 14 of the machine's 16 hardware threads; the other 2 are kept for agents.
+set_param general.maxThreads 14
 create_project -in_memory -part $part
 set sources [expr {$target eq "top" ? "fpga/sources.tcl" : "fpga/$target/sources.tcl"}]
 if {![file exists $sources]} { error "No sources script for target '$target': $sources" }
