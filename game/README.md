@@ -90,7 +90,7 @@ It saves `m0_models` and `m1_trader`, `m1_contractor`,
 
 ## Numbers
 
-- Software DDA loop (`vtrace_ref`): 56 RV32I instructions per step on `kc_chip8.elf`, 51 on `kc_chip.elf` (was 109 / 102), counted in `llvm-objdump -d`.
+- Software DDA loop (`vtrace_ref`): 53 RV32I instructions per step on `kc_chip8.elf`, 49 on `kc_chip.elf` (was 109 / 102), counted in `llvm-objdump -d`.
 - 160×120 with a 16-step cap is about 207k steps per frame, roughly 11M instructions. At about 4 CPI on a 50 MHz multi-cycle core that's ~1 fps, which matches the Stage 0 plan.
 - The default cap is 64 (`-DKC_MAX_STEPS`). At that cap a frame is 302k steps.
 

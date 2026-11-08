@@ -49,11 +49,11 @@ static inline uint32_t lane_mask(int32_t c) {
 #define FM_Y 0x1F000u
 #define STEP1 (1u << 20)                // step count lives in bits 20..27 of the walk index
 #ifdef KC_HOST
-#define WALK_BASE 0u
+#define WALK_BASE 0u                    // walk_read returns the raw world byte: type = low 4 bits
 static inline int32_t walk_read(uint32_t a) { return hal_win_get(a & 63, (a >> 12) & 31, (a >> 6) & 63); }
 #else
 #define WALK_BASE 0x20000000u           // KC_WORLD, so the masked walk index is the address
-static inline int32_t walk_read(uint32_t a) { return *(volatile uint8_t *)(a & (WALK_BASE | 0x1FFFFu)) & 15; }
+static inline int32_t walk_read(uint32_t a) { return *(volatile uint8_t *)(a & (WALK_BASE | 0x1FFFFu)); }
 #endif
 
 void vtrace_ref(const kc_ray *r, int32_t max_steps, kc_hit *h) {
@@ -73,6 +73,8 @@ void vtrace_ref(const kc_ray *r, int32_t max_steps, kc_hit *h) {
     // D20: BALLOT before LMASK, so the loop never ends with M = 0. A cap of 0 never enters.
     uint32_t saved = mask_get();
     int32_t alive = max_steps > 0;
+    uint32_t inf = TDELTA_INF;
+    __asm__("" : "+r"(inf));                         // keep it in a register: one AND, not a shift pair
     while (ballot((uint32_t)alive)) {                // uniform: "any lane still walking?"
         lmask((uint32_t)alive);                      // finished lanes freeze their registers
         // Wiki (Tai, VTRACE "One step"): strict compares, so ties go to z, then y.
@@ -81,19 +83,20 @@ void vtrace_ref(const kc_ray *r, int32_t max_steps, kc_hit *h) {
         uint32_t mx = lane_mask(cx), my = lane_mask(cy);
         uint32_t t  = (uint32_t)tmz ^ (((uint32_t)tmx ^ (uint32_t)tmz) & mx) ^ (((uint32_t)tmy ^ (uint32_t)tmz) & my);
         uint32_t sum = t + ((uint32_t)tdz ^ (dxz & mx) ^ (dyz & my));
-        uint32_t d  = ((sum | (uint32_t)((int32_t)sum >> 31)) & TDELTA_INF) - t;  // saturate at 0x7FFF_FFFF
+        uint32_t d  = ((sum | (uint32_t)((int32_t)sum >> 31)) & inf) - t;  // saturate at 0x7FFF_FFFF
         uint32_t dx = d & mx, dy = d & my;
         tmx += (q16)dx; tmy += (q16)dy; tmz += (q16)(d - dx - dy);
         uint32_t fm = FM_Z ^ ((FM_X ^ FM_Z) & mx) ^ ((FM_Y ^ FM_Z) & my);
         idx += (fm & -fm) + STEP1;
-        int32_t typ = walk_read(idx ^ flip);         // always a legal address
-        s.idx = idx; s.fm = fm; s.t = t; s.typ = typ;
-        alive = ((uint32_t)typ < (uint32_t)((idx & fm) != 0)) & (idx < lim);  // air, inside, under cap
+        int32_t b = walk_read(idx ^ flip);           // always a legal address
+        s.idx = idx; s.fm = fm; s.t = t; s.typ = b;
+        // Air and inside: type << 28 is 0 or >= 2^28, the field (idx & fm) is below 2^17.
+        alive = (((uint32_t)b << 28) < (idx & fm)) & (idx < lim);   // and under the cap
     }
     mask_set(saved);
 
     uint32_t i = s.idx, fm = s.fm;
-    int32_t typ = s.typ;
+    int32_t typ = s.typ & 15;
     int32_t oob = (i & fm) == 0;
     int32_t hit = (typ != 0) & (oob ^ 1);
     i -= ((fm & -fm) << 6) & -(uint32_t)oob;         // undo an x/z wrap's carry (y's is harmless)
