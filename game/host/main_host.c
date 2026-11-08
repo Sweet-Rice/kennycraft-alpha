@@ -3,8 +3,8 @@
 //   kc_host play    <dir>   scripted play-through with checks (physics, editing, chunk round trip)
 //   kc_host vectors <dir>   VTRACE test vectors: world.hex + rays.txt from the C reference
 //   kc_host bench           render timing and world reads per frame
-//   kc_host sweep ray|raster  arena high water over many locations x frames x edits, plus
-//                           digests of the window and the meshes (must not change with optimizations)
+//   kc_host sweep           arena high water over many locations x frames x edits, plus
+//                           a digest of the window (must not change with optimizations)
 //   kc_host gencost         terrain generation cost per chunk (terrain_height, window reads/writes)
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,8 +18,6 @@
 #include "render.h"
 #include "trace.h"
 #include "blocks.h"
-#include "mesh.h"
-#include "raster.h"
 #include "arena.h"
 #include "terrain.h"
 #define TERRAIN_GEN(cx, cz, x0, z0) terrain_gen_chunk(cx, cz, x0, z0, gen_scratch)
@@ -98,7 +96,6 @@ static void shot(const char *name) {
 }
 
 static int cmd_shots(void) {
-    kc_use_raster = 0;                                  // golden shots = the ray-traced reference
     struct { const char *name; double x, y, z, yaw, pitch; int w; } s[] = {
         { "g0_spawn",     0, 0, 0, 128, -40, 160 },
         { "g1_horizon",   0, 0, 0, 300,   0, 160 },
@@ -127,78 +124,6 @@ static int box_overlap_any(void) {
         if (world_get(qfloor(kc_me.pos[0]), y, qfloor(kc_me.pos[2])) != B_AIR) return 1;
     }
     return 0;
-}
-
-static int cmd_compare(void) {
-    struct { const char *name; double yaw, pitch, dy; int w; } s[] = {
-        { "c0_spawn", 128, -40, 0, 160 }, { "c1_horizon", 300, 0, 0, 160 },
-        { "c2_down", 0, -200, 0, 160 },   { "c3_high", 900, -60, 6, 160 },
-        { "c4_spawn_320", 128, -40, 0, 320 },
-    };
-    q16 bx = kc_me.pos[0], by = kc_me.pos[1], bz = kc_me.pos[2];
-    mesh_update();
-    printf("  mesh: %d quads in %d of %d pages (%d KB)\n", mesh_total_quads(), mesh_pages_used(), MESH_PAGES,
-           mesh_pages_used());
-    for (unsigned i = 0; i < sizeof s / sizeof s[0]; i++) {
-        kc_set_resolution(s[i].w);
-        pose(bx, by + (q16)(s[i].dy * 65536), bz, (q16)(s[i].yaw * 65536), (q16)(s[i].pitch * 65536));
-        static uint8_t ray[320 * 240];
-        char name[64];
-        kc_use_raster = 0; snprintf(name, sizeof name, "%s_ray", s[i].name);
-        mesh_update();                                  // don't count remeshing as ray work
-        uint64_t r0 = hstats.world_reads;
-        shot(name);
-        double ray_mi = ((hstats.world_reads - r0) * 52.0 + KC_RP->width * KC_RP->height * 200.0) / 1e6;
-        printf("  %-13s ray tracer: %llu DDA steps, est. %.1f M instr\n", s[i].name,
-               (unsigned long long)(hstats.world_reads - r0), ray_mi);
-        memcpy(ray, host_front_buffer(), sizeof ray);
-        kc_use_raster = 1; snprintf(name, sizeof name, "%s_raster", s[i].name); shot(name);
-        const uint8_t *ras = host_front_buffer();
-        int w = KC_RP->width, h = KC_RP->height, same = 0, close = 0, geo = 0, holes = 0;
-        for (int y = 0; y < h; y++)
-            for (int x = 0; x < w; x++) {
-                uint8_t a = ray[y * 320 + x], b = ras[y * 320 + x];
-                int sa = (a >> 4) == COLOR_SKY, sb = (b >> 4) == COLOR_SKY;
-                same += a == b;
-                close += (a >> 2) == (b >> 2);          // same color + shade, fog level may differ
-                geo += sa == sb && (sa || ((a >> 2) & 3) == ((b >> 2) & 3));   // sky vs surface + face
-                holes += !sa && sb;                     // ray hit ground, raster shows sky
-            }
-        double geo_pct = 100.0 * geo / (w * h);
-        printf("  %-13s geometry match %5.1f%%, sky holes %d\n", s[i].name, geo_pct, holes);
-        // Edge growth (1/8 px, closes T-junction cracks) fattens silhouettes: 98-99% is expected.
-        if (geo_pct < 97.5 || holes) { printf("  FAIL  %s: geometry below 97.5%% or sky holes\n", s[i].name); failures++; }
-        raster_stats_t *r = &raster_stats;
-        // Instruction estimates from the rv32 disassembly: covers ~25, triangle setup ~450 (kept
-        // from the textured kernel, so conservative: only 1/z is set up now), bin per quad ~40 (culled) / ~250 (visible), chunk frustum test ~800 per chunk;
-        // pixels: depth half ~75 per covered pixel, color half ~78 per covered pixel in a group where
-        // some lane passed (vertex colors: no qrcp, no texture). Ray: 52 per DDA step + ~200 per pixel.
-        const double CD = 75, CC = 78;
-        double px_cost = r->pixels_covered * CD + r->pixels_in_shaded_groups * CC;
-        double chunk_cost = (r->chunks_drawn + r->chunks_frustum_culled) * 800.0;
-        double ras_mi = (r->pixels_tested * 25.0 + px_cost + r->tri_setups * 450.0
-                       + r->quads_culled * 40.0 + r->quads_visible * 250.0 + r->bin_entries * 300.0 + chunk_cost) / 1e6;
-        printf("  %-13s same %5.1f%% | quads vis %4u culled %4u, tile entries %4u, tri setups %4u, px tested %6u "
-               "covered %6u written %6u | est. %.1f M instr%s\n",
-               s[i].name, 100.0 * same / (w * h), r->quads_visible, r->quads_culled,
-               r->bin_entries, r->tri_setups, r->pixels_tested, r->pixels_covered, r->pixels_written, ras_mi,
-               r->vis_overflow || r->bin_overflow ? "  OVERFLOW" : "");
-        printf("  %-13s chunks drawn %2u frustum-culled %2u, quads skipped %4u, backface %4u clipped %4u"
-               " | groups covered %5u shaded %5u, px in shaded groups %6u\n",
-               s[i].name, r->chunks_drawn, r->chunks_frustum_culled, r->quads_skipped,
-               r->quads_backface, r->quads_clipped, r->groups_covered, r->groups_shaded, r->pixels_in_shaded_groups);
-        // Stage 1 frame time (8 lanes): binning runs on lane 0 alone, the kernel runs 8 pixels per
-        // instruction but every lane repeats the per-quad work (quad_to_screen per tile entry, setup).
-        // A frustum-rejected quad pays the transform + plane tests, ~200 (the stock model says 40).
-        double bin0 = r->quads_backface * 40.0 + r->quads_clipped * 200.0 + r->quads_visible * 250.0 + chunk_cost;
-        double kern = r->bin_entries * 300.0 + r->tri_setups * 450.0 + r->pixels_tested / 8.0 * 25.0
-                    + r->groups_covered * CD + r->groups_shaded * CC;
-        printf("  %-13s 8-lane est. %.2f M cycles (lane-0 bin %.2f + kernel %.2f)\n", s[i].name,
-               (bin0 + kern) / 1e6, bin0 / 1e6, kern / 1e6);
-    }
-    kc_set_resolution(160);
-    printf("%s\n", failures ? "SOME CHECKS FAILED" : "all checks passed");
-    return failures != 0;
 }
 
 static int cmd_play(void) {
@@ -488,7 +413,6 @@ static int cmd_bench(void) {
         kc_set_resolution(w);
         uint64_t r0 = hstats.world_reads;
         clock_t c0 = clock();
-        kc_use_raster = 0;
         for (int i = 0; i < 20; i++) { write_camera(); kc_draw_world(); }
         double ms = (double)(clock() - c0) * 1000.0 / CLOCKS_PER_SEC / 20;
         double reads = (double)(hstats.world_reads - r0) / 20;
@@ -516,26 +440,10 @@ static uint64_t window_digest(uint64_t h) {
     return h;
 }
 
-static uint64_t mesh_digest(uint64_t h) {
-    for (int32_t s = 0; s < 16; s++) {
-        mesh_cmd *c = &mesh_cmds[s];
-        h = fnv(h, (uint32_t)c->cx); h = fnv(h, c->cx < 0 ? 0 : (uint32_t)c->cz); h = fnv(h, c->quads);
-        if (c->cx < 0) continue;
-        for (uint8_t p = c->first_page; p != MESH_NONE; p = mesh_page_next[p])
-            for (uint32_t q = 0; q < mesh_page_quads[p]; q++) {
-                h = fnv(h, mesh_pool[p].mat[q]);
-                for (int i = 0; i < 4; i++) h = fnv(h, mesh_pool[p].vtx[q * 4 + i]);
-            }
-    }
-    return h;
-}
-
 static void tap(uint8_t code) { key(code, 1); key(code, 0); }
 
-static int cmd_sweep(const char *mode) {
-    int raster = mode && !strcmp(mode, "raster");
-    kc_use_raster = raster;
-    uint64_t wd = 1469598103934665603ull, md = 1469598103934665603ull;
+static int cmd_sweep(void) {
+    uint64_t wd = 1469598103934665603ull;
     int locations = 48, frames = 0, edits = 0;
     uint32_t worst_loc = 0, worst = 0;
     for (int l = 0; l < locations; l++) {
@@ -569,16 +477,13 @@ static int cmd_sweep(const char *mode) {
         }
         frames += n;
         wd = window_digest(wd);
-        if (raster) { mesh_update(); md = mesh_digest(md); }
         if (arena_high_water() > worst) { worst = arena_high_water(); worst_loc = (uint32_t)l; }
     }
-    printf("  sweep %s: %d locations, %d frames, %d edits, %u chunks generated\n", raster ? "raster" : "ray",
+    printf("  sweep: %d locations, %d frames, %d edits, %u chunks generated\n",
            locations, frames, edits, (unsigned)world_stats_generated());
     printf("  arena high water: %u of %u bytes (first reached at location %u)\n",
            (unsigned)arena_high_water(), (unsigned)ARENA_SIZE, (unsigned)worst_loc);
     printf("  window digest %016llx\n", (unsigned long long)wd);
-    if (raster) printf("  mesh digest   %016llx (%d quads, %d pages now, %u chunks meshed)\n", (unsigned long long)md,
-                       mesh_total_quads(), mesh_pages_used(), (unsigned)mesh_stat_slots);
     return 0;
 }
 
@@ -611,7 +516,7 @@ static int cmd_gencost(void) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: kc_host shots|play|vectors|compare <dir> | contract | bench | sweep ray|raster | gencost\n");
+        fprintf(stderr, "usage: kc_host shots|play|vectors <dir> | contract | bench | sweep | gencost\n");
         return 2;
     }
     if (argc > 2) outdir = argv[2];
@@ -622,8 +527,7 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[1], "vectors")) return cmd_vectors();
     if (!strcmp(argv[1], "contract")) return cmd_contract();
     if (!strcmp(argv[1], "bench"))   return cmd_bench();
-    if (!strcmp(argv[1], "compare")) return cmd_compare();
-    if (!strcmp(argv[1], "sweep"))   return cmd_sweep(argc > 2 ? argv[2] : "ray");
+    if (!strcmp(argv[1], "sweep"))   return cmd_sweep();
     if (!strcmp(argv[1], "gencost")) return cmd_gencost();
     fprintf(stderr, "unknown command %s\n", argv[1]);
     return 2;
