@@ -2,36 +2,54 @@
 // dmem_win.sv) for core_pipe's MEM stage, next to the bus LSU (rtl/core/
 // lsu.sv), which skips the window lanes.
 //
-// start (EX, as the bus LSU's) loads pending with the active mask. While go
-// (MEM holds a load or store with an active lane) every pending lane whose
-// address is in the window (need) is a candidate. Each bank takes the word of
-// its lowest needing lane, and every needing lane on that word is served this
-// cycle; a lane on another word of the same bank waits for a later cycle.
-// fin is high when no needing lane is left after this cycle.
+// start (EX, as the bus LSU's) loads pending with the active lanes whose
+// address is in the window. While go (MEM holds a load or store with an
+// active lane) the pending lanes are served in one of two modes, chosen at
+// start from EX's addresses (ex_addr):
 //
-// fin is a register, so MEM's completion (core_pipe m_done, the pipeline
-// advance) never sees the bank resolution. sb[i][j]: lanes i and j are both
-// in the window and in the same bank; conf[i][j]: sb and different words.
-// start computes both from EX's addresses (ex_addr) and loads fin with "no
-// two active lanes conflict" (one cycle). While go, a needing lane is served
-// unless it conflicts with the lowest needing lane of its bank (lo: the
-// bank-word rule, without the address compare), and fin takes "no two lanes
-// left after this cycle conflict": they then all share their bank's word.
+//   fast: every active window lane i is in bank DWIN_BANKS - 1 - i, the bank
+//   of its own crt0 stack (lane i's 1 KB stack ends at 0x8000 - 1024 i), so
+//   no two lanes share a bank. Every pending lane is served in MEM's first
+//   cycle: bank DWIN_BANKS - 1 - i takes lane i's word, its store bytes and
+//   its byte enables straight from MEM's address and store-data registers.
+//   slow: anything else. Each MEM cycle picks the lanes to serve (S), and
+//   their bank accesses happen in the next cycle (A) from registers: each
+//   bank takes the word of its lowest pending lane, every pending lane on
+//   that word is served, and a lane on another word of the same bank waits
+//   for a later S. So a slow load or store takes one cycle more than the
+//   words its busiest bank serves.
+//
+// served[i]: lane i's bank access happens this cycle (a load's value[i] is
+// valid). fin (a register, so MEM's completion, core_pipe m_done, never sees
+// the bank resolution) is high when the window part ends this cycle: from
+// start in fast mode (or with no window lane), else in the A cycle of the
+// last served lanes (the S cycle before left no pending lane).
+//
+// sb[i][j]: lanes i and j are both in the window and in the same bank;
+// conf[i][j]: sb and different words. start computes both from ex_addr. In
+// S a pending lane is served unless it conflicts with the lowest pending
+// lane of its bank (lo: the bank-word rule, without the address compare).
 //
 // Equivalence with one access per lane in ascending lane order: lanes on
 // different words never interact, and lanes on the same word are served in
 // the same cycle with, for stores, each byte from the highest lane that
 // writes it (as in rtl/core/lsu.sv). The window holds no MMIO, so no access
 // crosses an MMIO access; the window is its own memory, so the bus LSU's
-// lanes and these never touch the same word.
+// lanes and these never touch the same word. A slow store's last writes land
+// at the end of its A cycle, before the next instruction's MEM, and a slow
+// load reads in its A cycle, so window accesses stay in program order.
 //
 // Loads. The banks read asynchronously: value[i] is lane i's byte, halfword
-// or word, extended per funct3, in the cycle the lane is served (served[i]).
+// or word from bank addr[12:10], extended per funct3, valid while served[i].
 //
-// Timing. Everything here comes from registers: pending, sb, conf, fin and
-// the MEM-stage address and store-data registers. The bank address is an
-// 8:1 mux selected by a priority encoder over the lanes' bank bits. ex_addr
-// feeds only sb, conf and fin's start value.
+// Timing. The bank address is always a register (a_addr): at start lane
+// DWIN_BANKS - 1 - b's word, the fast mode's; after that S's pick. The load
+// path is its fanout to the LUT RAMs, the read, the bank select by MEM's
+// address register and the extension. The write enables and data are the
+// fast mode's (MEM's registers through the byte enable decode) or S's
+// registered pick, selected by the fast register. S runs on registers only
+// (pending, sb, conf and the MEM-stage registers) into registers. ex_addr
+// feeds only sb, conf, pending, fast, fin's start value and a_addr.
 module win_lsu
     import kc_isa_pkg::*;
 #(
@@ -61,20 +79,24 @@ module win_lsu
     input  logic [31:0]       b_rdata [DWIN_BANKS]
 );
 
-    logic [LANES-1:0] pending, need, lo, blk, rem, blk_nx;
+    logic [LANES-1:0] pending, pend_go, need, lo, blk, rem, srv_s, a_srv, ex_own;
     logic [LANES-1:0] sb_ex [LANES], conf_ex [LANES];
     logic [LANES-1:0] sb    [LANES], conf    [LANES];
-    logic             one_ex, fin_nx;
+    logic             fast, fast_ex;
     logic [2:0]       bank [LANES];
     logic [7:0]       idx  [LANES];
     logic [3:0]       be_l [LANES];
     logic [31:0]      wd_l [LANES];
+    logic [7:0]       s_addr  [DWIN_BANKS], a_addr  [DWIN_BANKS], f_addr  [DWIN_BANKS];
+    logic [3:0]       s_we    [DWIN_BANKS], a_we    [DWIN_BANKS], f_we    [DWIN_BANKS];
+    logic [31:0]      s_wdata [DWIN_BANKS], a_wdata [DWIN_BANKS], f_wdata [DWIN_BANKS];
 
     for (genvar i = 0; i < LANES; i++) begin : g_lane
-        assign win[i]  = is_dwin(addr[i]);
-        assign need[i] = go && pending[i] && win[i];
-        assign bank[i] = addr[i][12:10];
-        assign idx[i]  = addr[i][9:2];
+        assign win[i]     = is_dwin(addr[i]);
+        assign pend_go[i] = go && pending[i];
+        assign need[i]    = pend_go[i] && !fast;
+        assign bank[i]    = addr[i][12:10];
+        assign idx[i]     = addr[i][9:2];
 
         always_comb begin
             unique case (funct3[1:0])
@@ -94,21 +116,17 @@ module win_lsu
         end
     end
 
-    // Each bank's word: that of its lowest needing lane
-    always_comb begin
-        for (int b = 0; b < DWIN_BANKS; b++) begin
-            b_addr[b] = '0;
-            for (int i = LANES - 1; i >= 0; i--)
-                if (need[i] && bank[i] == 3'(b)) b_addr[b] = idx[i];
-        end
-    end
-
-    // EX: the same-bank and conflict matrices of the addresses start loads
-    // (symmetric, so each pair is compared once) and whether the active
-    // lanes need one cycle
+    // ------------------------------------------------------------------
+    // EX: window lanes, the fast mode check (each active window lane in its
+    // own stack's bank), and the same-bank and conflict matrices
+    // (symmetric, so each pair is compared once)
+    // ------------------------------------------------------------------
     for (genvar i = 0; i < LANES; i++) begin : g_ex_win
         assign ex_win[i] = is_dwin(ex_addr[i]);
+        assign ex_own[i] = !(active[i] && ex_win[i]) ||
+                           (ex_addr[i][12:10] == 3'(DWIN_BANKS - 1 - i));
     end
+    assign fast_ex = &ex_own;
 
     for (genvar i = 0; i < LANES; i++) begin : g_conf_i
         assign sb_ex[i][i]   = 1'b0;
@@ -125,59 +143,90 @@ module win_lsu
         end
     end
 
-    always_comb begin
-        one_ex = 1'b1;
-        for (int i = 0; i < LANES; i++)
-            if (active[i] && ((active & conf_ex[i]) != '0)) one_ex = 1'b0;
-    end
-
-    // lo: the lowest needing lane of each bank, whose word the bank takes. A
-    // needing lane that conflicts with it waits (blk). fin_nx: no two of the
-    // lanes left after this cycle (rem) conflict.
+    // ------------------------------------------------------------------
+    // S (slow mode): lo, the lowest pending lane of each bank, whose word
+    // the bank takes. A pending lane that conflicts with it waits (blk, rem).
+    // ------------------------------------------------------------------
     for (genvar i = 0; i < LANES; i++) begin : g_lo
         localparam logic [LANES-1:0] BELOW = LANES'((64'd1 << i) - 64'd1);
         assign lo[i] = need[i] && ((need & sb[i] & BELOW) == '0);
     end
 
     for (genvar i = 0; i < LANES; i++) begin : g_served
-        assign blk[i]    = (lo & conf[i]) != '0;
-        assign served[i] = need[i] && !blk[i];
-        assign rem[i]    = need[i] && blk[i];
-        assign blk_nx[i] = (rem & conf[i]) != '0;
+        assign blk[i]   = (lo & conf[i]) != '0;
+        assign srv_s[i] = need[i] && !blk[i];
+        assign rem[i]   = need[i] && blk[i];
     end
 
-    assign fin_nx = (rem & blk_nx) == '0;
-
-    // Stores: per bank, the OR of the served lanes' byte enables, each byte
-    // from the highest served lane that writes it.
+    // Each bank's word, and for stores the OR of the served lanes' byte
+    // enables, each byte from the highest served lane that writes it
     always_comb begin
         for (int b = 0; b < DWIN_BANKS; b++) begin
-            b_we[b]    = '0;
-            b_wdata[b] = '0;
+            s_addr[b]  = '0;
+            s_we[b]    = '0;
+            s_wdata[b] = '0;
+            for (int i = LANES - 1; i >= 0; i--)
+                if (need[i] && bank[i] == 3'(b)) s_addr[b] = idx[i];
             for (int i = 0; i < LANES; i++)
-                if (is_store && served[i] && bank[i] == 3'(b)) begin
-                    b_we[b] = b_we[b] | be_l[i];
+                if (is_store && srv_s[i] && bank[i] == 3'(b)) begin
+                    s_we[b] = s_we[b] | be_l[i];
                     for (int k = 0; k < 4; k++)
-                        if (be_l[i][k]) b_wdata[b][k*8 +: 8] = wd_l[i][k*8 +: 8];
+                        if (be_l[i][k]) s_wdata[b][k*8 +: 8] = wd_l[i][k*8 +: 8];
                 end
+        end
+    end
+
+    // ------------------------------------------------------------------
+    // Fast mode: bank b takes its own lane's word (a_addr from start) and
+    // that lane's store bytes
+    // ------------------------------------------------------------------
+    for (genvar b = 0; b < DWIN_BANKS; b++) begin : g_fast
+        localparam int L = DWIN_BANKS - 1 - b;
+        if (L < LANES) begin : g_own
+            assign f_addr[b]  = ex_addr[L][9:2];
+            assign f_we[b]    = (is_store && pend_go[L]) ? be_l[L] : 4'b0000;
+            assign f_wdata[b] = wd_l[L];
+        end else begin : g_none
+            assign f_addr[b]  = '0;
+            assign f_we[b]    = '0;
+            assign f_wdata[b] = '0;
         end
     end
 
     always_ff @(posedge clk) begin
         if (rst) begin
             pending <= '0;
+            fast    <= 1'b1;
             fin     <= 1'b1;
-        end else if (start) begin
-            pending <= active;
-            fin     <= one_ex;
-        end else if (go) begin
-            pending <= pending & ~served;
-            fin     <= fin_nx;
+            a_srv   <= '0;
+            for (int b = 0; b < DWIN_BANKS; b++) a_we[b] <= '0;
+        end else begin
+            a_srv <= srv_s;
+            a_we  <= s_we;
+            if (start) begin
+                pending <= active & ex_win;
+                fast    <= fast_ex;
+                fin     <= fast_ex;
+            end else if (go) begin
+                pending <= fast ? '0 : (pending & ~srv_s);
+                if (!fast) fin <= (rem == '0);
+            end
         end
+        a_wdata <= s_wdata;
+        for (int b = 0; b < DWIN_BANKS; b++)
+            a_addr[b] <= start ? f_addr[b] : s_addr[b];
         if (start) begin
             sb   <= sb_ex;
             conf <= conf_ex;
         end
+    end
+
+    assign served = fast ? pend_go : a_srv;
+
+    for (genvar b = 0; b < DWIN_BANKS; b++) begin : g_port
+        assign b_addr[b]  = a_addr[b];
+        assign b_we[b]    = fast ? f_we[b]    : a_we[b];
+        assign b_wdata[b] = fast ? f_wdata[b] : a_wdata[b];
     end
 
     for (genvar i = 0; i < LANES; i++) begin : g_ld
