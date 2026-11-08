@@ -37,6 +37,9 @@
 //            after. fast_nx reads the address registers and pending, not the
 //            priority encoder.
 //
+// bus_pf_addr (a hint, see below) lets the D-cache read the line of q's next
+// address a cycle early.
+//
 // Loads. The bus returns read data the cycle after an access is accepted;
 // rdata_q registers it, so the data reaches the lanes two cycles after the
 // accept (ld_cap marks the group's lanes then): G groups of a load take
@@ -79,6 +82,7 @@ module lsu_pipe
     output logic [31:0]       bus_addr,
     output logic [3:0]        bus_be,
     output logic [31:0]       bus_wdata,
+    output logic [31:0]       bus_pf_addr,
     input  logic              bus_ready,
     input  logic [31:0]       bus_rdata,
 
@@ -186,6 +190,13 @@ module lsu_pipe
     assign bus_addr  = q_addr;
     assign bus_be    = q_be;
     assign bus_wdata = q_wdata;
+
+    // bus_pf_addr: the address q most likely holds next cycle, for slaves
+    // that read a registered memory one cycle ahead (rtl/mem/dcache.sv):
+    // the next group's lane while lanes are pending (q loads it now, or as
+    // soon as the bus accepts q), else q's own. From registers (pending, the
+    // address registers, q) only, never from bus_ready.
+    assign bus_pf_addr = (pend != '0) ? addr[nxt] : q_addr;
 
     assign accept  = bus_req && bus_ready;
     assign load    = go && (!q_v || accept);

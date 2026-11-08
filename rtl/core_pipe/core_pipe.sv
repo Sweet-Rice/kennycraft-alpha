@@ -114,6 +114,7 @@ module core_pipe
     output logic [31:0]          bus_addr,
     output logic [3:0]           bus_be,
     output logic [31:0]          bus_wdata,
+    output logic [31:0]          bus_pf_addr,   // next cycle's likely bus_addr (lsu_pipe)
     input  logic                 bus_ready,
     input  logic [31:0]          bus_rdata,
 
@@ -868,7 +869,7 @@ module core_pipe
         .go(m_walk), .hold(vt_block), .is_store(m_is_store), .funct3(m_funct3),
         .addr(l_res), .rs2(l_mrs2), .done(lsu_done), .skip(win_lane), .idle(lsu_idle),
         .idle_nx(lsu_idle_nx), .fast_nx(lsu_fast_nx),
-        .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,
+        .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_pf_addr, .bus_ready, .bus_rdata,
         .ld_cap, .ld_value
     );
 

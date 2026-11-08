@@ -122,6 +122,9 @@ module kc_soc
     logic                 imem_ack;
     logic                 bus_req, bus_we, bus_ready;
     logic [31:0]          bus_addr, bus_wdata, bus_rdata;
+    /* verilator lint_off UNUSEDSIGNAL */
+    logic [31:0]          bus_pf_addr;   // the D-cache's read hint, index bits only
+    /* verilator lint_on UNUSEDSIGNAL */
     logic [3:0]           bus_be;
     logic [ERR_WIDTH-1:0] err_set;
     logic [31:0]          err_pc, pc;
@@ -140,7 +143,7 @@ module kc_soc
                     .HAS_QRCP(HAS_QRCP), .HAS_ICACHE(HAS_DDR_MEM)) u_core (
             .clk, .rst,
             .imem_addr, .imem_rdata, .imem_ack,
-            .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_ready, .bus_rdata,
+            .bus_req, .bus_we, .bus_addr, .bus_be, .bus_wdata, .bus_pf_addr, .bus_ready, .bus_rdata,
             .err_set, .err_pc, .halted(err_led), .pc,
             .vt_cfg_we, .vt_cfg_field, .vt_lane_mask, .vt_cfg_data, .vt_start, .vt_max_steps,
             .vt_done, .vt_result, .vt_hit_cell, .vt_t_hit,
@@ -156,6 +159,7 @@ module kc_soc
             .vt_cfg_we, .vt_cfg_field, .vt_lane_mask, .vt_cfg_data, .vt_start, .vt_max_steps,
             .vt_done, .vt_result, .vt_hit_cell, .vt_t_hit
         );
+        assign bus_pf_addr = bus_addr;
         /* verilator lint_off UNUSEDSIGNAL */
         logic unused_win;
         /* verilator lint_on UNUSEDSIGNAL */
@@ -258,7 +262,7 @@ module kc_soc
         dcache u_dcache (
             .clk, .rst,
             .req(dc_req), .we(dc_we), .addr(dc_addr), .be(dc_be), .wdata(dc_wdata),
-            .ready(dc_ready), .rdata(dc_rdata),
+            .ready(dc_ready), .rdata(dc_rdata), .pf_addr(bus_pf_addr[14:4]),
             .lp_req(d_req), .lp_we(d_we), .lp_addr(d_addr), .lp_wdata(d_wdata),
             .lp_gnt(d_gnt), .lp_valid(d_valid), .lp_rdata(d_data)
         );
