@@ -57,6 +57,11 @@ Doom's 320x200 screen (`I_VideoBuffer`, also `DG_ScreenBuffer`) is the SCRATCH B
 `DG_DrawFrame` waits for `FB_SWAP == 0`, writes the palette if Doom changed it (RGB888 to RGB444), copies the frame to
 framebuffer rows 20..219, clears rows 0..19 and 220..239, stores 1 to `FB_SWAP` and logs `kc: frame N at T ms`.
 
+The bootloader's dmem is free once Doom runs (`doom/kc_mem.h`). `--wrap=R_Init` (`doom/kc_render.c`) copies the
+COLORMAP lump (34 x 256 bytes) to dmem 0x1000_0000..0x1000_21FF, points `colormaps` at the copy and rebuilds `zlight`
+from it (`scalelight` is built later by R_ExecuteSetViewSize; the rest reads `colormaps` every frame), so every light
+lookup is a BRAM read. It does not fit in SCRATCH: the screen leaves only 1,536 bytes there (0x7000_FA00..FFFF).
+
 Sound and music are compiled out: `doom/kc_nosound.c` replaces `s_sound.c`/`i_sound.c` with no-ops, so no sound or
 music lump is ever loaded, and `sounds.c`, `memio.c`, `i_cdmus.c`, `mus2mid.c`, `gusconf.c` and every backend are not
 built. Files other than the WAD (config, savegames) fail with ENOENT, which Doom tolerates.

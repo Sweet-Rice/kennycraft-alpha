@@ -42,7 +42,7 @@ DOOM_ENGINE := dummy am_map doomdef doomstat dstrings d_event d_items d_iwad d_l
     r_plane r_segs r_sky r_things sha1 statdump st_lib st_stuff tables v_video \
     wi_stuff w_checksum w_file w_main w_wad z_zone w_file_stdc i_input i_video \
     doomgeneric
-DOOM_PLAT   := doomgeneric_kc kc_nosound syscalls $(if $(filter 1,$(KC_PROF)),kc_prof)
+DOOM_PLAT   := doomgeneric_kc kc_render kc_nosound syscalls $(if $(filter 1,$(KC_PROF)),kc_prof)
 
 DOOM_ARCH   := -march=rv32i_zmmul -mabi=ilp32
 DOOM_CFLAGS := $(DOOM_ARCH) -O2 -mstrict-align -ffunction-sections -fdata-sections \
@@ -52,7 +52,7 @@ DOOM_ARGS_DEF := -D'KC_DOOM_ARGS=$(foreach a,$(DOOM_ARGS),"$(a)",)'
 DOOM_OPTS   := -DKC_PROF=$(KC_PROF) -DKC_VCLOCK=$(KC_VCLOCK)
 # The screen buffer goes to SCRATCH BRAM without editing doomgeneric
 # (doom/doomgeneric_kc.c).
-DOOM_WRAPS  := I_InitGraphics I_FinishUpdate R_ExecuteSetViewSize \
+DOOM_WRAPS  := I_InitGraphics I_FinishUpdate R_ExecuteSetViewSize R_Init \
     $(if $(filter 1,$(KC_PROF)),R_RenderPlayerView R_RenderBSPNode R_DrawPlanes R_DrawMasked TryRunTics G_Ticker ST_Drawer HU_Drawer \
         V_DrawPatch V_DrawPatchDirect V_CopyRect V_DrawBlock)
 DOOM_COMMA  := ,
