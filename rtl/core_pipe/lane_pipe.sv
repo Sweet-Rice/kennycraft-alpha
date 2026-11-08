@@ -102,7 +102,9 @@ module lane_pipe
     // ------------------------------------------------------------------
     // EX
     // ------------------------------------------------------------------
-    logic [31:0] e_rs1, e_rs2, rs2, fwd, alu_a, alu_b, alu_y;
+    logic [31:0] e_rs1, e_rs2, rs2, fwd, alu_a, alu_b, alu_y, res_oth;
+    logic [31:0] sh_in, sh_out, sum;
+    logic        lt, ltu, use_alu;
 
     assign rs1 = fm1 ? fwd : (fw1 && w_we) ? w_res : e_rs1;
     assign rs2 = fm2 ? fwd : (fw2 && w_we) ? w_res : e_rs2;
@@ -121,7 +123,38 @@ module lane_pipe
         endcase
     end
 
-    alu #(.W(32)) u_alu (.a(alu_a), .b(alu_b), .op(alu_ctrl), .result(alu_y));
+    // The ALU of rtl/core/alu.sv (same op encoding and results), except
+    // that the shifter reads rs1 directly: only AUIPC, JAL and JALR (ADD)
+    // take pc as operand a, so the pc mux stays off the shift path, and the
+    // SLL operand reversal is one LUT on the forwarded rs1.
+    assign sh_in = (alu_ctrl[2:0] == 3'b001) ? {<<{rs1}} : rs1;   // SLL : SRL/SRA
+
+    barrel_shifter #(.W(32)) u_sh (
+        .a(sh_in), .b(alu_b[4:0]), .sel(alu_ctrl[3] & rs1[31]), .result(sh_out)
+    );
+
+    addsub #(.W(32)) u_addsub (
+        .a(alu_a), .b(alu_b), .sub(alu_ctrl[3] | alu_ctrl[1]), .sum(sum), .lt(lt), .ltu(ltu)
+    );
+
+    always_comb begin
+        unique case (alu_ctrl[2:0])
+            3'b000: alu_y = sum;                   // ADD, SUB
+            3'b001: alu_y = {<<{sh_out}};          // SLL
+            3'b010: alu_y = {31'd0, lt};           // SLT
+            3'b011: alu_y = {31'd0, ltu};          // SLTU
+            3'b100: alu_y = alu_a ^ alu_b;         // XOR
+            3'b101: alu_y = sh_out;                // SRL, SRA
+            3'b110: alu_y = alu_a | alu_b;         // OR
+            3'b111: alu_y = alu_a & alu_b;         // AND
+        endcase
+    end
+
+    assign use_alu = !(ray_en || stash || res_imm || is_lane);
+    assign res_oth = ray_en                 ? ray_y :
+                     stash                  ? rs1 :
+                     res_imm                ? imm :
+                     (funct3 == F3_LANEID)  ? 32'(ID) : lane_y;   // is_lane
 
     // The load/store address (the ALU's rs1 + imm, which res latches) and
     // the JALR sum, from an adder of its own without the ALU's operand and
@@ -141,17 +174,13 @@ module lane_pipe
     logic [31:0] mul_y, qr_y, ld_hold;
 
     always_ff @(posedge clk) begin
-        if (ex_go) begin
-            if (ray_en)                              res <= ray_y;
-            else if (stash)                          res <= rs1;
-            else if (res_imm)                        res <= imm;
-            else if (is_lane && funct3 == F3_LANEID) res <= 32'(ID);
-            else if (is_lane)                        res <= lane_y;
-            else                                     res <= alu_y;
-            m_rs2 <= is_jalr ? ea : rs2;
-        end else if (vt_wr) begin
-            res <= vt_y;
-        end
+        // res: the non-ALU results (res_oth, use_alu: decode registers and
+        // rs1) are muxed beside the ALU, so alu_y meets one select. vt_wr
+        // comes first: it is never high with ex_go (MEM's VTRACE holds EX
+        // until the cycle after vt_wr), and adv stays off res's data path.
+        if (vt_wr)      res <= vt_y;
+        else if (ex_go) res <= use_alu ? alu_y : res_oth;
+        if (ex_go) m_rs2 <= is_jalr ? ea : rs2;
         if (ld_cap) ld_hold <= ld_value;
     end
 
