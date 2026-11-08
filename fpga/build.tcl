@@ -108,7 +108,12 @@ report_utilization -hierarchical -hierarchical_depth 4 -file $out/utilization_hi
 check_timing -verbose -file $out/check_timing.rpt
 write_checkpoint -force $out/routed.dcp
 write_bitstream -force $out/top.bit
-write_mem_info -force $out/top.mmi
+# top.mmi describes the XPM memories in block RAM. write_mem_info errors out
+# when there are none (top_doom's line-bridge FIFOs are distributed), so skip
+# it then; patch_bit.sh only needs kc.mmi.
+if {[llength [get_cells -hier -quiet -filter {REF_NAME =~ RAMB* && NAME =~ *xpm_memory_base_inst*}]]} {
+    write_mem_info -force $out/top.mmi
+}
 if {$kc_mmi} {
     kc_write_mmi $out/kc.mmi $kc_mems
 }
