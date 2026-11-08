@@ -64,8 +64,9 @@ TOOLS = [
 
 
 class Contract:
-    def __init__(self, cid, chip, bank, ask_player, origin=(0, 0), zone=(8, 8, 8), seed=0, worker=None):
+    def __init__(self, cid, chip, bank, ask_player, origin=(0, 0), zone=(8, 8, 8), seed=0, worker=None, cap=200):
         self.id, self.chip, self.bank, self.ask = cid, chip, bank, ask_player
+        self.cap = cap                  # most the bank lets a quote be (KCN)
         self.worker = worker            # entity id of the contractor villager, walked to the site on build
         self.zone = zone
         ox, oz = origin
@@ -132,7 +133,7 @@ class Contract:
     def quote(self, price=0, message=""):
         if self.state != "PLANNED":
             return {"error": "submit a plan that passes first"}
-        p = bankmod.clamp_price(price, self.rule, self.bank.balance("player"))
+        p = bankmod.clamp_price(price, self.rule, self.bank.balance("player"), self.cap)
         if p is None:
             return {"error": "the player can't afford this plan; make it smaller", "rule_price_kcn": self.rule}
         self.offer = p                  # the chip's quote prompt shows it while ask() waits

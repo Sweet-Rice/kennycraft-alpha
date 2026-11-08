@@ -32,6 +32,16 @@ design history; decision numbers such as D22 refer to it.
 
 ## Bank companion
 
+| Command | Runs against |
+| --- | --- |
+| `python host/kchost.py` | A byte-level fake chip (no board, no game build) |
+| `KC_CHIP=host python host/kchost.py` | The game's laptop build (`game/build/kc_host link` in WSL); `KC_GAME_DIR` picks the folder |
+| `KC_CHIP=serial KC_PORT=COM5 python host/kchost.py` | The Arty's UART at 1 Mbaud; keys come from the page's key box |
+| `KC_DEMO=1 KC_CHIP=host python host/kchost.py` | The demo village (build the game with `make KC_DEMO=1`): villagers at their stalls, chickens in the pen, builds on the plot, and the player starts with 300 KCN from the treasury |
+
+`KC_LINK_FPS=50 KC_REC=/tmp/kcrec` makes the game build run a 50 fps clock and save every
+frame. Nemotron reasoning is off by default for speed; `NEMOTRON_THINKING=1` turns it on.
+
 With the existing bank configuration in place, run `python host/kchost.py` and
 open http://127.0.0.1:8000. The Wallets card includes a native-canvas player KCN
 chart fed by the page's existing `/events` stream; no separate dashboard,

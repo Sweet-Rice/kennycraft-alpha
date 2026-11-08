@@ -124,6 +124,16 @@ class TestContract(unittest.TestCase):
             log=lambda t: None, autopilot=True)
         self.assertEqual((bad.state, bank.wallets["escrow"], bank.wallets["player"]), ("REFUNDED", 0, 200))
 
+    def test_price_cap_is_per_contract(self):
+        for cap, want in ((200, 200), (400, 400)):
+            c, bank = contract(player=1000)
+            c.cap = cap
+            c.zone = (12, 10, 12)
+            r = c.use_blueprint("longhouse")
+            self.assertTrue(r["ok"], r)
+            self.assertGreater(r["rule_price_kcn"] * 3 // 2, 400)
+            self.assertEqual(c.quote(10 ** 6, "big")["price_kcn"], want)
+
     def test_site_survey_rides_with_the_request(self):
         c, _ = contract()
         seen = []

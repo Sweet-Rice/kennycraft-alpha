@@ -45,6 +45,8 @@ DEMO_SITE = (DEMO_PLOT_W - 2, 10, DEMO_PLOT_W - 2)           # inside the plot's
 DEMO_MOBS = [("banker", 0, -6.5, 9.5, 1), ("builder", 1, 0.5, 16.5, 1), ("trader", 0, 7.5, 9.5, 1),
              ("chicken", 2, -7.5, 2.5, 1.5), ("chicken", 2, -6.5, 3.5, 1.5), ("chicken", 2, -7.5, 4.5, 1.5)]
 TALKERS = ("banker", "builder", "trader")
+DEMO_START = 300        # KCN the player has when kc-host starts in the demo (topped up from the treasury)
+DEMO_CAP = 400          # price cap for builds on the 12x12 plot (200 elsewhere)
 RETRY = ("RATE", "BUSY")
 EXPLORER = "https://explorer.solana.com/tx/{}?cluster=devnet"
 
@@ -472,7 +474,8 @@ class Orchestrator:
     def _agent(self, job, site, worker, y0):
         size = DEMO_SITE if DEMO else SITE
         job.scan(site[0], site[1], size[0], size[2], y0 - 1, 17)   # from the ground layer up: plans must rest on it
-        job.contract = builder.Contract(job.id, job, job, job.ask, origin=site, zone=size, worker=worker)
+        job.contract = builder.Contract(job.id, job, job, job.ask, origin=site, zone=size, worker=worker,
+                                        cap=DEMO_CAP if DEMO else 200)
         reply = builder.run(job.text, job.contract, self.chat(), autopilot=True,
                             log=lambda t: print(time.strftime("%H:%M:%S"), f"#{job.id}", t, file=sys.stderr, flush=True))
         job.note = job.note or reply or ""      # "quote expired" beats the agent's sign-off

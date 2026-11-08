@@ -29,7 +29,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 import cr6
 from bank import InsufficientFunds, Ledger, Settler, exchange
 from nessie import Nessie, NessieError, env
-from orchestrator import STOCK, TYPES, Orchestrator
+from orchestrator import DEMO, DEMO_START, STOCK, TYPES, Orchestrator
 
 HERE = Path(__file__).resolve().parent
 for k in ("NVIDIA_API_KEY", "NEMOTRON_API_KEY", "NEMOTRON_BASE_URL", "NEMOTRON_MODEL", "NANO_BASE_URL", "NANO_MODEL", "NANO_API_KEY"):    # kc_agents/llm.py reads os.environ
@@ -44,6 +44,8 @@ class Host:
         if not self.ledger.stock("trader"):
             self.ledger.move_items([("trader", k, n) for k, n in STOCK.items()])
         self.settler = Settler(self.ledger)
+        if DEMO and self.ledger.balance("player") < DEMO_START:   # recording shouldn't wait on Nessie
+            self.ledger.post("grant", "treasury", "player", DEMO_START - self.ledger.balance("player"))
         drift = await self.settler.reconcile()
         if drift:
             self.say(f"chain and ledger differ: {drift}")

@@ -27,7 +27,8 @@ from solders.transaction import Transaction
 ROOT = Path(__file__).resolve().parent.parent
 TOKEN = Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
 MEMO = Pubkey.from_string("Memo4c2pN8afCj432Lb7RMVKi9PbQnnW7ewFFaV3oAH")  # what spl-token --with-memo uses
-KINDS = {"exchange_in", "exchange_out", "fund", "release", "fee", "refund", "trade_buy", "trade_sell"}
+KINDS = {"exchange_in", "exchange_out", "fund", "release", "fee", "refund", "trade_buy", "trade_sell",
+         "grant"}  # grant: the demo village tops the player up from the treasury (kchost.py)
 RATE = 10  # KCN per dollar (placeholder)
 
 # tx/lvbh hold the last signed attempt: it is rebroadcast until its blockhash
