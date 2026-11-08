@@ -16,7 +16,7 @@ def scripted(*steps):
     steps = list(steps)
 
     def chat(messages, tools):
-        s = steps.pop(0)
+        s = steps.pop(0) if len(steps) > 1 or not isinstance(steps[0], str) else steps[0]   # last words repeat
         if isinstance(s, str):
             return {"content": s, "tool_calls": []}
         return {"content": "", "tool_calls": [{"id": f"c{len(steps)}{i}", "name": n, "args": a}
@@ -76,6 +76,14 @@ class TestContract(unittest.TestCase):
         self.assertTrue(all(c.chip.get(*cell) == b for cell, b in c.target.items()))
         door = c._abs(2, 1, 0)
         self.assertEqual(c.chip.get(*door), 0)
+
+    def test_floating_build_is_rejected(self):
+        c, _ = contract()
+        up = [dict(op, at=[op["at"][0], op["at"][1] + 3, op["at"][2]]) for op in HUT]
+        r = c.submit_plan("sky hut", up)
+        self.assertFalse(r["ok"])
+        self.assertIn("floats", r["errors"][0])
+        self.assertTrue(c.submit_plan("hut", HUT)["ok"])
 
     def test_order_is_enforced(self):
         c, bank = contract()
