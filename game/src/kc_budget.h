@@ -1,7 +1,7 @@
 // kc_budget.h — the 192 KB rendering + real-time budget, checked at compile time.
 // Chunk storage (memory API, up to 256 MB) is outside this budget.
 //
-// Framebuffers: Josh's plan puts the two framebuffers in main memory, so they are listed
+// Framebuffers: the two framebuffers live in main memory, so they are listed
 // but not counted by default. Build with -DKC_BUDGET_COUNT_FB=1 to count them too; at
 // 160x120 (1 byte per pixel, double-buffered) everything still fits.
 #ifndef KC_BUDGET_H

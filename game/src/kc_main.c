@@ -62,16 +62,19 @@ void kc_draw_world(void) {
     if (kc_use_raster) {
         mesh_update();            // remesh chunks that changed (lane 0, arena scratch)
         raster_bin();             // per-tile command lists (lane 0)
+        while (hal_mmio_r(MMIO_FB_SWAP)) {}           // 1. last swap done: back buffer is ours (D21)
         mask_all(); kc_raster_kernel(); mask_set(1);
         return;
     }
 #endif
+    while (hal_mmio_r(MMIO_FB_SWAP)) {}               // 1. (D21)
     mask_all(); kc_render_frame(); mask_set(1);
 }
 
-// Frame loop, in the order of issue #2.
+// Frame loop, in the order of issue #2, with the swap wait moved down (D21): steps 2-7
+// and the lane-0 prep in kc_draw_world never touch the framebuffer, so they overlap
+// the vblank wait. Only the kernel and the overlay write the back buffer.
 void kc_frame(void) {
-    while (hal_mmio_r(MMIO_FB_SWAP)) {}               // 1. last swap done: back buffer is ours
     arena_reset();                                     // 2.
     read_keys();                                       // 3.
     uint32_t now = hal_mmio_r(MMIO_CYCLES);
