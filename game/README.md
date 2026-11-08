@@ -159,7 +159,7 @@ It saves `base`, `m0_models`, `m1_trader`, `m1_contractor`, `m1_chicken`, `m1_zo
 
 ## Numbers
 
-- Performance overlay: press **F** in game (`kc.py` and `kc_live.py` send it) for frames per second, frame time, the entity count and a bar splitting the frame into draw (white: entity prep, swap wait, kernel) and the rest (gold), top right. It uses the last frame's CYCLES (20 ns ticks), costs nothing while off, and is not built with `KC_FIXED_DT`, which keeps CYCLES off the screen.
+- Performance overlay: press **F** in game (`kc.py` and `kc_live.py` send it) for frames per second, top right, from the last frame's CYCLES (20 ns ticks). It costs nothing while off. It is built for the Stage 2 chip and the laptop only: the Stage 0/1 chip builds have no code memory to spare, and `KC_FIXED_DT` builds keep CYCLES off the screen.
 - Software DDA loop (`vtrace_ref`): 53 RV32I instructions per step on `kc_chip8.elf`, 49 on `kc_chip.elf`, counted in `llvm-objdump -d`.
 - The default cap is 64 (`-DKC_MAX_STEPS`). At that cap the 160×120 spawn shot (`g0_spawn`) is 297,672 steps.
 - Stage 2 frame time, measured with `make tb-top-t_top_frame TOP_ELF=kc_chip8_vtrace TOP_SWAPS=6` (add `PIPELINED=1` for the pipelined core): the core cycles between FB_SWAPs at the spawn pose, no entities. The multi-cycle core (`top_s2`) runs at 50 MHz, the pipelined core at 50 MHz (`top_s2p`) or 100 MHz (`top_s2p100`).
