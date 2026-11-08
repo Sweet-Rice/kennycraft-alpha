@@ -2,10 +2,11 @@
 # (dashboard, Nemotron agents, villagers spawned on link), the dashboard in the browser, and
 # kenny_keys sending keyboard and mouse through kc-host. Quit the keys window to stop it all.
 #
-#   .\scripts\kenny_play.ps1               COM3
-#   .\scripts\kenny_play.ps1 -Port COM5 -Demo    demo village (board built with KC_DEMO=1)
+#   .\scripts\kenny_play.ps1               COM3, demo village (the board's game built with KC_DEMO=1)
+#   .\scripts\kenny_play.ps1 -Port COM5 -Demo $false    a game built without KC_DEMO; builds go next to you
 #   .\scripts\kenny_play.ps1 -Root ..\kennycraft-alpha   kc-host (its .env and ledger) from another checkout
-param([string]$Port = 'COM3', [switch]$Demo, [string]$Root = (Split-Path $PSScriptRoot))
+# -Demo must match the board: a demo chip only lets builds onto the village plot (OUT_OF_ZONE elsewhere).
+param([string]$Port = 'COM3', [bool]$Demo = $true, [string]$Root = (Split-Path $PSScriptRoot))
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path $Root).Path
 $started = @()
@@ -19,7 +20,7 @@ try {
     }
     if (Listening 8000) { throw 'port 8000 is taken: another kc-host is running, stop it first' }
     $env:KC_CHIP = 'serial'; $env:KC_PORT = $Port
-    if ($Demo) { $env:KC_DEMO = '1' }
+    $env:KC_DEMO = if ($Demo) { '1' } else { '' }
     $kc = Start-Process python -PassThru -NoNewWindow -WorkingDirectory $root -ArgumentList 'host/kchost.py'
     $started += $kc
     for ($i = 0; -not (Listening 8000); $i++) {
