@@ -158,6 +158,16 @@ open. Both refuse while another agent holds the board, and post
 `kc-bench`). `kc.mmi` has no palette BRAM, so a `PAL_HEX` change needs a
 Vivado rebuild.
 
+`scripts/kc_live.py` plays the board in one window: it shows the HDMI capture
+card (ffmpeg, `--video /dev/video2`, MJPEG `--capture 1280x720`, scaled to a
+4:3 `--size 960x720`) and sends keys and mouse to the UART (`--port
+/dev/ttyUSB1`) with `scripts/kc.py`'s key bytes. Click to capture the mouse;
+Esc releases it, Esc again quits. It needs pygame-ce, pyserial and ffmpeg,
+and holds the same hardware lock while open (`--no-lock` skips it), but does
+not post on issue #1. It clears HUPCL on the UART so closing the port leaves
+DTR up: the Arty resets the design on a DTR edge, so only the first open after
+a replug resets the board. It runs on Linux only (`fcntl`, `termios`, v4l2).
+
 ## Pipelined core (P8)
 
 `rtl/core_pipe/` is a pipelined version of the core (IF, F2, ID, EX, MEM,
