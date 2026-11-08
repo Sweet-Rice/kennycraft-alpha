@@ -130,7 +130,28 @@ Environment variables for `kc_host` (`host/hal_host.c`): `KC_DDR_FILL=random|zer
 | `gencost` | Terrain generation cost per chunk, plus a chunk digest |
 | `link <dir>` | stdin = UART RX, stdout = UART TX at ~20 fps, `<dir>/live.png` every 4th frame |
 
+## The Nether
+
+The Nether is the east strip of the same world, from x = 3072 (`NETHER_X0` in `src/blocks.h`), so
+chunk storage, tags and the window need nothing new. `src/terrain.c` fills it with a bedrock
+floor, roof and wall at x = 3072, netherrack floor (y 1..10) and ceiling (y 24..30), lava lakes
+up to y 5 and glowstone hanging from the ceiling.
+
+- **Portals:** obsidian is hotbar slot 6. A frame of obsidian around a 2 wide x 3 tall hole
+  (corners optional), standing along x or z, lights when its last block is placed: the hole
+  fills with portal blocks. Walk into one to travel; it fires again only after you step out.
+  The demo village (`KC_DEMO=1`) has a ruined portal missing one block in front of spawn.
+- **P** travels without a portal.
+- **Travel:** from the overworld you arrive at the same z, 512 blocks past the wall, standing in
+  a new lit portal; going back returns you to where you left. The window reloads around the
+  new spot (one chunk generated per frame), physics waits for it, and you land in the first
+  column with standing room that is not over lava.
+- **Colors:** the Nether has a red sky and fog. Only the palette changes: the sky and fogged
+  entries are rewritten on the way in and out (`set_world_colors` in `src/game.c`, colors from
+  `tools/gen_assets.py`).
+
 ## Entity models
+
 
 The game spawns no entities on its own. Lane-0 code (including CR6 SPAWN) calls `entity_add(kind, x, y, z, facing)`
 with an absolute Q16 feet center; facing 0/1/2/3 means +z/+x/-z/-x.
