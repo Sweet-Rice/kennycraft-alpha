@@ -17,6 +17,7 @@ The model only chooses actions. Code enforces the rules: mobs move at most 8 blo
 | `mobs.py` | `MobManager`: rule brain, Nano villager brain, validation, fallback |
 | `builder.py` | The builder agent: tools, contract state machine, agent loop |
 | `bank.py` | What agents may ask of the bank (`balance`, `fund`, `release`, `refund`) and a `FakeBank` |
+| `cr6.py` | CR6 laptop side: frames + CRC-8, stream decoder, credit-paced `Link`, `Cr6Chip` (the agents' chip interface over UART, with a local world copy), `FakeUartChip` (16-byte FIFO, one drain and STATUS per frame) |
 | `llm.py` | `nemotron_chat()` (Super, tool calls) and `nano_json()` (Nano, JSON) over the OpenAI API |
 | `demo.py` | Mobs for 20 s, then a full builder contract on the fake chip |
 
@@ -24,7 +25,7 @@ The real bank and the UART bridge plug in by exposing the same methods as `FakeB
 
 ## Run
 ```sh
-python -m unittest kc_agents.test_builder kc_agents.test_mobs   # no network
+python -m unittest kc_agents.test_builder kc_agents.test_mobs kc_agents.test_cr6   # no network
 python -m kc_agents.demo                                         # rules + scripted builder
 NVIDIA_API_KEY=... python -m kc_agents.demo                      # builder on Nemotron Super
 NANO_BASE_URL=http://127.0.0.1:8080/v1 python -m kc_agents.demo  # villagers on local Nano
