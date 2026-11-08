@@ -10,7 +10,10 @@
 //   --wrap=I_FinishUpdate  skips doomgeneric's copy into DG_ScreenBuffer
 //                          (DG_ScreenBuffer is SCRATCH too) and draws.
 // Palette: RGB888 -> RGB444 at 0x6000_0000 whenever Doom changes it.
-// Time: CYCLES (20 ns ticks). Keys: UART RX key bytes, map in map_key.
+// Time: CYCLES (20 ns ticks), or with KC_VCLOCK=1 a virtual clock that only
+// moves on DG_SleepMs and by one tic per frame, so every frame is a function
+// of the frame number alone (frame-for-frame comparisons across builds).
+// Keys: UART RX key bytes, map in map_key.
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,6 +45,20 @@ static inline uint32_t mmio_r(uint32_t off) { return MMIO[off >> 2]; }
 static inline void mmio_w(uint32_t off, uint32_t v) { MMIO[off >> 2] = v; }
 
 // ---- time ---------------------------------------------------------------
+static uint32_t frames;
+
+#if KC_VCLOCK
+static uint32_t slept_ms;
+
+uint32_t DG_GetTicksMs(void) {
+    // Starts at 1 s: I_GetTime takes its base from the first nonzero reading.
+    return 1000u + slept_ms + frames * 1000u / 35u;
+}
+
+void DG_SleepMs(uint32_t ms) {
+    slept_ms += ms;
+}
+#else
 static uint64_t ticks;           // CYCLES extended to 64 bits
 static uint32_t last_cycles;
 
@@ -60,6 +77,7 @@ void DG_SleepMs(uint32_t ms) {
     uint64_t until = now_ticks() + (uint64_t)ms * TICKS_PER_MS;
     while (now_ticks() < until) {}
 }
+#endif
 
 // ---- video --------------------------------------------------------------
 static void clear_rows(uint32_t y0, uint32_t y1) {
@@ -67,7 +85,9 @@ static void clear_rows(uint32_t y0, uint32_t y1) {
 }
 
 void DG_Init(void) {
+#if !KC_VCLOCK
     last_cycles = mmio_r(MMIO_CYCLES);
+#endif
     free(DG_ScreenBuffer);           // doomgeneric_Create's heap copy is never used
     DG_ScreenBuffer = SCRATCH;
     mmio_w(MMIO_FB_MODE, 0);
@@ -80,8 +100,6 @@ void __wrap_I_InitGraphics(void) {
     Z_Free(I_VideoBuffer);
     I_VideoBuffer = SCRATCH;
 }
-
-static uint32_t frames;
 
 void DG_DrawFrame(void) {
     while (mmio_r(MMIO_FB_SWAP)) {}

@@ -10,6 +10,8 @@
 #
 #   DOOM_ARGS   extra Doom command-line arguments baked into the image,
 #               e.g. make doom DOOM_ARGS="-warp 1 1"
+#   KC_VCLOCK=1 virtual clock, one tic per frame: frames depend on the frame
+#               number only, for frame-for-frame comparisons across builds
 
 DOOM_CROSS   ?= /home/tai/AMD/2026.1/gnu/riscv/lin/bin/riscv64-unknown-elf-
 DOOM_CC      := $(DOOM_CROSS)gcc
@@ -19,6 +21,7 @@ DOOM_NM      := $(DOOM_CROSS)nm
 DOOM_SIZE    := $(DOOM_CROSS)size
 PYTHON       ?= python3
 DOOM_ARGS    ?=
+KC_VCLOCK    ?= 0
 
 DOOM_OUT    := out/doom
 DOOM_OBJ    := $(DOOM_OUT)/obj
@@ -44,11 +47,14 @@ DOOM_CFLAGS := $(DOOM_ARCH) -O2 -mstrict-align -ffunction-sections -fdata-sectio
     -fno-asynchronous-unwind-tables -fno-unwind-tables \
     -DCMAP256 -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 -I$(DOOM_DG)
 DOOM_ARGS_DEF := -D'KC_DOOM_ARGS=$(foreach a,$(DOOM_ARGS),"$(a)",)'
+DOOM_OPTS   := -DKC_VCLOCK=$(KC_VCLOCK)
 # The screen buffer goes to SCRATCH BRAM without editing doomgeneric
 # (doom/doomgeneric_kc.c).
+DOOM_WRAPS  := I_InitGraphics I_FinishUpdate
+DOOM_COMMA  := ,
 DOOM_LDFLAGS := $(DOOM_ARCH) -nostartfiles -T doom/kc_doom.ld -Wl,--gc-sections \
     -Wl,--no-warn-rwx-segments -Wl,--build-id=none -Wl,-Map,$(DOOM_OUT)/doom.map \
-    -Wl,--wrap=I_InitGraphics -Wl,--wrap=I_FinishUpdate
+    $(addprefix -Wl$(DOOM_COMMA)--wrap=,$(DOOM_WRAPS))
 
 DOOM_OBJS := $(DOOM_OBJ)/crt0.o $(addprefix $(DOOM_OBJ)/dg_,$(addsuffix .o,$(DOOM_ENGINE))) \
     $(addprefix $(DOOM_OBJ)/,$(addsuffix .o,$(DOOM_PLAT)))
@@ -64,9 +70,10 @@ doom: $(DOOM_OUT)/kc_imem.hex $(DOOM_OUT)/kc_dmem.hex $(DOOM_OUT)/ddr.manifest \
 $(DOOM_OBJ):
 	mkdir -p $@
 
-# The baked-in arguments are part of the build: rebuild doomgeneric_kc.o when they change.
+# The baked-in arguments and the KC_ options are part of the build: rebuild the
+# platform objects and relink when they change.
 $(DOOM_OBJ)/args: FORCE | $(DOOM_OBJ)
-	@echo '$(DOOM_ARGS)' | cmp -s - $@ || echo '$(DOOM_ARGS)' > $@
+	@echo '$(DOOM_ARGS) $(DOOM_OPTS)' | cmp -s - $@ || echo '$(DOOM_ARGS) $(DOOM_OPTS)' > $@
 
 $(DOOM_OBJ)/crt0.o: doom/crt0.S | $(DOOM_OBJ)
 	$(DOOM_CC) $(DOOM_ARCH) -c $< -o $@
@@ -75,14 +82,14 @@ $(DOOM_OBJ)/dg_%.o: $(DOOM_DG)/%.c | $(DOOM_OBJ)
 	$(DOOM_CC) $(DOOM_CFLAGS) -w -MMD -c $< -o $@
 
 $(DOOM_OBJ)/doomgeneric_kc.o: doom/doomgeneric_kc.c $(DOOM_OBJ)/args | $(DOOM_OBJ)
-	$(DOOM_CC) $(DOOM_CFLAGS) -Wall -Wextra $(DOOM_ARGS_DEF) -MMD -c $< -o $@
+	$(DOOM_CC) $(DOOM_CFLAGS) -Wall -Wextra $(DOOM_ARGS_DEF) $(DOOM_OPTS) -MMD -c $< -o $@
 
-$(DOOM_OBJ)/%.o: doom/%.c | $(DOOM_OBJ)
-	$(DOOM_CC) $(DOOM_CFLAGS) -Wall -Wextra -MMD -c $< -o $@
+$(DOOM_OBJ)/%.o: doom/%.c $(DOOM_OBJ)/args | $(DOOM_OBJ)
+	$(DOOM_CC) $(DOOM_CFLAGS) -Wall -Wextra $(DOOM_OPTS) -MMD -c $< -o $@
 
 -include $(wildcard $(DOOM_OBJ)/*.d)
 
-$(DOOM_OUT)/doom.elf: $(DOOM_OBJS) doom/kc_doom.ld
+$(DOOM_OUT)/doom.elf: $(DOOM_OBJS) doom/kc_doom.ld $(DOOM_OBJ)/args
 	$(DOOM_CC) $(DOOM_LDFLAGS) $(DOOM_OBJS) -lc -lm -lgcc -o $@
 	$(DOOM_SIZE) -A $@
 

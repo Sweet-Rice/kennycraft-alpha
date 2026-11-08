@@ -12,6 +12,12 @@ the I-cache and D-cache). This directory holds the platform layer and libc glue 
     make doom-vl RUN_ARGS="--headless --frames 3 --png-dir out/doom/png"
     scripts/doom_load.py [--port /dev/ttyUSB1]   # board: send the DDR3 image to the bootloader
 
+Build options (`make doom VAR=value`; each one rebuilds the platform objects and relinks):
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `KC_VCLOCK=1` | 0 | virtual clock: time moves only on `DG_SleepMs` and by one tic (1000/35 ms) per frame, so each frame depends on the frame number alone; for frame-for-frame comparisons of builds that run at different speeds |
+
 `make doom` outputs, in `out/doom/`:
 
 | File | What |
