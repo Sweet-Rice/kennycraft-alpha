@@ -26,7 +26,7 @@ and `llvm-nm` on `PATH`. `llvm-size` is optional, for section-size diagnostics.
 macOS can cross-build the chip images with the full LLVM toolchain using
 `make chip chip8 CHIP_CC="clang -fuse-ld=lld"`.
 
-`CC` (default `cc`) builds `kc_host`; `CHIP_CC` (default `clang`) builds the chip ELFs. The chip build compiles the lane-0 game files (`arena.c terrain.c chunks.c game.c kc_main.c cr6.c`) with `-Os` and the kernel files with `-O2`; IMEM is 32 KB. `build/`, `out/`, `gen/` and `assets/` are gitignored.
+`CC` (default `cc`) builds `kc_host`; `CHIP_CC` (default `clang`) builds the chip ELFs. The chip build compiles the lane-0 game files (`arena.c terrain.c chunks.c game.c kc_main.c cr6.c`) with `-Os` and the kernel files with `-O2`; IMEM is 32 KB. At main 12faff7, `.text` is 32,180 bytes in `kc_chip.elf` (Stage 0) and 30,944 in `kc_chip8_vtrace.elf` (Stage 2). The Stage 0/1 golden builds (`scripts/golden.py`) add the shot harness, so they also build `entity.c` with `-Os`; the frames are the same. `build/`, `out/`, `gen/` and `assets/` are gitignored.
 
 Both chip targets run `tools/chip_check.sh` (no `div`/`rem`, float, libgcc calls, `ecall` or CSR instructions; prints section sizes) and `tools/stack_check.sh`; `chip8` also runs `tools/lane_lint.sh`. That script checks the named symbols `qrcp`, `ray_setup`, `kc_shade_pixel`, `kc_shade_pixel_ent`, `ent_box_hit` and `vtrace_ref` only when present: zero branches for the first five, exactly two uniform branches for `vtrace_ref`. It is not an exhaustive audit of every current kernel function.
 
