@@ -1,6 +1,8 @@
 # KennyCraft
 
-An 8-lane SIMD TPU (Tai Processing Unit) grown from a multi-cycle RV32I core, running a voxel game on one Arty A7-100T. HackUTD 2026.
+An 8-lane SIMD TPU (Tai Processing Unit) grown from a multi-cycle RV32I core, running a voxel game on one Arty A7-100T. 
+
+**1st Place Nvidia Track @ HackUTD 2026**
 
 ## At a glance
 
